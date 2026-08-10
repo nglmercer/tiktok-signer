@@ -56,23 +56,128 @@
   // construimos nosotros con la que usa el reproductor real.
   //
   // `window.__ttlBlockWs = true` además impide que la página llegue a conectar: devuelve
-  // un socket a ninguna parte. Hace falta porque dos conexiones a la misma sala con la
-  // misma sesión se estorban — el servidor acepta la segunda y no le manda nada.
+  // un socket inerte, sin hacer ninguna petición de red. Hace falta porque dos conexiones
+  // a la misma sala con la misma sesión se estorban — el servidor acepta la segunda y no
+  // le manda nada.
   window.__ttlWsUrls = [];
   // El initialization script puede pedir que el socket del reproductor se bloquee. No lo
   // reseteamos aquí: este archivo corre después de ese script y el valor debe sobrevivir
   // hasta que el reproductor intente conectarse.
   window.__ttlBlockWs = window.__ttlBlockWs === true;
   var NativeWebSocket = window.WebSocket;
+  var blockedEvent = function (type, options) {
+    var event = null;
+    try {
+      if (type === "close" && window.CloseEvent) {
+        event = new window.CloseEvent(type, options || {});
+      } else if (window.Event) {
+        event = new window.Event(type);
+      }
+    } catch (e) {}
+    if (!event) event = { type: type };
+    if (options) {
+      try { event.code = options.code; } catch (e) {}
+      try { event.reason = options.reason; } catch (e) {}
+      try { event.wasClean = options.wasClean; } catch (e) {}
+    }
+    return event;
+  };
+  var BlockedWebSocket = function (url) {
+    this.url = String(url);
+    this.protocol = "";
+    this.readyState = 0;
+    this.bufferedAmount = 0;
+    this.extensions = "";
+    this.binaryType = "blob";
+    this.onopen = null;
+    this.onmessage = null;
+    this.onerror = null;
+    this.onclose = null;
+    this.__ttlListeners = {};
+
+    var self = this;
+    // Let the page install its handlers before reporting the intentionally blocked
+    // connection. No WebKit network loader is created by this object.
+    setTimeout(function () {
+      if (self.readyState !== 0) return;
+      self.readyState = 3;
+      self.__ttlDispatch("error", blockedEvent("error"));
+      self.__ttlDispatch(
+        "close",
+        blockedEvent("close", { code: 1006, reason: "blocked", wasClean: false })
+      );
+    }, 0);
+  };
+  BlockedWebSocket.prototype.__ttlDispatch = function (type, event) {
+    event = event || blockedEvent(type);
+    try { event.target = this; } catch (e) {}
+    try { event.currentTarget = this; } catch (e) {}
+
+    var handler = this["on" + type];
+    if (typeof handler === "function") {
+      try { handler.call(this, event); } catch (e) {}
+    }
+    var listeners = this.__ttlListeners[type] || [];
+    for (var i = 0; i < listeners.length; i++) {
+      try { listeners[i].call(this, event); } catch (e) {}
+    }
+  };
+  BlockedWebSocket.prototype.addEventListener = function (type, listener) {
+    if (typeof listener !== "function") return;
+    var listeners = this.__ttlListeners[type] || (this.__ttlListeners[type] = []);
+    for (var i = 0; i < listeners.length; i++) {
+      if (listeners[i] === listener) return;
+    }
+    listeners.push(listener);
+  };
+  BlockedWebSocket.prototype.removeEventListener = function (type, listener) {
+    var listeners = this.__ttlListeners[type] || [];
+    for (var i = listeners.length - 1; i >= 0; i--) {
+      if (listeners[i] === listener) listeners.splice(i, 1);
+    }
+  };
+  BlockedWebSocket.prototype.dispatchEvent = function (event) {
+    if (!event || !event.type) return false;
+    this.__ttlDispatch(event.type, event);
+    return true;
+  };
+  BlockedWebSocket.prototype.send = function () {
+    if (this.readyState !== 1) {
+      var error = new Error("WebSocket is not open");
+      error.name = "InvalidStateError";
+      throw error;
+    }
+  };
+  BlockedWebSocket.prototype.close = function (code, reason) {
+    if (this.readyState === 2 || this.readyState === 3) return;
+    this.readyState = 2;
+    var self = this;
+    setTimeout(function () {
+      if (self.readyState === 3) return;
+      self.readyState = 3;
+      self.__ttlDispatch(
+        "close",
+        blockedEvent("close", {
+          code: typeof code === "number" ? code : 1000,
+          reason: reason == null ? "" : String(reason),
+          wasClean: true,
+        })
+      );
+    }, 0);
+  };
+  BlockedWebSocket.CONNECTING = 0;
+  BlockedWebSocket.OPEN = 1;
+  BlockedWebSocket.CLOSING = 2;
+  BlockedWebSocket.CLOSED = 3;
   var WrappedWebSocket = function (url, protocols) {
     try {
       window.__ttlWsUrls.push(String(url));
     } catch (e) {}
     if (window.__ttlBlockWs) {
-      // `wss://` a un host inexistente: la página ve un socket que nunca abre, que es un
-      // estado que ya sabe manejar. Interceptar es preferible a lanzar: una excepción
-      // aquí rompería el reproductor en un sitio que no espera fallos.
-      return new NativeWebSocket("wss://127.0.0.1:1/__ttl_blocked");
+      // Interceptar es preferible a lanzar: una excepción aquí rompería el reproductor
+      // en un sitio que no espera fallos. El stub también evita errores del loader de
+      // WebKit que producía el antiguo socket deliberadamente inválido.
+      return new BlockedWebSocket(url, protocols);
     }
     return protocols === undefined
       ? new NativeWebSocket(url)
