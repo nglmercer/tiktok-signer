@@ -99,7 +99,16 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
     }
 
     // --- 3. La firma -----------------------------------------------------------------
-    println!("\n[3/4] firmando /webcast/im/fetch/ …");
+    // Antes hay que estar *en* la página del directo: es desde donde la hace el
+    // reproductor real, y desde la portada /live la petición ni sale.
+    let room_page = ttl_sign_core::room::live_page_url(&user);
+    println!("\n[3/4] navegando a {room_page} …");
+    signer
+        .navigate(&room_page)
+        .await
+        .map_err(|e| format!("no se pudo cargar la página del directo: {e}"))?;
+
+    println!("      firmando /webcast/im/fetch/ …");
     let signed_at = Instant::now();
     let signed = match signer.fetch(&lookup.room_id).await {
         SignOutcome::Ok(signed) => signed,

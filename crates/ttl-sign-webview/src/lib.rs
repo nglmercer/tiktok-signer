@@ -91,6 +91,11 @@ enum UserEvent {
         url: Option<String>,
         reply: oneshot::Sender<Result<String, SignError>>,
     },
+    /// Navega la página a otra URL y vuelve a cerrar el gate de readiness.
+    Navigate {
+        url: String,
+        reply: oneshot::Sender<Result<(), SignError>>,
+    },
     /// Despierta el event loop desde el handler de IPC.
     ///
     /// Hace falta porque el handler corre fuera del closure del event loop: cuando marca
@@ -140,6 +145,34 @@ impl Signer {
         }
     }
 
+    /// Lleva el webview a otra página y espera a que el puente vuelva a estar listo.
+    ///
+    /// Hace falta para firmar: la petición `/webcast/im/fetch/` solo sale adelante desde
+    /// la página del propio directo (`https://www.tiktok.com/@usuario/live`), que es
+    /// donde la hace el reproductor real. Desde la portada `/live` el `fetch` parcheado
+    /// resuelve a `undefined` y el XHR sale con status 0: la petición ni se emite.
+    /// Verificado en F2.
+    pub async fn navigate(&self, url: &str) -> Result<(), SignError> {
+        let (tx, rx) = oneshot::channel();
+        if self
+            .proxy
+            .send_event(UserEvent::Navigate {
+                url: url.to_string(),
+                reply: tx,
+            })
+            .is_err()
+        {
+            return Err(SignError::EngineGone("el event loop se ha cerrado".into()));
+        }
+        match tokio::time::timeout(self.config.sdk_ready_timeout, rx).await {
+            Ok(Ok(result)) => result?,
+            Ok(Err(_)) => return Err(SignError::EngineGone("el motor descartó la navegación".into())),
+            Err(_) => return Err(SignError::Timeout(self.config.sdk_ready_timeout.as_millis() as u64)),
+        }
+        // Cualquier petición espera al gate: pedir el DOM equivale a esperar a `ready`.
+        self.dom().await.map(|_| ())
+    }
+
     /// Resuelve `unique_id` → `room_id` y estado del directo. **Sin firma**
     /// (`docs/00-research.md` §1).
     ///
@@ -168,6 +201,14 @@ impl Signer {
     /// DOM renderizado de la página actual.
     pub async fn dom(&self) -> Result<String, SignError> {
         self.text_request(None).await
+    }
+
+    /// Evalúa una expresión JS en la página y devuelve el resultado como texto.
+    ///
+    /// Herramienta de diagnóstico: sirve para ver qué está pidiendo la página realmente
+    /// o si un símbolo del SDK sigue existiendo. No participa en el camino de la firma.
+    pub async fn eval(&self, js: &str) -> Result<String, SignError> {
+        self.text_request(Some(format!("js:{js}"))).await
     }
 
     /// GET de texto desde dentro de la página, con su sesión y su UA.
@@ -219,6 +260,8 @@ struct Shared {
     /// es lo que hace falta para que el DOM tenga algo que leer.
     queued_text: Vec<(Option<String>, oneshot::Sender<Result<String, SignError>>)>,
     ready: bool,
+    /// Cuándo empezó a contar el gate de readiness. Se reinicia en cada navegación.
+    gate_started: Option<Instant>,
     sdk_version: Option<String>,
     signs: u64,
     rejects: u64,
@@ -332,7 +375,7 @@ where
         move || worker(signer)
     });
 
-    let started = Instant::now();
+    shared.borrow_mut().gate_started = Some(Instant::now());
     let sdk_ready_timeout = config.sdk_ready_timeout;
 
     event_loop.run(move |event, _target, control_flow| {
@@ -342,7 +385,10 @@ where
         {
             let mut state = shared.borrow_mut();
             let waiting = !state.queued.is_empty() || !state.queued_text.is_empty();
-            if !state.ready && waiting && started.elapsed() > sdk_ready_timeout {
+            let expired = state
+                .gate_started
+                .is_some_and(|t| t.elapsed() > sdk_ready_timeout);
+            if !state.ready && waiting && expired {
                 error!("el SDK no apareció en {sdk_ready_timeout:?}");
                 state.fail_all(|| SignError::SdkNotReady);
             }
@@ -373,6 +419,18 @@ where
                 state.pending_text.insert(id, reply);
                 drop(state);
                 dispatch_text(&webview, &shared, id, url);
+            }
+            Event::UserEvent(UserEvent::Navigate { url, reply }) => {
+                {
+                    let mut state = shared.borrow_mut();
+                    state.ready = false;
+                    state.gate_started = Some(Instant::now());
+                }
+                info!(%url, "navegando");
+                let result = webview
+                    .load_url(&url)
+                    .map_err(|e| SignError::EngineGone(e.to_string()));
+                let _ = reply.send(result);
             }
             // Solo sirve para llegar al drenaje de colas de más abajo.
             Event::UserEvent(UserEvent::Wake) => {}

@@ -117,6 +117,22 @@
   //   directo: la página /live no trae esos datos en el HTML, los pinta el cliente.
   window.__ttlText = async function (req) {
     try {
+      // `js:<expresión>` evalúa en la página y devuelve el resultado como texto. Es la
+      // vía de diagnóstico del puente (qué pide la página, qué símbolos hay); no
+      // interviene en ninguna firma.
+      if (req.url && req.url.indexOf("js:") === 0) {
+        var value = eval(req.url.slice(3));
+        if (value && typeof value.then === "function") {
+          value = await value;
+        }
+        post({
+          type: "text",
+          request_id: req.request_id,
+          status: 200,
+          body: typeof value === "string" ? value : JSON.stringify(value),
+        });
+        return;
+      }
       if (!req.url) {
         post({
           type: "text",
