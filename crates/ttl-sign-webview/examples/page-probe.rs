@@ -38,7 +38,7 @@ fn main() -> ! {
     };
 
     run(config, move |signer: Signer| {
-        let rt = tokio::runtime::Runtime::new().expect("runtime de tokio");
+        let rt = tokio::runtime::Runtime::new().expect("Tokio runtime");
         rt.block_on(async move {
             // The player takes time to start; give it time before inspecting it.
             if !scripts.is_empty() {

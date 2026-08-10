@@ -137,7 +137,7 @@ async fn main() -> Result<()> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--pb" => pb_path = Some(args.next().context("--pb requires a path")?),
-            other => bail!("argumento desconocido: {other}"),
+            other => bail!("unknown argument: {other}"),
         }
     }
 
@@ -195,7 +195,7 @@ async fn main() -> Result<()> {
     let result = FetchResult::decode(&protobuf).context("unreadable protobuf")?;
     println!("      push_server ..... {}", short(&result.push_server));
     println!(
-        "      route_params .... {} entradas",
+        "      route_params .... {} entries",
         result.route_params.len()
     );
     println!("      cursor .......... {}", short(&result.cursor));

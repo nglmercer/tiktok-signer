@@ -100,7 +100,7 @@ mod tests {
     #[test]
     fn keeps_only_the_useful_cookies() {
         let jar = CookieJar::parse(
-            "sessionid=abc; tiktok_webapp_theme=dark; ttwid=xyz; vacia=; odin_tt=o",
+            "sessionid=abc; tiktok_webapp_theme=dark; ttwid=xyz; empty=; odin_tt=o",
         );
         let filtered = filter(&jar);
         assert_eq!(filtered.get("sessionid"), Some("abc"));
@@ -128,7 +128,7 @@ mod tests {
         let jar = CookieJar::parse("sessionid=secreto; ttwid=xyz");
 
         save(&path, &jar).unwrap();
-        let loaded = load(&path).unwrap().expect("el fichero existe");
+        let loaded = load(&path).unwrap().expect("file exists");
         assert_eq!(loaded.get("sessionid"), Some("secreto"));
         assert!(is_logged_in(&loaded));
 

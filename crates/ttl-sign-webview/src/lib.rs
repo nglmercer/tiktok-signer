@@ -28,6 +28,7 @@ pub mod session;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::io::Read;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -39,6 +40,9 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 use wry::WebViewBuilder;
 
+use flate2::read::GzDecoder;
+
+use ttl_sign_core::proto::{LiveEvent, PushFrame, WebcastEventBatch};
 use ttl_sign_core::room::{self, LiveChannel, RoomLookup};
 use ttl_sign_core::{
     CookieJar, FetchParams, FetchResult, Preset, RejectReason, SignError, SignOutcome, SignedFetch,
@@ -214,6 +218,16 @@ pub enum PageWebSocketEvent {
     },
 }
 
+/// One decoded event from TikTok's page-owned webcast WebSocket.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedLiveEvent {
+    pub socket_url: String,
+    pub frame_log_id: u64,
+    pub message_id: u64,
+    pub method: String,
+    pub event: LiveEvent,
+}
+
 /// Page result: an already signed URL and the cookies used to sign it. Rust fetches the body
 /// afterward by repeating the request.
 #[derive(Debug, Clone)]
@@ -238,7 +252,7 @@ pub struct Capture {
     /// `Response.type`: `cors` and `basic` are readable; `opaque` is not.
     #[serde(default, rename = "kind")]
     pub response_type: String,
-    /// `fetch` o `xhr`.
+    /// `fetch` or `xhr`.
     #[serde(default)]
     pub via: String,
     #[serde(default)]
@@ -332,9 +346,9 @@ impl Signer {
             signed.cookies.set("msToken", query_token);
         }
 
-        // Browser headers, not generic HTTP-client headers: mirror the player
-        // real, incluido `Accept: */*` (no `application/protobuf`), el `Referer` de la
-        // live page and client hints consistent with the User-Agent.
+        // Browser headers, not generic HTTP-client headers: mirror the real player,
+        // including `Accept: */*` (not `application/protobuf`), the live-page `Referer`,
+        // and client hints consistent with the User-Agent.
         let referer = if signed.page_url.is_empty() {
             "https://www.tiktok.com/".to_string()
         } else {
@@ -508,8 +522,8 @@ impl Signer {
     /// 3. `byted_acrawler.frontierSign`, retained as a fallback even though it currently
     ///    returns only `X-Bogus`.
     pub async fn sign_ws_uri(&self, uri: &str) -> Result<String, SignError> {
-        let (scheme, resto) = match uri.split_once("://") {
-            Some((scheme, resto)) => (scheme, resto),
+        let (scheme, remainder) = match uri.split_once("://") {
+            Some((scheme, remainder)) => (scheme, remainder),
             None => return Err(SignError::Decode(format!("URI has no scheme: {uri}"))),
         };
 
@@ -523,17 +537,17 @@ impl Signer {
             return Ok(page_uri);
         }
 
-        let como_https = format!("https://{resto}");
+        let as_https = format!("https://{remainder}");
 
         // 2. Request signer: it adds X-Gnarly.
-        if let Ok(signed) = self.sign_url(&como_https).await {
+        if let Ok(signed) = self.sign_url(&as_https).await {
             if signed.url.contains("X-Gnarly=") {
-                let sin_esquema = signed
+                let without_scheme = signed
                     .url
                     .split_once("://")
-                    .map(|(_, resto)| resto)
+                    .map(|(_, remainder)| remainder)
                     .unwrap_or(&signed.url);
-                return Ok(format!("{scheme}://{sin_esquema}"));
+                return Ok(format!("{scheme}://{without_scheme}"));
             }
         }
 
@@ -677,6 +691,67 @@ impl Signer {
             .map_err(|_| SignError::EngineGone("event loop has closed".into()))?;
         rx.await
             .map_err(|_| SignError::EngineGone("event loop discarded subscription".into()))
+    }
+
+    /// Subscribe to decoded TikTok LIVE events.
+    ///
+    /// The returned channel stays active across page-owned socket replacements. Unknown
+    /// protobuf methods are emitted as [`LiveEvent::Unknown`] instead of being discarded.
+    pub async fn subscribe_live_events(
+        &self,
+    ) -> Result<mpsc::UnboundedReceiver<Result<DecodedLiveEvent, SignError>>, SignError> {
+        let mut page_events = self.subscribe_page_websocket().await?;
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let mut active_socket: Option<String> = None;
+            while let Some(page_event) = page_events.recv().await {
+                match page_event {
+                    PageWebSocketEvent::Open { url } if is_webcast_socket(&url) => {
+                        active_socket = Some(url);
+                    }
+                    PageWebSocketEvent::Binary { url, data }
+                        if active_socket.as_deref() == Some(url.as_str()) =>
+                    {
+                        match decode_live_frame(&url, &data) {
+                            Ok(events) => {
+                                for event in events {
+                                    if tx.send(Ok(event)).is_err() {
+                                        return;
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                if tx.send(Err(error)).is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    PageWebSocketEvent::Close { url, code, reason }
+                        if active_socket.as_deref() == Some(url.as_str()) =>
+                    {
+                        active_socket = None;
+                        if tx
+                            .send(Err(SignError::EngineGone(format!(
+                                "page WebSocket closed: code={code} reason={reason}"
+                            ))))
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    PageWebSocketEvent::Error { url, message }
+                        if active_socket.as_deref() == Some(url.as_str()) =>
+                    {
+                        if tx.send(Err(SignError::Transport(message))).is_err() {
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        Ok(rx)
     }
 
     /// Request orderly event-loop shutdown.
@@ -1223,6 +1298,48 @@ fn handle_page_message(
     }
 }
 
+fn is_webcast_socket(url: &str) -> bool {
+    url.starts_with("wss://") && (url.contains("/webcast/im/") || url.contains("webcast-ws"))
+}
+
+fn decode_live_frame(url: &str, data: &[u8]) -> Result<Vec<DecodedLiveEvent>, SignError> {
+    let frame = PushFrame::decode(data).map_err(|error| SignError::Decode(error.to_string()))?;
+    if !frame.is_message() {
+        return Ok(Vec::new());
+    }
+
+    let payload =
+        if frame.compress_type() == Some("gzip") || frame.payload.starts_with(&[0x1f, 0x8b]) {
+            let mut decoder = GzDecoder::new(frame.payload.as_slice());
+            let mut decoded = Vec::new();
+            decoder
+                .read_to_end(&mut decoded)
+                .map_err(|error| SignError::Decode(format!("gzip event payload: {error}")))?;
+            decoded
+        } else {
+            frame.payload
+        };
+
+    let batch = WebcastEventBatch::decode(&payload)
+        .map_err(|error| SignError::Decode(format!("event batch: {error}")))?;
+    batch
+        .messages
+        .into_iter()
+        .map(|message| {
+            let event = message
+                .decode_event()
+                .map_err(|error| SignError::Decode(format!("{}: {error}", message.method)))?;
+            Ok(DecodedLiveEvent {
+                socket_url: url.to_owned(),
+                frame_log_id: frame.log_id,
+                message_id: message.message_id,
+                method: message.method,
+                event,
+            })
+        })
+        .collect()
+}
+
 /// Align parameters signed by Rust with the environment seen by the real WebView.
 fn apply_page_env(preset: &Arc<Mutex<Preset>>, env: &PageEnv) {
     let Ok(mut current) = preset.lock() else {
@@ -1419,5 +1536,45 @@ mod tests {
         shared.publish_page_websocket(event.clone());
 
         assert_eq!(rx.try_recv().unwrap(), event);
+    }
+
+    #[test]
+    fn decodes_events_from_a_page_websocket_frame() {
+        let user = Writer::new()
+            .u64_field(1, 7)
+            .str_field(3, "Grace")
+            .str_field(38, "grace_live")
+            .clone()
+            .finish();
+        let chat = Writer::new()
+            .bytes_field(2, &user)
+            .str_field(3, "hello from live")
+            .clone()
+            .finish();
+        let message = Writer::new()
+            .str_field(1, "WebcastChatMessage")
+            .bytes_field(2, &chat)
+            .u64_field(3, 11)
+            .clone()
+            .finish();
+        let batch = Writer::new().bytes_field(1, &message).clone().finish();
+        let frame = PushFrame {
+            log_id: 5,
+            payload_encoding: "pb".into(),
+            payload_type: "msg".into(),
+            payload: batch,
+            ..Default::default()
+        };
+
+        let events = decode_live_frame("wss://example.test/webcast/im/", &frame.encode()).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].frame_log_id, 5);
+        assert_eq!(events[0].message_id, 11);
+        assert!(matches!(
+            &events[0].event,
+            LiveEvent::Chat { user, content }
+                if user.display_id == "grace_live" && content == "hello from live"
+        ));
     }
 }

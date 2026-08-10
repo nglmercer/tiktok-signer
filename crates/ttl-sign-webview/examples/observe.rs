@@ -45,7 +45,7 @@ fn main() -> ! {
     };
 
     run(config, move |signer: Signer| {
-        let rt = tokio::runtime::Runtime::new().expect("runtime de tokio");
+        let rt = tokio::runtime::Runtime::new().expect("Tokio runtime");
         rt.block_on(async move {
             // First verify that the session reached the page; otherwise the remaining
             // observations are explained and there is no point continuing.
@@ -110,7 +110,7 @@ async fn dump(signer: &Signer) {
                 }
                 // Compare these parameters with ours.
                 if let Some(query) = c.url.split_once('?').map(|(_, q)| q) {
-                    println!("    params: {}", resumir(query));
+                    println!("    params: {}", summarize(query));
                 }
                 let body = c.decoded();
                 if !body.is_empty() {
@@ -136,7 +136,7 @@ async fn dump(signer: &Signer) {
             for url in &urls {
                 let (base, query) = url.split_once('?').unwrap_or((url.as_str(), ""));
                 println!("  WS {base}");
-                println!("    params: {}", resumir(query));
+                println!("    params: {}", summarize(query));
             }
         }
         Err(e) => println!("  could not read WebSocket list: {e}"),
@@ -145,7 +145,7 @@ async fn dump(signer: &Signer) {
 
 /// `k=v` pairs separated by spaces, with long or sensitive values shortened: full
 /// signatures and tokens add no value and clutter the terminal.
-fn resumir(query: &str) -> String {
+fn summarize(query: &str) -> String {
     query
         .split('&')
         .filter(|p| !p.is_empty())

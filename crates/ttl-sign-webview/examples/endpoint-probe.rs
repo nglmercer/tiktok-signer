@@ -29,7 +29,7 @@ fn main() -> ! {
         ..EngineConfig::default()
     };
     run(config, move |signer: Signer| {
-        let rt = tokio::runtime::Runtime::new().expect("runtime de tokio");
+        let rt = tokio::runtime::Runtime::new().expect("Tokio runtime");
         rt.block_on(async move {
             let lookup = signer.room_lookup(&user).await.expect("lookup");
             println!(

@@ -1,7 +1,7 @@
-//! Minimal protobuf reader.
+//! Minimal protobuf codec for TikTok LIVE transport and public-area events.
 //!
-//! Event parsing is **out of scope** (`README.md`): this module decodes only what is needed
-//! to open the WebSocket and answer `ack` frames, without `prost` or generated code.
+//! This module decodes the transport fields needed to open and maintain the WebSocket, plus
+//! a stable listener-facing subset of common events, without `prost` or generated code.
 //!
 //! Decoding operates directly on the wire format, so unknown fields are ignored instead of
 //! breaking parsing when TikTok adds fields without notice.
@@ -63,7 +63,7 @@ const ENTER_ROOM_FILTER_WELCOME_DISABLED: &str = "0";
 const HEARTBEAT_FIELD_ROOM_ID: u32 = 1;
 const HEARTBEAT_FIELD_SEQUENCE_ID: u32 = 2;
 
-// --- Errores ----------------------------------------------------------------------
+// --- Errors -----------------------------------------------------------------------
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ProtoError {
@@ -87,7 +87,7 @@ impl fmt::Display for ProtoError {
 
 impl std::error::Error for ProtoError {}
 
-// --- Decodificador de bajo nivel --------------------------------------------------
+// --- Low-level decoder ------------------------------------------------------------
 
 /// Field value as represented on the wire.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,7 +187,7 @@ impl<'a> Reader<'a> {
     }
 }
 
-// --- Codificador de bajo nivel ----------------------------------------------------
+// --- Low-level encoder ------------------------------------------------------------
 
 /// Write protobuf messages. Only the parts needed for `ack`, heartbeats, and the
 /// initial room entry are implemented.
@@ -312,8 +312,8 @@ pub struct FetchResult {
 impl FetchResult {
     /// Decode known fields and ignore the rest.
     ///
-    /// No validation: an empty `push_server` is returned as-is and is
-    /// [`FetchResult::rejection_reason`] quien lo interpreta.
+    /// No validation: an empty `push_server` is returned as-is and interpreted by
+    /// [`FetchResult::rejection_reason`].
     pub fn decode(buf: &[u8]) -> Result<Self, ProtoError> {
         let mut out = Self::default();
         let mut reader = Reader::new(buf);
@@ -366,7 +366,7 @@ pub struct PushFrame {
     pub method: u64,
     pub headers: Vec<(String, String)>,
     pub payload_encoding: String,
-    /// `msg` lleva eventos; `hb`, `ack`, `im_enter_room_resp` son transporte.
+    /// `msg` carries events; `hb`, `ack`, and `im_enter_room_resp` are transport frames.
     pub payload_type: String,
     pub payload: Vec<u8>,
 }
@@ -498,11 +498,64 @@ mod base_message_field {
     pub const IS_HISTORY: u32 = 6;
 }
 
+mod event_batch_field {
+    pub const MESSAGES: u32 = 1;
+    pub const CURSOR: u32 = 2;
+    pub const INTERNAL_EXT: u32 = 5;
+    pub const NEED_ACK: u32 = 9;
+}
+
 mod user_field {
     pub const ID: u32 = 1;
     pub const NICKNAME: u32 = 3;
     pub const DISPLAY_ID: u32 = 38;
     pub const SEC_UID: u32 = 46;
+}
+
+mod chat_field {
+    pub const USER: u32 = 2;
+    pub const CONTENT: u32 = 3;
+}
+
+mod gift_field {
+    pub const GIFT_ID: u32 = 2;
+    pub const REPEAT_COUNT: u32 = 5;
+    pub const USER: u32 = 7;
+    pub const REPEAT_END: u32 = 9;
+}
+
+mod like_field {
+    pub const COUNT: u32 = 2;
+    pub const TOTAL: u32 = 3;
+    pub const USER: u32 = 5;
+}
+
+mod member_field {
+    pub const USER: u32 = 2;
+    pub const MEMBER_COUNT: u32 = 3;
+    pub const ACTION: u32 = 10;
+}
+
+mod social_field {
+    pub const USER: u32 = 2;
+    pub const ACTION: u32 = 4;
+    pub const FOLLOW_COUNT: u32 = 6;
+    pub const SHARE_COUNT: u32 = 8;
+}
+
+mod room_user_field {
+    pub const TOTAL: u32 = 3;
+    pub const POPULARITY: u32 = 6;
+    pub const TOTAL_USER: u32 = 7;
+}
+
+mod event_method {
+    pub const CHAT: &str = "WebcastChatMessage";
+    pub const GIFT: &str = "WebcastGiftMessage";
+    pub const LIKE: &str = "WebcastLikeMessage";
+    pub const MEMBER: &str = "WebcastMemberMessage";
+    pub const SOCIAL: &str = "WebcastSocialMessage";
+    pub const ROOM_USER: &str = "WebcastRoomUserSeqMessage";
 }
 
 /// One embedded event from a `msg` WebSocket frame.
@@ -567,16 +620,20 @@ impl WebcastEventBatch {
         while let Some(field) = reader.next_field() {
             let (number, wire) = field?;
             match number {
-                1 => {
+                event_batch_field::MESSAGES => {
                     if let Some(bytes) = wire.as_bytes() {
                         batch.messages.push(WebcastMessage::decode(bytes)?);
                     }
                 }
-                fetch_field::CURSOR => batch.cursor = wire.as_str().unwrap_or_default().to_owned(),
-                fetch_field::INTERNAL_EXT => {
+                event_batch_field::CURSOR => {
+                    batch.cursor = wire.as_str().unwrap_or_default().to_owned()
+                }
+                event_batch_field::INTERNAL_EXT => {
                     batch.internal_ext = wire.as_str().unwrap_or_default().to_owned()
                 }
-                fetch_field::NEED_ACK => batch.need_ack = wire.as_u64().unwrap_or_default() != 0,
+                event_batch_field::NEED_ACK => {
+                    batch.need_ack = wire.as_u64().unwrap_or_default() != 0
+                }
                 _ => {}
             }
         }
@@ -667,12 +724,12 @@ pub enum LiveEvent {
 
 fn decode_live_event(method: &str, payload: &[u8]) -> Result<LiveEvent, ProtoError> {
     match method {
-        "WebcastChatMessage" => decode_chat(payload),
-        "WebcastGiftMessage" => decode_gift(payload),
-        "WebcastLikeMessage" => decode_like(payload),
-        "WebcastMemberMessage" => decode_member(payload),
-        "WebcastSocialMessage" => decode_social(payload),
-        "WebcastRoomUserSeqMessage" => decode_room_user(payload),
+        event_method::CHAT => decode_chat(payload),
+        event_method::GIFT => decode_gift(payload),
+        event_method::LIKE => decode_like(payload),
+        event_method::MEMBER => decode_member(payload),
+        event_method::SOCIAL => decode_social(payload),
+        event_method::ROOM_USER => decode_room_user(payload),
         _ => Ok(LiveEvent::Unknown {
             method: method.to_owned(),
             payload_len: payload.len(),
@@ -693,8 +750,8 @@ fn decode_chat(payload: &[u8]) -> Result<LiveEvent, ProtoError> {
     while let Some(field) = reader.next_field() {
         let (number, wire) = field?;
         match number {
-            2 => user = nested_user(&wire)?,
-            3 => content = wire.as_str().unwrap_or_default().to_owned(),
+            chat_field::USER => user = nested_user(&wire)?,
+            chat_field::CONTENT => content = wire.as_str().unwrap_or_default().to_owned(),
             _ => {}
         }
     }
@@ -710,10 +767,10 @@ fn decode_gift(payload: &[u8]) -> Result<LiveEvent, ProtoError> {
     while let Some(field) = reader.next_field() {
         let (number, wire) = field?;
         match number {
-            2 => gift_id = wire.as_u64().unwrap_or_default(),
-            5 => repeat_count = wire.as_u64().unwrap_or_default(),
-            7 => user = nested_user(&wire)?,
-            9 => repeat_end = wire.as_u64().unwrap_or_default() != 0,
+            gift_field::GIFT_ID => gift_id = wire.as_u64().unwrap_or_default(),
+            gift_field::REPEAT_COUNT => repeat_count = wire.as_u64().unwrap_or_default(),
+            gift_field::USER => user = nested_user(&wire)?,
+            gift_field::REPEAT_END => repeat_end = wire.as_u64().unwrap_or_default() != 0,
             _ => {}
         }
     }
@@ -733,9 +790,9 @@ fn decode_like(payload: &[u8]) -> Result<LiveEvent, ProtoError> {
     while let Some(field) = reader.next_field() {
         let (number, wire) = field?;
         match number {
-            2 => count = wire.as_u64().unwrap_or_default(),
-            3 => total = wire.as_u64().unwrap_or_default(),
-            5 => user = nested_user(&wire)?,
+            like_field::COUNT => count = wire.as_u64().unwrap_or_default(),
+            like_field::TOTAL => total = wire.as_u64().unwrap_or_default(),
+            like_field::USER => user = nested_user(&wire)?,
             _ => {}
         }
     }
@@ -750,9 +807,9 @@ fn decode_member(payload: &[u8]) -> Result<LiveEvent, ProtoError> {
     while let Some(field) = reader.next_field() {
         let (number, wire) = field?;
         match number {
-            2 => user = nested_user(&wire)?,
-            3 => member_count = wire.as_u64().unwrap_or_default(),
-            10 => action = wire.as_u64().unwrap_or_default(),
+            member_field::USER => user = nested_user(&wire)?,
+            member_field::MEMBER_COUNT => member_count = wire.as_u64().unwrap_or_default(),
+            member_field::ACTION => action = wire.as_u64().unwrap_or_default(),
             _ => {}
         }
     }
@@ -772,10 +829,10 @@ fn decode_social(payload: &[u8]) -> Result<LiveEvent, ProtoError> {
     while let Some(field) = reader.next_field() {
         let (number, wire) = field?;
         match number {
-            2 => user = nested_user(&wire)?,
-            4 => action = wire.as_u64().unwrap_or_default(),
-            6 => follow_count = wire.as_u64().unwrap_or_default(),
-            8 => share_count = wire.as_u64().unwrap_or_default(),
+            social_field::USER => user = nested_user(&wire)?,
+            social_field::ACTION => action = wire.as_u64().unwrap_or_default(),
+            social_field::FOLLOW_COUNT => follow_count = wire.as_u64().unwrap_or_default(),
+            social_field::SHARE_COUNT => share_count = wire.as_u64().unwrap_or_default(),
             _ => {}
         }
     }
@@ -795,9 +852,9 @@ fn decode_room_user(payload: &[u8]) -> Result<LiveEvent, ProtoError> {
     while let Some(field) = reader.next_field() {
         let (number, wire) = field?;
         match number {
-            3 => total = wire.as_u64().unwrap_or_default(),
-            6 => popularity = wire.as_u64().unwrap_or_default(),
-            7 => total_user = wire.as_u64().unwrap_or_default(),
+            room_user_field::TOTAL => total = wire.as_u64().unwrap_or_default(),
+            room_user_field::POPULARITY => popularity = wire.as_u64().unwrap_or_default(),
+            room_user_field::TOTAL_USER => total_user = wire.as_u64().unwrap_or_default(),
             _ => {}
         }
     }

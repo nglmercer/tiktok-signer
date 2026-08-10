@@ -243,8 +243,8 @@ pub struct WsParams {
     ///
     /// It belongs in the WebSocket query, not in `route_params`: verified against a
     /// real response, where `route_params` only contains `wrss` and `imprp`. Without the cursor,
-    /// handshake is accepted but **no frames arrive**, the hardest failure
-    /// desconcertante de todo el flujo.
+    /// handshake is accepted but **no frames arrive**, the hardest failure in the flow to
+    /// diagnose.
     pub cursor: String,
     /// `internal_ext` from the same response follows the same reasoning.
     pub internal_ext: String,
@@ -366,7 +366,7 @@ mod tests {
             "sup_ws_ds_opt",
             "version_code",
         ] {
-            assert!(q.get(key).is_some(), "falta el param {key}");
+            assert!(q.get(key).is_some(), "missing parameter {key}");
         }
         assert_eq!(q.get("aid"), Some("1988"));
         assert_eq!(q.get("resp_content_type"), Some("protobuf"));
@@ -399,9 +399,9 @@ mod tests {
     fn device_id_is_19_digits() {
         for _ in 0..100 {
             let id = random_device_id();
-            assert_eq!(id.len(), 19, "device_id de longitud incorrecta: {id}");
+            assert_eq!(id.len(), 19, "device_id has the wrong length: {id}");
             assert!(id.chars().all(|c| c.is_ascii_digit()));
-            assert_ne!(id.as_bytes()[0], b'0', "no debe empezar por cero: {id}");
+            assert_ne!(id.as_bytes()[0], b'0', "must not start with zero: {id}");
         }
     }
 
@@ -427,10 +427,7 @@ mod tests {
         );
         // Include the leading `&`; otherwise `update_version_code=` is counted too.
         let occurrences = uri.matches("&version_code=").count();
-        assert_eq!(
-            occurrences, 2,
-            "version_code debe aparecer dos veces: {uri}"
-        );
+        assert_eq!(occurrences, 2, "version_code must appear twice: {uri}");
         assert!(uri.ends_with("&version_code=270000"), "{uri}");
         assert!(uri.contains("version_code=180800"), "{uri}");
     }
@@ -463,7 +460,7 @@ mod tests {
     #[test]
     fn query_roundtrips_through_parse() {
         let q = Query::parse("a=1&b=2&a=3");
-        assert_eq!(q.len(), 3, "parse no debe deduplicar");
+        assert_eq!(q.len(), 3, "parse must not deduplicate");
         assert_eq!(q.encode(), "a=1&b=2&a=3");
     }
 

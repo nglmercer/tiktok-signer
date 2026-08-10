@@ -18,6 +18,12 @@ use ttl_sign_core::room::live_page_url;
 use ttl_sign_core::{FetchResult, SignOutcome};
 use ttl_sign_webview::{run, session, EngineConfig, Signer};
 
+const FIELD_MESSAGES: u32 = 1;
+const FIELD_CURSOR: u32 = 2;
+const FIELD_INTERNAL_EXT: u32 = 5;
+const FIELD_ROUTE_PARAMS: u32 = 7;
+const FIELD_PUSH_SERVER: u32 = 10;
+
 fn main() -> ! {
     tracing_subscriber::fmt()
         .with_env_filter("ttl_sign_webview=info")
@@ -45,7 +51,7 @@ fn main() -> ! {
     };
 
     run(config, move |signer: Signer| {
-        let rt = tokio::runtime::Runtime::new().expect("runtime de tokio");
+        let rt = tokio::runtime::Runtime::new().expect("Tokio runtime");
         rt.block_on(async move {
             let lookup = signer.room_lookup(&user).await.expect("lookup");
             println!("@{} room_id={}", lookup.unique_id, lookup.room_id);
@@ -76,31 +82,31 @@ fn main() -> ! {
                     std::process::exit(1);
                 }
             };
-            println!("{} bytes de protobuf\n", signed.protobuf.len());
+            println!("{} protobuf bytes\n", signed.protobuf.len());
 
             if let Some(path) = &out_path {
                 std::fs::write(path, &signed.protobuf).expect("could not write protobuf");
-                println!("guardado en {path}\n");
+                println!("saved to {path}\n");
             }
 
             // --- Raw structure: field by field, without interpretation ---
             println!("top-level fields:");
             let mut messages = Vec::new();
             for (number, kind, size) in describe(&signed.protobuf).expect("unreadable protobuf") {
-                let nota = match number {
-                    1 => " (messages?)",
-                    2 => " (cursor?)",
-                    5 => " (internal_ext?)",
-                    7 => " (route_params?)",
-                    10 => " (push_server?)",
+                let note = match number {
+                    FIELD_MESSAGES => " (messages?)",
+                    FIELD_CURSOR => " (cursor?)",
+                    FIELD_INTERNAL_EXT => " (internal_ext?)",
+                    FIELD_ROUTE_PARAMS => " (route_params?)",
+                    FIELD_PUSH_SERVER => " (push_server?)",
                     _ => "",
                 };
-                println!("  campo {number:<5} {kind:<8} {size:>7} bytes{nota}");
-                if number == 1 {
+                println!("  field {number:<5} {kind:<8} {size:>7} bytes{note}");
+                if number == FIELD_MESSAGES {
                     messages.push(size);
                 }
             }
-            println!("  → {} entradas en el campo 1", messages.len());
+            println!("  → {} entries in field {FIELD_MESSAGES}", messages.len());
 
             // --- What we extract today ---
             let result = FetchResult::decode(&signed.protobuf).expect("decode");
@@ -115,23 +121,23 @@ fn main() -> ! {
             println!("  need_ack ............ {}", result.need_ack);
             println!("  route_params ({}):", result.route_params.len());
             for (k, v) in &result.route_params {
-                println!("      {k} = {}", recorta(v));
+                println!("      {k} = {}", shorten(v));
             }
 
             // --- Messages already present in this response ---
             println!("\nmessages embedded in the response:");
             let mut reader = Reader::new(&signed.protobuf);
-            let mut vistos = 0usize;
+            let mut seen = 0usize;
             while let Some(Ok((number, wire))) = reader.next_field() {
-                if number != 1 {
+                if number != FIELD_MESSAGES {
                     continue;
                 }
                 if let WireValue::Bytes(bytes) = wire {
                     if let Ok(frame) = PushFrame::decode(bytes) {
-                        vistos += 1;
-                        if vistos <= 8 {
+                        seen += 1;
+                        if seen <= 8 {
                             println!(
-                                "  #{vistos} payload_type={:?} encoding={:?} payload={} bytes",
+                                "  #{seen} payload_type={:?} encoding={:?} payload={} bytes",
                                 frame.payload_type,
                                 frame.payload_encoding,
                                 frame.payload.len()
@@ -140,7 +146,7 @@ fn main() -> ! {
                     }
                 }
             }
-            println!("  total: {vistos}");
+            println!("  total: {seen}");
 
             signer.shutdown();
             std::process::exit(0);
@@ -148,7 +154,7 @@ fn main() -> ! {
     })
 }
 
-fn recorta(s: &str) -> String {
+fn shorten(s: &str) -> String {
     if s.chars().count() <= 70 {
         return s.to_string();
     }

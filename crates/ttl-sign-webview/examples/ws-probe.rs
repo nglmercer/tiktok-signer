@@ -47,7 +47,7 @@ fn main() -> ! {
         ..EngineConfig::default()
     };
     run(config, move |signer: Signer| {
-        let rt = tokio::runtime::Runtime::new().expect("runtime de tokio");
+        let rt = tokio::runtime::Runtime::new().expect("Tokio runtime");
         rt.block_on(async move {
             let lookup = signer.room_lookup(&user).await.expect("lookup");
             let signed = match signer.fetch(&lookup.room_id).await {
@@ -102,25 +102,25 @@ fn main() -> ! {
 
             let t0 = Instant::now();
             let mut deadline = tokio::time::interval(Duration::from_secs(5));
-            let mut fase = 0;
+            let mut phase = 0;
 
             loop {
                 tokio::select! {
                     _ = deadline.tick() => {
-                        fase += 1;
-                        match fase {
-                            1 => println!("[{:>5.1}s] escuchando en silencio…", t0.elapsed().as_secs_f32()),
+                        phase += 1;
+                        match phase {
+                            1 => println!("[{:>5.1}s] listening without sending…", t0.elapsed().as_secs_f32()),
                             2 => {
                                 let hb = PushFrame::heartbeat(room_id, 1);
                                 println!("[{:>5.1}s] → application heartbeat ({:02x?})", t0.elapsed().as_secs_f32(), hb.encode());
                                 ws.send(Message::Binary(hb.encode())).await.ok();
                             }
                             3 => {
-                                println!("[{:>5.1}s] → ping de protocolo", t0.elapsed().as_secs_f32());
+                                println!("[{:>5.1}s] → protocol ping", t0.elapsed().as_secs_f32());
                                 ws.send(Message::Ping(Vec::new())).await.ok();
                             }
                             6 => {
-                                println!("[{:>5.1}s] fin", t0.elapsed().as_secs_f32());
+                                println!("[{:>5.1}s] finished", t0.elapsed().as_secs_f32());
                                 break;
                             }
                             _ => {}
@@ -140,7 +140,7 @@ fn main() -> ! {
                                     Err(e) => println!("[{t:>5.1}s] ← unreadable binary, {} bytes: {e}", bytes.len()),
                                 }
                             }
-                            Some(Ok(otro)) => println!("[{t:>5.1}s] ← {otro:?}"),
+                            Some(Ok(other)) => println!("[{t:>5.1}s] ← {other:?}"),
                         }
                     }
                 }

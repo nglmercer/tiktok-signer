@@ -21,9 +21,9 @@ pub struct DevicePreset {
     pub browser_name: String,
     /// `browser_version` from the query: the UA **without** the `Mozilla/` prefix.
     pub browser_version: String,
-    /// `browser_platform` de la query (`Win32`, `Linux x86_64`, `MacIntel`).
+    /// `browser_platform` query value (`Win32`, `Linux x86_64`, `MacIntel`).
     pub browser_platform: String,
-    /// `os` de la query (`windows`, `linux`, `mac`).
+    /// `os` query value (`windows`, `linux`, `mac`).
     pub os: String,
 }
 
@@ -38,7 +38,7 @@ impl DevicePreset {
         }
     }
 
-    /// Chrome estable sobre Linux.
+    /// Stable Chrome on Linux.
     pub fn chrome_linux() -> Self {
         Self {
             browser_name: "Mozilla".into(),
@@ -48,7 +48,7 @@ impl DevicePreset {
         }
     }
 
-    /// Chrome estable sobre macOS.
+    /// Stable Chrome on macOS.
     pub fn chrome_macos() -> Self {
         Self {
             browser_name: "Mozilla".into(),
@@ -82,13 +82,13 @@ impl Default for DevicePreset {
 /// Language, time zone, and region. All fields must be mutually consistent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocationPreset {
-    /// `app_language` / `webcast_language`, p. ej. `en`.
+    /// `app_language` / `webcast_language`, for example `en`.
     pub language: String,
-    /// `browser_language`, p. ej. `en-US`.
+    /// `browser_language`, for example `en-US`.
     pub browser_language: String,
-    /// `tz_name` en formato IANA, p. ej. `America/New_York`.
+    /// `tz_name` in IANA format, for example `America/New_York`.
     pub tz_name: String,
-    /// `region` / `priority_region`, p. ej. `US`.
+    /// `region` / `priority_region`, for example `US`.
     pub region: String,
 }
 
@@ -166,7 +166,7 @@ impl Preset {
         }
     }
 
-    /// Atajo: el UA de este preset.
+    /// Convenience accessor for this preset's User-Agent.
     pub fn user_agent(&self) -> String {
         self.device.user_agent()
     }
@@ -204,7 +204,7 @@ mod tests {
             );
             assert!(
                 ua.ends_with(&d.browser_version),
-                "el UA no termina en browser_version: {ua}"
+                "UA does not end with browser_version: {ua}"
             );
         }
     }
@@ -217,9 +217,9 @@ mod tests {
                 "windows" => "Windows NT",
                 "linux" => "Linux",
                 "mac" => "Mac OS X",
-                other => panic!("os desconocido: {other}"),
+                other => panic!("unknown operating system: {other}"),
             };
-            assert!(ua.contains(marker), "UA {ua} no menciona {marker}");
+            assert!(ua.contains(marker), "UA {ua} does not contain {marker}");
         }
     }
 

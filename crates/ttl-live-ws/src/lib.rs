@@ -402,7 +402,7 @@ fn room_id_from_str(room_id: &str) -> Result<u64, WsError> {
     room_id.parse().map_err(|_| WsError::RoomIdMissing)
 }
 
-/// `Handshake-Options` viene en formato cookie: `k=v; k=v`.
+/// `Handshake-Options` uses cookie format: `k=v; k=v`.
 fn parse_handshake_options(raw: &str) -> Vec<(String, String)> {
     CookieJar::parse(raw)
         .iter()
