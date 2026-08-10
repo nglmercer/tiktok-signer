@@ -24,7 +24,7 @@
 use std::time::{Duration, Instant};
 
 use ttl_live_ws::{ConnectConfig, LiveConnection};
-use ttl_sign_core::{FetchResult, SignOutcome};
+use ttl_sign_core::{FetchResult, SignOutcome, WsParams};
 use ttl_sign_webview::{run, session, EngineConfig, Signer};
 
 fn main() -> ! {
@@ -166,8 +166,14 @@ async fn check(
         }
         SignOutcome::Rejected(reason) => {
             return Err(format!(
-                "TikTok rechazó la firma pese a la sesión autenticada: {reason}. No es \
-                 transitorio; revisa la coherencia UA↔params y docs/06-risks-and-ops.md §1"
+                "TikTok rechazó la firma pese a la sesión autenticada: {reason}.\n\n\
+                 Si esto funcionaba hace un rato y ahora no, lo más probable es el límite \
+                 de tasa: firmar es interactuar con un antibot, y muchas firmas seguidas \
+                 desde la misma IP y la misma sesión lo despiertan \
+                 (docs/06-risks-and-ops.md §5). Espera un rato antes de insistir; \
+                 reintentar en bucle lo empeora.\n\n\
+                 Si nunca ha funcionado, mira la coherencia UA↔params (§1) y comprueba \
+                 con: cargo run -p ttl-sign-webview --example endpoint-probe -- <usuario>"
             ))
         }
         SignOutcome::Transport(e) => return Err(format!("fallo de transporte: {e}")),
@@ -186,12 +192,31 @@ async fn check(
     println!("      route_params={} entradas", result.route_params.len());
 
     // --- 4. El WebSocket -------------------------------------------------------------
-    println!("\n[4/4] conectando el WebSocket…");
-    let mut connection = LiveConnection::open(
-        &signed,
-        signer.preset(),
-        &lookup.room_id,
-        &ConnectConfig::default(),
+    // La URI se construye aquí y se firma en la página: el WS lleva firma propia, al
+    // contrario de lo que decía docs/00 §1.
+    println!("\n[4/4] firmando y conectando el WebSocket…");
+    let config = ConnectConfig::default();
+    let mut params = WsParams::new(&lookup.room_id);
+    params.compress = config.compress.clone();
+    params.cursor = result.cursor.clone();
+    params.internal_ext = result.internal_ext.clone();
+    let uri = params.build_uri(&result.push_server, &result.route_params, signer.preset());
+
+    let uri = signer
+        .sign_ws_uri(&uri)
+        .await
+        .map_err(|e| format!("no se pudo firmar la URI del WebSocket: {e}"))?;
+    println!(
+        "      firmada: {}",
+        uri.split('?').next().unwrap_or_default()
+    );
+
+    let mut connection = LiveConnection::open_uri(
+        &uri,
+        &signed.cookies,
+        &signed.user_agent,
+        &result.internal_ext,
+        &config,
     )
     .await
     .map_err(|e| format!("no se pudo abrir el WebSocket: {e}"))?;

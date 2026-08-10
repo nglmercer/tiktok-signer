@@ -19,38 +19,47 @@ una captura real no se puede validar nada de lo que sigue.
 |---|---|
 | `ttl-sign-core` | Presets, queries, cookie jar, `SignOutcome` y lectura mínima de protobuf. Con tests, sin I/O. |
 | `ttl-sign-webview` | Motor `wry`: puente JS, readiness gate, navegación, descubrimiento de canales, firma de URLs arbitrarias y replay. Verificado contra TikTok: firma y replay funcionan (`room/info` responde 25 KB). |
-| `ttl-live-ws` | Cliente WS con heartbeat, `ack` y rechazo 200 tipado. **Sin verificar contra TikTok** (bloqueado por lo de abajo). |
+| `ttl-live-ws` | Cliente WS con heartbeat, `ack` y rechazo 200 tipado. Handshake verificado; la recepción de frames, no. |
 | `ttl-sign-server` | `GET /webcast/fetch` y `GET /healthz` según la spec de Euler. |
 
-> Los números de campo del protobuf están puestos según el esquema de los clientes de
-> referencia y **hay que confirmarlos contra `fixtures/f0/im_fetch.pb`** en F1; están
-> documentados en un solo sitio (`crates/ttl-sign-core/src/proto.rs`) para que corregirlos
-> sea cambiar cuatro constantes.
+> Los números de campo del protobuf ya están **confirmados** contra una respuesta real
+> (`2 = cursor`, `5 = internal_ext`, `7 = route_params`, `10 = push_server`); ver
+> `fixtures/NOTES.md`. Captura reproducible con
+> `cargo run -p ttl-sign-webview --example fetch-dump`.
 
-### Bloqueo actual: hace falta sesión autenticada
+### Estado real del flujo (medido el 2026-08-10)
 
-Verificado contra directos reales el 2026-08-10, firmando cada endpoint por la **misma**
-ruta (SDK de la página → replay desde Rust):
-
-| Endpoint | Anónimo |
+| Paso | Estado |
 |---|---|
-| `/webcast/room/info/` | 200, ~25 KB de JSON |
-| `/webcast/room/check_alive/` | 200, JSON correcto |
-| `/webcast/room/enter/` | 200, `{"message":"User doesn't login"}` |
-| `/webcast/im/fetch/` | 200, **0 bytes** |
+| 1. Descubrir quién está en directo | funciona (DOM de `/live`, sin firma) |
+| 1b. `unique_id` → `room_id` + estado | funciona (sin firma, sin display) |
+| 2. `/webcast/im/fetch/` firmado | **funciona con sesión** (~25–44 KB de protobuf) |
+| 3. Decodificar el protobuf | funciona; números de campo confirmados contra la respuesta real |
+| 4. Handshake del WebSocket | se acepta (101, `handshake-msg: OK`) |
+| 5. Recibir frames | **no llega ninguno** |
 
-Que los dos primeros respondan descarta que fallen la firma, las cabeceras o el replay.
-El cuerpo vacío de `im/fetch` es el mismo "necesitas sesión" que `room/enter` dice con
-todas las letras. Reproducible:
+Dos cosas que la documentación daba por buenas resultaron falsas al medirlas, y las dos
+salieron caras en tiempo de depuración:
+
+1. **En anónimo no hay flujo.** `/webcast/room/enter/` responde `User doesn't login` y
+   `/webcast/im/fetch/` responde 200 con **0 bytes** — el mismo rechazo dicho en voz baja.
+   Por la misma ruta de firma, `room/info` devuelve 25 KB, así que no fallaban ni la firma
+   ni el replay. De ahí el flujo de login de abajo.
+2. **La URI del WebSocket lleva firma propia** (`X-Gnarly`), al contrario de lo que decía
+   [00 §1](docs/00-research.md#1-flujo-real-de-conexión). Sin ella el servidor **acepta el
+   handshake y luego calla**, que es el peor síntoma posible: todo parece correcto.
+   Implementado en `Signer::sign_ws_uri`, **sin verificar todavía** que con eso lleguen
+   frames: el límite de tasa cortó las pruebas (docs/06 §5 — firmar mucho seguido desde
+   una IP lo despierta; conviene esperar antes de insistir).
+
+Herramientas para seguir desde aquí, todas contra salas reales:
 
 ```sh
-cargo run -p ttl-sign-webview --example endpoint-probe -- <usuario en directo>
+cargo run -p ttl-sign-webview --example endpoint-probe -- <usuario>  # compara endpoints
+cargo run -p ttl-sign-webview --example fetch-dump -- <usuario>      # estructura del protobuf
+cargo run -p ttl-sign-webview --example ws-probe -- <usuario>        # todo lo que entra y sale del socket
+cargo run -p ttl-sign-webview --example page-probe -- <usuario> "<js>"  # qué hace la página
 ```
-
-Por eso `sessionid` deja de ser la decisión abierta de
-[06](docs/06-risks-and-ops.md#decisiones-abiertas) y pasa a ser requisito. Está
-implementado y **vacío por defecto**: el signer no toca ninguna cuenta salvo que se le
-dé una.
 
 ### Iniciar sesión
 

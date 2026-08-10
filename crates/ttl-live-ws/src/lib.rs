@@ -118,6 +118,24 @@ impl LiveConnection {
         .await
     }
 
+    /// Abre una URI ya construida **y firmada** por el llamante.
+    ///
+    /// Es el camino real: la URI del WebSocket lleva firma propia
+    /// (`byted_acrawler.frontierSign`), y quien sabe firmar es el motor de webview, no
+    /// este crate.
+    pub async fn open_uri(
+        uri: &str,
+        cookies: &CookieJar,
+        user_agent: &str,
+        internal_ext: &str,
+        config: &ConnectConfig,
+    ) -> Result<Self, WsError> {
+        if cookies.is_empty() {
+            return Err(WsError::EmptyCookies);
+        }
+        Self::connect(uri.to_string(), cookies, user_agent, internal_ext, config).await
+    }
+
     /// Igual que [`LiveConnection::open`] pero desde un [`FetchResult`] ya decodificado.
     /// Es lo que usa el ejemplo `replay` de F1, que parte de un fixture y no de un firmante.
     pub async fn open_with(
@@ -144,6 +162,17 @@ impl LiveConnection {
         params.internal_ext = result.internal_ext.clone();
         let uri = params.build_uri(&result.push_server, &result.route_params, preset);
 
+        Self::connect(uri, cookies, user_agent, &result.internal_ext, config).await
+    }
+
+    /// El grueso de la conexión, común a las dos entradas.
+    async fn connect(
+        uri: String,
+        cookies: &CookieJar,
+        user_agent: &str,
+        internal_ext: &str,
+        config: &ConnectConfig,
+    ) -> Result<Self, WsError> {
         let mut request = uri
             .as_str()
             .into_client_request()
@@ -186,7 +215,7 @@ impl LiveConnection {
 
         Ok(Self {
             stream,
-            internal_ext: result.internal_ext.clone(),
+            internal_ext: internal_ext.to_string(),
             heartbeat,
             handshake_options,
             uri,

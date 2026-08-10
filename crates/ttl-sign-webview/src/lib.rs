@@ -426,6 +426,64 @@ impl Signer {
         self.text_request(None).await
     }
 
+    /// Firma la URI de un WebSocket.
+    ///
+    /// Corrige lo que decía `docs/00-research.md` §1 ("el WS no lleva firma propia"): la
+    /// URI que abre el reproductor real lleva `X-Gnarly`. Sin ella el handshake se acepta
+    /// igual —101, `handshake-msg: OK`— y luego no llega ni un frame, que es el fallo más
+    /// difícil de diagnosticar de todo el flujo.
+    ///
+    /// Se firma pasando la **misma query** por el firmador de peticiones HTTP, con el
+    /// esquema cambiado a `https`, y devolviendo el `wss` con los parámetros que el SDK
+    /// haya añadido. Dos caminos, en este orden:
+    ///
+    /// 1. El firmador de `fetch` (el mismo que usa `/webcast/im/fetch/`), que es quien
+    ///    pone `X-Gnarly`.
+    /// 2. `byted_acrawler.frontierSign`, que existe pero hoy solo devuelve `X-Bogus`.
+    ///    Se conserva como respaldo y porque es la API declarada para esto.
+    pub async fn sign_ws_uri(&self, uri: &str) -> Result<String, SignError> {
+        let (scheme, resto) = match uri.split_once("://") {
+            Some((scheme, resto)) => (scheme, resto),
+            None => return Err(SignError::Decode(format!("URI sin esquema: {uri}"))),
+        };
+        let como_https = format!("https://{resto}");
+
+        // 1. Firmador de peticiones: es el que añade X-Gnarly.
+        if let Ok(signed) = self.sign_url(&como_https).await {
+            if signed.url.contains("X-Gnarly=") {
+                let sin_esquema = signed
+                    .url
+                    .split_once("://")
+                    .map(|(_, resto)| resto)
+                    .unwrap_or(&signed.url);
+                return Ok(format!("{scheme}://{sin_esquema}"));
+            }
+        }
+
+        // 2. Respaldo: la API declarada del SDK.
+        let url_json = serde_json::to_string(uri).map_err(|e| SignError::Decode(e.to_string()))?;
+        let script = format!(
+            "JSON.stringify(window.byted_acrawler.frontierSign({{ url: {url_json} }}) || {{}})"
+        );
+        let raw = self.eval(&script).await?;
+        let params: std::collections::BTreeMap<String, String> = serde_json::from_str(&raw)
+            .map_err(|e| SignError::Decode(format!("frontierSign devolvió algo raro: {e}")))?;
+        if params.is_empty() {
+            return Err(SignError::Bridge(
+                "nadie firmó la URI del WebSocket: ni el firmador de fetch ni frontierSign".into(),
+            ));
+        }
+
+        let mut signed = uri.to_string();
+        for (key, value) in params {
+            signed.push('&');
+            signed.push_str(&key);
+            signed.push('=');
+            signed.push_str(&urlencode(&value));
+        }
+        Ok(signed)
+    }
+
     /// Evalúa una expresión JS en la página y devuelve el resultado como texto.
     ///
     /// Herramienta de diagnóstico: sirve para ver qué está pidiendo la página realmente
@@ -937,6 +995,20 @@ fn query_param(url: &str, name: &str) -> Option<String> {
                 .replace("%2F", "/")
                 .replace("%3D", "=")
         })
+}
+
+/// Percent-encoding de un valor de query. Los valores de firma llevan `/`, `+` y `=`.
+fn urlencode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 /// `sec-ch-ua-platform` coherente con el preset. Si no cuadra con el UA, es una

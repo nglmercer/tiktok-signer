@@ -1,7 +1,28 @@
 # 05 — Spec: cliente WebSocket
 
-Consume un `SignedFetch` y abre la conexión. **No firma nada**: los parámetros de ruta
-vienen ya firmados por TikTok dentro de la respuesta protobuf.
+Consume un `SignedFetch` y abre la conexión.
+
+> **Revisión del 2026-08-10, medida contra salas reales con sesión autenticada.** Dos
+> cosas de este documento eran falsas:
+>
+> 1. **La URI del WebSocket lleva firma propia.** La que abre el reproductor real
+>    incluye `X-Gnarly`. Sin ella el handshake responde **101 con
+>    `handshake-msg: OK`** y después no llega ni un frame: se acepta la conexión y se
+>    calla. Es el fallo más difícil de diagnosticar del flujo, porque todo parece bien.
+> 2. **`cursor` e `internal_ext` los pone el cliente en la query.** No vienen en
+>    `route_params`: una respuesta real solo trae `wrss` e `imprp` ahí.
+>
+> Y `push_server` hoy no sigue el patrón `webcast<N>-ws-web-<idc>` de
+> [00](00-research.md) §1, sino
+> `wss://webcast-ws.tiktok.com/webcast/im/ws_proxy/ws_reuse_supplement/`.
+>
+> Quién firma: el mismo firmador de peticiones de webmssdk, pasándole la query con
+> esquema `https` y devolviendo el `wss` con lo que haya añadido
+> (`Signer::sign_ws_uri`). `byted_acrawler.frontierSign` existe y es la API declarada
+> para esto, pero hoy solo devuelve `X-Bogus`, así que queda de respaldo.
+>
+> **Sin verificar todavía:** que con la URI firmada lleguen frames. El límite de tasa
+> cortó las pruebas antes de comprobarlo.
 
 ---
 
@@ -13,8 +34,8 @@ Del protobuf `ProtoMessageFetchResult` devuelto por `/webcast/im/fetch/`:
 |---|---|
 | `push_server` | Base de la URI del WebSocket (`wss://webcast<N>-ws-web-<idc>.tiktok.com/webcast/im/ws/`) |
 | `route_params` | `map<string,string>` con los parámetros firmados por TikTok |
-| `cursor` | Debe existir. Si falta → abortar, la respuesta no es válida |
-| `internal_ext` | Payload de los `ack` |
+| `cursor` | Debe existir. Si falta → abortar. **Va en la query del WS**, no en `route_params` |
+| `internal_ext` | Payload de los `ack`, **y** parámetro de la query del WS |
 
 Más, del `SignedFetch`: el cookie jar y el User-Agent usados al firmar.
 

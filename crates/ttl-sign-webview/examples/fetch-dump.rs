@@ -107,7 +107,10 @@ fn main() -> ! {
             println!("\nFetchResult:");
             println!("  push_server ......... {}", result.push_server);
             println!("  cursor .............. {:?}", result.cursor);
-            println!("  internal_ext ........ {} chars", result.internal_ext.len());
+            println!(
+                "  internal_ext ........ {} chars",
+                result.internal_ext.len()
+            );
             println!("  heartbeat_duration .. {}", result.heartbeat_duration);
             println!("  need_ack ............ {}", result.need_ack);
             println!("  route_params ({}):", result.route_params.len());
