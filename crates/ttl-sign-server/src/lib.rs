@@ -164,9 +164,9 @@ async fn webcast_fetch(
             warn!(request_id, room_id, latency_ms, %err, "fallo de transporte");
             let status = match err {
                 // El pool todavía no está listo: es reintentable, y 503 lo dice.
-                SignError::SdkNotReady | SignError::NoInstanceAvailable => {
-                    StatusCode::SERVICE_UNAVAILABLE
-                }
+                SignError::SdkNotReady
+                | SignError::NoInstanceAvailable
+                | SignError::LoginTimeout(_) => StatusCode::SERVICE_UNAVAILABLE,
                 SignError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
                 _ => StatusCode::BAD_GATEWAY,
             };

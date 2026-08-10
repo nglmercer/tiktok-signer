@@ -117,8 +117,28 @@ Consecuencias, que siguen siendo las de antes:
 - riesgo sobre la cuenta.
 
 La diferencia es que ya no se puede elegir no pagarlas. Implementado como
-`EngineConfig::session_id` (`TTL_SESSION_ID` en el servidor), vacío por defecto: el
-componente no toca ninguna cuenta salvo que se le dé una explícitamente.
+`EngineConfig::session`, vacío por defecto: el componente no toca ninguna cuenta salvo
+que se le dé una explícitamente.
+
+Cómo se obtiene, por orden de precedencia:
+
+1. `TTL_SESSION_ID` — una cookie `sessionid` suelta, útil en CI o en contenedores.
+2. El fichero de sesión (`TTL_SESSION_FILE`, o
+   `$XDG_CONFIG_HOME/ttl-signer/session`), que escribe el flujo de login.
+
+El flujo de login (`cargo run -p ttl-sign-webview --example login`) abre el webview
+**visible** en la página de login, sondea la cookie `sessionid` cada 2 s y termina cuando
+aparece o cuando se agota el plazo (5 min por defecto). Si se agota, no guarda nada.
+
+Medidas sobre el material guardado:
+
+- fichero `0600`, creado con esos permisos **antes** de escribir, no ajustados después;
+- fuera del repositorio (`$XDG_CONFIG_HOME`), así que no hay `.gitignore` que se pueda
+  olvidar;
+- solo se guardan las cookies que hacen falta (`sessionid`, `sid_tt`, `ttwid`, …), no el
+  resto del estado del navegador;
+- `CookieJar` redacta en `Display`, así que un log accidental enseña 8 caracteres;
+- `--logout` borra el fichero.
 
 ### ¿Proxy por sala?
 

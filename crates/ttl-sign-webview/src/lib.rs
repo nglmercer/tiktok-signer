@@ -27,6 +27,7 @@
 //! construir el motor de otra forma.
 
 pub mod ipc;
+pub mod session;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -47,6 +48,9 @@ use ttl_sign_core::{
 
 use crate::ipc::{FromPage, ToPage, ToPageText};
 
+/// Cada cuánto se mira si ya hay sesión durante el login.
+const POLL_LOGIN: Duration = Duration::from_secs(2);
+
 /// Script inyectado antes que los de la página.
 pub const BRIDGE_JS: &str = include_str!("bridge.js");
 
@@ -65,7 +69,10 @@ pub struct EngineConfig {
     pub sdk_ready_timeout: Duration,
     /// Email de contacto que pide la spec de Euler (`contact_us`). Opcional.
     pub contact_us: String,
-    /// Cookie `sessionid` de una cuenta real. Vacío = sesión anónima.
+    /// Ventana visible. Solo para el flujo de login, donde hace falta que la persona vea
+    /// la página y pueda teclear; para firmar va invisible.
+    pub visible: bool,
+    /// Cookies de una cuenta real. Vacío = sesión anónima.
     ///
     /// Verificado el 2026-08-10 contra directos reales: **sin ella no hay flujo**.
     /// `/webcast/room/enter/` responde literalmente `User doesn't login`, y
@@ -78,7 +85,7 @@ pub struct EngineConfig {
     /// (`docs/06-risks-and-ops.md` §Decisiones abiertas). Con `sessionid`, el WebSocket
     /// **exige** además que la cookie viaje en el handshake, o rechaza con
     /// "illegal secret key".
-    pub session_id: String,
+    pub session: CookieJar,
 }
 
 impl Default for EngineConfig {
@@ -96,8 +103,36 @@ impl Default for EngineConfig {
             sign_timeout: Duration::from_secs(15),
             sdk_ready_timeout: Duration::from_secs(30),
             contact_us: String::new(),
-            session_id: String::new(),
+            visible: false,
+            session: CookieJar::new(),
         }
+    }
+}
+
+impl EngineConfig {
+    /// Configura la sesión a partir de una cookie `sessionid` suelta.
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        let session_id = session_id.into();
+        if !session_id.is_empty() {
+            self.session.set(session::SESSION_COOKIE, session_id);
+        }
+        self
+    }
+
+    /// Configuración para el flujo de login: ventana visible, sin sesión previa y
+    /// aterrizando en la página de login.
+    pub fn for_login() -> Self {
+        Self {
+            visible: true,
+            landing_url: "https://www.tiktok.com/login".into(),
+            session: CookieJar::new(),
+            ..Self::default()
+        }
+    }
+
+    /// ¿Hay sesión configurada?
+    pub fn is_authenticated(&self) -> bool {
+        session::is_logged_in(&self.session)
     }
 }
 
@@ -122,6 +157,11 @@ enum UserEvent {
     Text {
         url: Option<String>,
         reply: oneshot::Sender<Result<String, SignError>>,
+    },
+    /// Cookies actuales del webview. No espera al gate: en la página de login el SDK
+    /// puede no llegar a cargar nunca, y aun así hay sesión que leer.
+    Cookies {
+        reply: oneshot::Sender<CookieJar>,
     },
     /// Navega la página a otra URL y vuelve a cerrar el gate de readiness.
     Navigate {
@@ -278,6 +318,45 @@ impl Signer {
                 &signed.user_agent,
             ),
             Err(e) => e.into(),
+        }
+    }
+
+    /// Cookies actuales del webview, incluidas las `HttpOnly`.
+    ///
+    /// Contienen la sesión: no imprimirlas en claro.
+    pub async fn cookies(&self) -> Result<CookieJar, SignError> {
+        let (tx, rx) = oneshot::channel();
+        self.proxy
+            .send_event(UserEvent::Cookies { reply: tx })
+            .map_err(|_| SignError::EngineGone("el event loop se ha cerrado".into()))?;
+        rx.await
+            .map_err(|_| SignError::EngineGone("el motor descartó la petición".into()))
+    }
+
+    /// Espera a que la persona inicie sesión en la ventana, hasta `timeout`.
+    ///
+    /// Sondea las cookies del webview buscando `sessionid`. Devuelve las cookies de
+    /// sesión ya filtradas, listas para guardar con [`session::save`].
+    ///
+    /// `on_tick` recibe el tiempo restante en cada sondeo; sirve para ir informando sin
+    /// que este crate imprima nada por su cuenta.
+    pub async fn wait_for_login(
+        &self,
+        timeout: Duration,
+        mut on_tick: impl FnMut(Duration),
+    ) -> Result<CookieJar, SignError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let jar = self.cookies().await?;
+            if session::is_logged_in(&jar) {
+                return Ok(session::filter(&jar));
+            }
+            let restante = deadline.saturating_duration_since(Instant::now());
+            if restante.is_zero() {
+                return Err(SignError::LoginTimeout(timeout.as_secs()));
+            }
+            on_tick(restante);
+            tokio::time::sleep(POLL_LOGIN.min(restante)).await;
         }
     }
 
@@ -471,8 +550,12 @@ where
     let proxy = event_loop.create_proxy();
 
     let window = WindowBuilder::new()
-        .with_title("ttl-sign-webview")
-        .with_visible(false)
+        .with_title(if config.visible {
+            "Inicia sesión en TikTok — se cerrará solo al terminar"
+        } else {
+            "ttl-sign-webview"
+        })
+        .with_visible(config.visible)
         .build(&event_loop)
         .expect("no se pudo crear la ventana (¿hay display? si no, usa Xvfb)");
 
@@ -512,11 +595,18 @@ where
 
     let webview = build_webview(builder, &window).expect("no se pudo crear el webview");
 
-    if !config.session_id.is_empty() {
-        // Se inyecta antes de navegar: la página tiene que cargar ya autenticada.
-        match install_session_cookie(&webview, &config.session_id) {
-            Ok(()) => info!("sesión autenticada instalada"),
-            Err(e) => error!(error = %e, "no se pudo instalar la cookie de sesión"),
+    if !config.session.is_empty() {
+        // Se inyectan antes de navegar: la página tiene que cargar ya autenticada.
+        match install_session(&webview, &config.session) {
+            Ok(()) => info!(
+                cookies = config.session.len(),
+                "sesión autenticada instalada"
+            ),
+            Err(e) => error!(error = %e, "no se pudo instalar la sesión"),
+        }
+        // La navegación inicial ya iba lanzada sin las cookies: se rehace.
+        if let Err(e) = webview.load_url(&config.landing_url) {
+            error!(error = %e, "no se pudo recargar con la sesión puesta");
         }
     }
 
@@ -576,6 +666,9 @@ where
                 state.pending_text.insert(id, reply);
                 drop(state);
                 dispatch_text(&webview, &shared, id, url);
+            }
+            Event::UserEvent(UserEvent::Cookies { reply }) => {
+                let _ = reply.send(cookies_from_webview(&webview));
             }
             Event::UserEvent(UserEvent::Navigate { url, reply }) => {
                 {
@@ -644,13 +737,17 @@ where
 }
 
 /// Instala la cookie `sessionid` en el webview, para `.tiktok.com`.
-fn install_session_cookie(webview: &wry::WebView, session_id: &str) -> wry::Result<()> {
-    let mut cookie = wry::cookie::Cookie::new("sessionid", session_id.to_string());
-    cookie.set_domain(".tiktok.com");
-    cookie.set_path("/");
-    cookie.set_secure(true);
-    cookie.set_http_only(true);
-    webview.set_cookie(&cookie)
+fn install_session(webview: &wry::WebView, jar: &CookieJar) -> wry::Result<()> {
+    for (name, value) in jar.iter() {
+        let mut cookie = wry::cookie::Cookie::new(name.to_string(), value.to_string());
+        cookie.set_domain(".tiktok.com");
+        cookie.set_path("/");
+        cookie.set_secure(true);
+        // `sessionid` es HttpOnly en producción; el resto no tiene por qué serlo.
+        cookie.set_http_only(name == session::SESSION_COOKIE);
+        webview.set_cookie(&cookie)?;
+    }
+    Ok(())
 }
 
 /// En Linux la ventana es invisible, así que GTK nunca la *realiza* y no hay window

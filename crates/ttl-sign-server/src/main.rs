@@ -20,7 +20,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use tracing::info;
 use ttl_sign_server::{router, AppState};
-use ttl_sign_webview::{run, EngineConfig};
+use ttl_sign_webview::{run, session, EngineConfig};
 
 fn main() -> ! {
     tracing_subscriber::fmt()
@@ -40,9 +40,9 @@ fn main() -> ! {
         landing_url: std::env::var("TTL_LANDING_URL")
             .unwrap_or_else(|_| "https://www.tiktok.com/live".into()),
         contact_us: std::env::var("TTL_CONTACT_US").unwrap_or_default(),
-        // Sin sesión, TikTok responde vacío hoy: ver EngineConfig::session_id.
-        session_id: std::env::var("TTL_SESSION_ID").unwrap_or_default(),
         sign_timeout: Duration::from_secs(15),
+        // Sin sesión, TikTok responde vacío hoy: ver EngineConfig::session.
+        session: load_session(),
         ..EngineConfig::default()
     };
 
@@ -50,13 +50,13 @@ fn main() -> ! {
         %bind,
         max_concurrent,
         landing_url = %config.landing_url,
-        autenticado = !config.session_id.is_empty(),
+        autenticado = config.is_authenticated(),
         "arrancando"
     );
-    if config.session_id.is_empty() {
+    if !config.is_authenticated() {
         tracing::warn!(
-            "sin TTL_SESSION_ID: hoy TikTok devuelve cuerpo vacío en /webcast/im/fetch/ \
-             para sesiones anónimas"
+            "sin sesión: hoy TikTok devuelve cuerpo vacío en /webcast/im/fetch/ para \
+             sesiones anónimas. Inicia sesión con: cargo run -p ttl-sign-webview --example login"
         );
     }
 
@@ -69,6 +69,23 @@ fn main() -> ! {
         }
         std::process::exit(0);
     })
+}
+
+/// Sesión: `TTL_SESSION_ID` manda; si no, la guardada por el ejemplo `login`.
+fn load_session() -> ttl_sign_core::CookieJar {
+    if let Ok(id) = std::env::var("TTL_SESSION_ID") {
+        if !id.is_empty() {
+            return EngineConfig::default().with_session_id(id).session;
+        }
+    }
+    match session::configured_path().map(|path| session::load(&path)) {
+        Some(Ok(Some(jar))) => jar,
+        Some(Err(e)) => {
+            tracing::warn!(error = %e, "no se pudo leer la sesión guardada");
+            ttl_sign_core::CookieJar::new()
+        }
+        _ => ttl_sign_core::CookieJar::new(),
+    }
 }
 
 async fn serve(

@@ -50,12 +50,24 @@ cargo run -p ttl-sign-webview --example endpoint-probe -- <usuario en directo>
 Por eso `sessionid` deja de ser la decisión abierta de
 [06](docs/06-risks-and-ops.md#decisiones-abiertas) y pasa a ser requisito. Está
 implementado y **vacío por defecto**: el signer no toca ninguna cuenta salvo que se le
-pase una.
+dé una.
+
+### Iniciar sesión
 
 ```sh
-TTL_SESSION_ID=<cookie sessionid> cargo run -p ttl-sign-webview --example live-check
-TTL_SESSION_ID=<cookie sessionid> cargo run -p ttl-sign-server
+cargo run -p ttl-sign-webview --example login                 # 5 min de plazo
+cargo run -p ttl-sign-webview --example login -- --timeout 600
+cargo run -p ttl-sign-webview --example login -- --logout     # borra la sesión
 ```
+
+Abre una ventana **visible** con la página de login de TikTok, espera a que termines
+(sondeando la cookie `sessionid` cada 2 s) y guarda la sesión en
+`$XDG_CONFIG_HOME/ttl-signer/session` con permisos `0600`. Si se agota el plazo no guarda
+nada. `live-check` y el servidor la recogen solos; `TTL_SESSION_ID` tiene prioridad y
+`TTL_SESSION_FILE` cambia la ruta.
+
+Esa cookie **es** la cuenta: quien la tenga es tú para TikTok. Vive fuera del repositorio
+y solo la lee tu usuario. Los logs la redactan salvo los 8 primeros caracteres.
 
 Queda sin verificar el tramo final (protobuf → WebSocket → frames): necesita una cuenta.
 Con `sessionid`, el WS además **exige** esa cookie en el handshake o responde

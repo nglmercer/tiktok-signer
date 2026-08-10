@@ -65,6 +65,10 @@ pub enum SignError {
     #[error("el motor de webview no responde: {0}")]
     EngineGone(String),
 
+    /// Nadie inició sesión dentro del plazo del flujo de login.
+    #[error("no se inició sesión en el plazo ({0} s)")]
+    LoginTimeout(u64),
+
     /// La firma tardó más de lo permitido. Es relevante porque el resultado caduca
     /// a los ~30 s: llegar tarde equivale a no llegar.
     #[error("la firma superó el tiempo máximo ({0} ms)")]

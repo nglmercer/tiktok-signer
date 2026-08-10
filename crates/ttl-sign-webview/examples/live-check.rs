@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 
 use ttl_live_ws::{ConnectConfig, LiveConnection};
 use ttl_sign_core::{FetchResult, SignOutcome};
-use ttl_sign_webview::{run, EngineConfig, Signer};
+use ttl_sign_webview::{run, session, EngineConfig, Signer};
 
 fn main() -> ! {
     tracing_subscriber::fmt()
@@ -38,21 +38,9 @@ fn main() -> ! {
 
     let requested_user = std::env::args().nth(1);
     // Hoy el flujo no funciona en anónimo: ver el paso 3.
-    let session_id = std::env::var("TTL_SESSION_ID").unwrap_or_default();
-    let autenticado = !session_id.is_empty();
-    println!(
-        "sesión: {}",
-        if autenticado {
-            "autenticada (TTL_SESSION_ID)"
-        } else {
-            "anónima"
-        }
-    );
-
-    let config = EngineConfig {
-        session_id,
-        ..EngineConfig::default()
-    };
+    let (config, origen) = configurar_sesion();
+    let autenticado = config.is_authenticated();
+    println!("sesión: {origen}");
 
     run(config, move |signer| {
         let rt = tokio::runtime::Runtime::new().expect("runtime de tokio");
@@ -66,6 +54,36 @@ fn main() -> ! {
         signer.shutdown();
         std::process::exit(code);
     })
+}
+
+/// `TTL_SESSION_ID` manda; si no, la sesión que dejó el ejemplo `login`.
+fn configurar_sesion() -> (EngineConfig, String) {
+    if let Ok(id) = std::env::var("TTL_SESSION_ID") {
+        if !id.is_empty() {
+            return (
+                EngineConfig::default().with_session_id(id),
+                "autenticada (TTL_SESSION_ID)".into(),
+            );
+        }
+    }
+    if let Some(path) = session::configured_path() {
+        if let Ok(Some(jar)) = session::load(&path) {
+            if session::is_logged_in(&jar) {
+                let origen = format!("autenticada ({})", path.display());
+                return (
+                    EngineConfig {
+                        session: jar,
+                        ..EngineConfig::default()
+                    },
+                    origen,
+                );
+            }
+        }
+    }
+    (
+        EngineConfig::default(),
+        "anónima — inicia sesión con: cargo run -p ttl-sign-webview --example login".into(),
+    )
 }
 
 async fn check(
