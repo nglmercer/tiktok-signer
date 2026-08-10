@@ -4,8 +4,9 @@
 //! nada, eso no distingue "el servidor calla" de "nos está hablando y lo descartamos".
 //! Aquí no se filtra nada.
 //!
-//! Prueba además el guion que espera el servidor: silencio, luego un heartbeat de
-//! aplicación (`hb`), luego un ping de protocolo (el handshake anuncia `ping-interval`).
+//! Prueba además el guion que espera el servidor: entrada a la sala, silencio, luego un
+//! heartbeat de aplicación (`hb`) y un ping de protocolo (el handshake anuncia
+//! `ping-interval`).
 //!
 //! ```sh
 //! cargo run -p ttl-sign-webview --example ws-probe -- <usuario en directo>
@@ -46,8 +47,6 @@ fn main() -> ! {
         session,
         ..EngineConfig::default()
     };
-    let preset = config.preset.clone();
-
     run(config, move |signer: Signer| {
         let rt = tokio::runtime::Runtime::new().expect("runtime de tokio");
         rt.block_on(async move {
@@ -64,7 +63,9 @@ fn main() -> ! {
             let mut params = WsParams::new(&lookup.room_id);
             params.cursor = result.cursor.clone();
             params.internal_ext = result.internal_ext.clone();
+            let preset = signer.preset();
             let uri = params.build_uri(&result.push_server, &result.route_params, &preset);
+            let uri = signer.sign_ws_uri(&uri).await.expect("firma del WebSocket");
             println!("host: {}", uri.split('?').next().unwrap_or_default());
 
             let mut request = uri.as_str().into_client_request().expect("uri");
@@ -76,6 +77,10 @@ fn main() -> ! {
                 "User-Agent",
                 HeaderValue::from_str(&signed.user_agent).unwrap(),
             );
+            request.headers_mut().insert(
+                "Origin",
+                HeaderValue::from_static("https://www.tiktok.com"),
+            );
 
             let (mut ws, response) = tokio_tungstenite::connect_async(request)
                 .await
@@ -84,6 +89,17 @@ fn main() -> ! {
             for (k, v) in response.headers() {
                 println!("  {k}: {}", v.to_str().unwrap_or("?"));
             }
+
+            let room_id = lookup.room_id.parse().expect("room_id");
+            let enter_room = PushFrame::enter_room(room_id);
+            println!(
+                "[{:>5.1}s] → im_enter_room ({} bytes)",
+                0.0,
+                enter_room.payload.len()
+            );
+            ws.send(Message::Binary(enter_room.encode()))
+                .await
+                .expect("entrada a la sala");
 
             let t0 = Instant::now();
             let mut deadline = tokio::time::interval(Duration::from_secs(5));
@@ -96,7 +112,7 @@ fn main() -> ! {
                         match fase {
                             1 => println!("[{:>5.1}s] escuchando en silencio…", t0.elapsed().as_secs_f32()),
                             2 => {
-                                let hb = PushFrame { payload_type: "hb".into(), ..Default::default() };
+                                let hb = PushFrame::heartbeat(room_id, 1);
                                 println!("[{:>5.1}s] → hb de aplicación ({:02x?})", t0.elapsed().as_secs_f32(), hb.encode());
                                 ws.send(Message::Binary(hb.encode())).await.ok();
                             }

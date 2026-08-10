@@ -29,8 +29,6 @@ fn main() -> ! {
         sign_timeout: Duration::from_secs(30),
         ..EngineConfig::default()
     };
-    let preset = config.preset.clone();
-
     run(config, move |signer: Signer| {
         let rt = tokio::runtime::Runtime::new().expect("runtime de tokio");
         rt.block_on(async move {
@@ -42,6 +40,7 @@ fn main() -> ! {
                 lookup.is_live()
             );
 
+            let preset = signer.preset();
             for (label, url) in candidates(&lookup.room_id, &preset) {
                 match signer.sign_url(&url).await {
                     Ok(signed) => {

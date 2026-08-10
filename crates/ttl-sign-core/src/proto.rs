@@ -182,7 +182,8 @@ impl<'a> Reader<'a> {
 
 // --- Codificador de bajo nivel ----------------------------------------------------
 
-/// Escribe mensajes protobuf. Solo lo necesario para emitir `ack` y heartbeats.
+/// Escribe mensajes protobuf. Solo lo necesario para emitir `ack`, heartbeats y la
+/// entrada inicial a una sala.
 #[derive(Debug, Default, Clone)]
 pub struct Writer {
     buf: Vec<u8>,
@@ -438,6 +439,41 @@ impl PushFrame {
             ..Default::default()
         }
     }
+
+    /// Frame que el cliente envía justo después del handshake para entrar en la sala.
+    ///
+    /// El `room_id` no va en el sobre: va dentro de `WebcastImEnterRoomMessage`, que es
+    /// el payload de `im_enter_room`. Sin este frame TikTok puede aceptar el 101 y dejar
+    /// el socket completamente silencioso.
+    pub fn enter_room(room_id: u64) -> Self {
+        let mut writer = Writer::new();
+        writer
+            .u64_field(1, room_id)
+            .u64_field(4, 12)
+            .str_field(5, "audience")
+            .str_field(9, "0");
+
+        Self {
+            payload_encoding: "pb".into(),
+            payload_type: "im_enter_room".into(),
+            payload: writer.finish(),
+            ..Self::default()
+        }
+    }
+
+    /// Heartbeat de aplicación. El payload es `HeartbeatMessage`:
+    /// `room_id=1` y `send_packet_seq_id=2`.
+    pub fn heartbeat(room_id: u64, sequence_id: u64) -> Self {
+        let mut writer = Writer::new();
+        writer.u64_field(1, room_id).u64_field(2, sequence_id);
+
+        Self {
+            payload_encoding: "pb".into(),
+            payload_type: "hb".into(),
+            payload: writer.finish(),
+            ..Self::default()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -548,5 +584,28 @@ mod tests {
 
         // Sin internal_ext, el payload es "-", no vacío.
         assert_eq!(received.ack("").payload, b"-");
+    }
+
+    #[test]
+    fn enter_room_frame_has_the_expected_payload() {
+        let frame = PushFrame::enter_room(7_672_379_773_977_037_584);
+        assert_eq!(frame.payload_encoding, "pb");
+        assert_eq!(frame.payload_type, "im_enter_room");
+        assert_eq!(PushFrame::decode(&frame.encode()).unwrap(), frame);
+
+        let mut reader = Reader::new(&frame.payload);
+        let fields: Vec<_> = std::iter::from_fn(|| reader.next_field()).collect();
+        assert_eq!(fields.len(), 4);
+        assert_eq!(fields[0].as_ref().unwrap().0, 1);
+        assert_eq!(
+            fields[0].as_ref().unwrap().1.as_u64(),
+            Some(7_672_379_773_977_037_584)
+        );
+        assert_eq!(fields[1].as_ref().unwrap().0, 4);
+        assert_eq!(fields[1].as_ref().unwrap().1.as_u64(), Some(12));
+        assert_eq!(fields[2].as_ref().unwrap().0, 5);
+        assert_eq!(fields[2].as_ref().unwrap().1.as_str(), Some("audience"));
+        assert_eq!(fields[3].as_ref().unwrap().0, 9);
+        assert_eq!(fields[3].as_ref().unwrap().1.as_str(), Some("0"));
     }
 }

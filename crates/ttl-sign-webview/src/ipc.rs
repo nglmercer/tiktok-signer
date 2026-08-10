@@ -10,6 +10,20 @@ pub enum FromPage {
     Ready {
         #[serde(default)]
         sdk_version: Option<String>,
+        /// Cómo se ve el entorno desde dentro de la página. Los params de la query se
+        /// alinean con esto en vez de adivinarlo desde Rust.
+        #[serde(default)]
+        env: Option<PageEnv>,
+    },
+    /// El puente ya puso las cookies de sesión en **este** documento. El motor espera a
+    /// esto antes de navegar a la página de verdad.
+    Session {
+        #[serde(default)]
+        installed: usize,
+        #[serde(default)]
+        host: String,
+        #[serde(default)]
+        cookie: String,
     },
     /// La petición salió firmada por el SDK. **No trae cuerpo**: `/webcast/im/fetch/`
     /// no devuelve cabeceras CORS, así que la página no puede leer la respuesta. Rust
@@ -34,6 +48,24 @@ pub enum FromPage {
     /// Fallo dentro de la página. `request_id == 0` significa que no corresponde a
     /// ninguna petición concreta (p. ej. `sdk_not_ready`).
     Error { request_id: u64, message: String },
+}
+
+/// Lo que la página dice de sí misma: idioma, zona horaria, pantalla y región de la
+/// cuenta. Sustituye a adivinarlo con un preset fijo.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PageEnv {
+    #[serde(default)]
+    pub language: String,
+    #[serde(default)]
+    pub browser_language: String,
+    #[serde(default)]
+    pub tz_name: String,
+    #[serde(default)]
+    pub region: String,
+    #[serde(default)]
+    pub screen_width: u32,
+    #[serde(default)]
+    pub screen_height: u32,
 }
 
 /// Rust → JS. La query la construye Rust; el JS no compone parámetros.
@@ -74,13 +106,19 @@ mod tests {
     fn parses_ready() {
         let msg: FromPage =
             serde_json::from_str(r#"{"type":"ready","sdk_version":"1.0.0.368"}"#).unwrap();
-        assert!(matches!(msg, FromPage::Ready { sdk_version: Some(v) } if v == "1.0.0.368"));
+        assert!(matches!(msg, FromPage::Ready { sdk_version: Some(v), .. } if v == "1.0.0.368"));
     }
 
     #[test]
     fn parses_ready_without_version() {
         let msg: FromPage = serde_json::from_str(r#"{"type":"ready","sdk_version":null}"#).unwrap();
-        assert!(matches!(msg, FromPage::Ready { sdk_version: None }));
+        assert!(matches!(
+            msg,
+            FromPage::Ready {
+                sdk_version: None,
+                ..
+            }
+        ));
     }
 
     #[test]

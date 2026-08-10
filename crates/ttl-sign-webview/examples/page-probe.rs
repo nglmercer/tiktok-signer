@@ -29,6 +29,7 @@ fn main() -> ! {
     let config = EngineConfig {
         landing_url: live_page_url(&user),
         sign_timeout: Duration::from_secs(30),
+        block_page_websockets: false,
         // Sin sesión el reproductor no arranca del todo, y entonces no hay nada que ver.
         session: session::configured_path()
             .and_then(|p| session::load(&p).ok().flatten())

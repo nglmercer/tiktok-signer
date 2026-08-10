@@ -39,6 +39,10 @@ pub enum WsError {
     #[error("la respuesta no trae URL de WebSocket (rechazo silencioso)")]
     WebsocketUrlMissing,
 
+    /// La URI no identifica la sala a la que hay que enviar `im_enter_room`.
+    #[error("la URI del WebSocket no trae un room_id válido")]
+    RoomIdMissing,
+
     /// El jar no trae las cookies que el WS necesita.
     #[error("faltan cookies de sesión para abrir el WebSocket")]
     EmptyCookies,
@@ -88,6 +92,8 @@ impl Default for ConnectConfig {
 pub struct LiveConnection {
     stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
     internal_ext: String,
+    room_id: u64,
+    heartbeat_sequence: u64,
     heartbeat: tokio::time::Interval,
     /// Opciones que devolvió el servidor en `Handshake-Options`, útiles en diagnóstico.
     handshake_options: Vec<(String, String)>,
@@ -133,7 +139,16 @@ impl LiveConnection {
         if cookies.is_empty() {
             return Err(WsError::EmptyCookies);
         }
-        Self::connect(uri.to_string(), cookies, user_agent, internal_ext, config).await
+        let room_id = room_id_from_uri(uri)?;
+        Self::connect(
+            uri.to_string(),
+            cookies,
+            user_agent,
+            internal_ext,
+            room_id,
+            config,
+        )
+        .await
     }
 
     /// Igual que [`LiveConnection::open`] pero desde un [`FetchResult`] ya decodificado.
@@ -162,7 +177,16 @@ impl LiveConnection {
         params.internal_ext = result.internal_ext.clone();
         let uri = params.build_uri(&result.push_server, &result.route_params, preset);
 
-        Self::connect(uri, cookies, user_agent, &result.internal_ext, config).await
+        let room_id = room_id_from_str(room_id)?;
+        Self::connect(
+            uri,
+            cookies,
+            user_agent,
+            &result.internal_ext,
+            room_id,
+            config,
+        )
+        .await
     }
 
     /// El grueso de la conexión, común a las dos entradas.
@@ -171,6 +195,7 @@ impl LiveConnection {
         cookies: &CookieJar,
         user_agent: &str,
         internal_ext: &str,
+        room_id: u64,
         config: &ConnectConfig,
     ) -> Result<Self, WsError> {
         let mut request = uri
@@ -189,6 +214,9 @@ impl LiveConnection {
                 HeaderValue::from_str(user_agent)
                     .map_err(|e| WsError::Transport(format!("user-agent inválido: {e}")))?,
             );
+            // The browser sends this automatically for the page's WebSocket. TikTok can
+            // accept a handshake without it, but the resulting connection may stay silent.
+            headers.insert("Origin", HeaderValue::from_static("https://www.tiktok.com"));
         }
 
         // Sin keepalive de protocolo: TikTok no responde a los `ping`, así que un
@@ -197,10 +225,21 @@ impl LiveConnection {
         // envía pings por su cuenta; el keepalive real es el heartbeat de aplicación.
         let ws_config = WebSocketConfig::default();
 
-        let (stream, response) =
+        let (mut stream, response) =
             tokio_tungstenite::connect_async_with_config(request, Some(ws_config), false)
                 .await
                 .map_err(map_handshake_error)?;
+
+        // A 101 only opens the transport. TikTok starts publishing room events after the
+        // client sends the application-level room-entry request. The browser/reference
+        // clients send this before the first heartbeat; without it a valid handshake can
+        // remain silent forever.
+        let enter_room = PushFrame::enter_room(room_id).encode();
+        stream
+            .send(WsMessage::Binary(enter_room))
+            .await
+            .map_err(|e| WsError::Closed(format!("entrada a la sala fallida: {e}")))?;
+        debug!(room_id, "entrada a la sala enviada");
 
         let handshake_options = response
             .headers()
@@ -216,6 +255,8 @@ impl LiveConnection {
         Ok(Self {
             stream,
             internal_ext: internal_ext.to_string(),
+            room_id,
+            heartbeat_sequence: 1,
             heartbeat,
             handshake_options,
             uri,
@@ -307,10 +348,8 @@ impl LiveConnection {
     }
 
     async fn send_heartbeat(&mut self) -> Result<(), WsError> {
-        let frame = PushFrame {
-            payload_type: "hb".into(),
-            ..Default::default()
-        };
+        let frame = PushFrame::heartbeat(self.room_id, self.heartbeat_sequence);
+        self.heartbeat_sequence = self.heartbeat_sequence.saturating_add(1);
         self.stream
             .send(WsMessage::Binary(frame.encode()))
             .await
@@ -337,6 +376,25 @@ fn map_handshake_error(err: tokio_tungstenite::tungstenite::Error) -> WsError {
         }
         other => WsError::Transport(other.to_string()),
     }
+}
+
+fn room_id_from_uri(uri: &str) -> Result<u64, WsError> {
+    let query = uri
+        .split_once('?')
+        .map(|(_, query)| query)
+        .unwrap_or_default();
+    query
+        .split('&')
+        .find_map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            (key == "room_id").then_some(value)
+        })
+        .and_then(|value| value.parse().ok())
+        .ok_or(WsError::RoomIdMissing)
+}
+
+fn room_id_from_str(room_id: &str) -> Result<u64, WsError> {
+    room_id.parse().map_err(|_| WsError::RoomIdMissing)
 }
 
 /// `Handshake-Options` viene en formato cookie: `k=v; k=v`.
@@ -425,12 +483,22 @@ mod tests {
     }
 
     #[test]
-    fn heartbeat_frame_is_the_documented_four_bytes() {
-        let frame = PushFrame {
-            payload_type: "hb".into(),
-            ..Default::default()
-        };
-        // field 7 (payload_type), wire type 2, longitud 2, "hb"
-        assert_eq!(frame.encode(), vec![0x3a, 0x02, b'h', b'b']);
+    fn heartbeat_frame_contains_room_and_sequence() {
+        let frame = PushFrame::heartbeat(7300, 1);
+        assert_eq!(frame.payload_encoding, "pb");
+        assert_eq!(frame.payload_type, "hb");
+        assert_eq!(frame.payload, vec![0x08, 0x84, 0x39, 0x10, 0x01]);
+    }
+
+    #[test]
+    fn room_id_is_read_from_the_signed_uri() {
+        assert_eq!(
+            room_id_from_uri("wss://example.test/ws?foo=bar&room_id=7300&x=y").unwrap(),
+            7300
+        );
+        assert!(matches!(
+            room_id_from_uri("wss://example.test/ws?foo=bar"),
+            Err(WsError::RoomIdMissing)
+        ));
     }
 }

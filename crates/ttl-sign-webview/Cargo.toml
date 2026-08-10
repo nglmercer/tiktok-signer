@@ -50,3 +50,7 @@ path = "examples/fetch-dump.rs"
 [[example]]
 name = "ws-probe"
 path = "examples/ws-probe.rs"
+
+[[example]]
+name = "observe"
+path = "examples/observe.rs"

@@ -233,7 +233,10 @@ impl WsParams {
         Self {
             room_id: room_id.into(),
             compress: "gzip".into(),
-            last_rtt: random_last_rtt(),
+            // The current web player sends 0 on its first WebSocket request. A random
+            // RTT is accepted by some older clients but makes the synthetic URI diverge
+            // from the page URL we otherwise reproduce exactly.
+            last_rtt: 0,
             cursor: String::new(),
             internal_ext: String::new(),
         }
@@ -390,6 +393,7 @@ mod tests {
         assert!(uri.contains("cursor=1786_7672_1_1"), "{uri}");
         assert!(uri.contains("internal_ext=internal_src"), "{uri}");
         assert!(uri.contains("wrss=abc"), "{uri}");
+        assert!(uri.contains("last_rtt=0"), "{uri}");
     }
 
     #[test]

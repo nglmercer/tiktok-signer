@@ -140,7 +140,7 @@ live_id=12              sup_ws_ds_opt=1          update_version_code=2.0.0
 version_code=180800     client_enter=1           ws_direct=1
 did_rule=3              webcast_language=<lang>  screen_height=<..>
 screen_width=<..>       heartbeat_duration=10000 resp_content_type=protobuf
-history_comment_count=6 last_rtt=<100..200>
+history_comment_count=6 last_rtt=0
 ```
 
 Y después, **anexado a mano al final de la query string**:
@@ -168,9 +168,14 @@ transitorio, es "TikTok te ha detectado"; reintentar es inútil. Si el WS se fir
 Fuera de alcance (ya resuelto en el cliente existente), pero relevante para F1 y F4:
 
 - Cada mensaje es un `WebcastPushFrame`.
+- Tras el `101`, el cliente envía primero `payload_type="im_enter_room"` con el payload
+  protobuf de la sala (`room_id`, `live_id=12`, `identity="audience"` y
+  `filter_welcome_msg="0"`). El handshake por sí solo puede quedarse en silencio.
 - Solo los de `payload_type == "msg"` llevan eventos; `hb`, `ack`, `im_enter_room_resp`
   son de transporte y se descartan.
 - La compresión se indica en `headers[].key == "compress_type"`; si vale `gzip` hay que
   descomprimir antes de parsear.
+- El heartbeat `hb` lleva un payload protobuf con `room_id` y un contador
+  `send_packet_seq_id` que empieza en `1`; no es un frame vacío.
 - El `ack` se responde con un `WebcastPushFrame{payload_type:"ack", payload_encoding:"pb",
   log_id: <del frame recibido>, payload: internal_ext || "-"}`.

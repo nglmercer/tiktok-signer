@@ -200,7 +200,8 @@ async fn check(
     params.compress = config.compress.clone();
     params.cursor = result.cursor.clone();
     params.internal_ext = result.internal_ext.clone();
-    let uri = params.build_uri(&result.push_server, &result.route_params, signer.preset());
+    let preset = signer.preset();
+    let uri = params.build_uri(&result.push_server, &result.route_params, &preset);
 
     let uri = signer
         .sign_ws_uri(&uri)

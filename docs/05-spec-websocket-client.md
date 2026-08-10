@@ -87,7 +87,7 @@ client_enter=1               ws_direct=1
 did_rule=3                   webcast_language=<lang>
 screen_height=<preset>       screen_width=<preset>
 heartbeat_duration=10000     resp_content_type=protobuf
-history_comment_count=6      last_rtt=<aleatorio 100..200>
+history_comment_count=6      last_rtt=0
 ```
 
 Más, en tiempo de conexión: `room_id=<sala>` y `compress=gzip` (o vacío si se quiere sin
@@ -99,6 +99,7 @@ compresión).
 |---|---|
 | `Cookie` | Cookie-string del jar del sign server (`X-Set-TT-Cookie`), todas las cookies |
 | `User-Agent` | **Exactamente** el mismo UA usado al firmar |
+| `Origin` | `https://www.tiktok.com` |
 
 ## Opciones de conexión
 
@@ -118,6 +119,25 @@ compresión).
 
 La respuesta del handshake trae `Handshake-Options`, una cadena estilo cookie
 (`k=v; k=v`) con opciones del servidor. Parsear y exponer; útil en diagnóstico.
+
+---
+
+## Entrada a la sala
+
+El `101 Switching Protocols` solo abre el transporte. Inmediatamente después hay que
+enviar un `WebcastPushFrame` con `payload_type = "im_enter_room"` y
+`payload_encoding = "pb"`. Su payload es el protobuf `WebcastImEnterRoomMessage`:
+
+```text
+room_id                  = 1  (int64)
+live_id                  = 4  (12)
+identity                 = 5  ("audience")
+filter_welcome_msg       = 9  ("0")
+```
+
+Los campos vacíos o cero restantes se omiten como en proto3. Sin este frame TikTok puede
+aceptar el handshake y no publicar ningún evento. El heartbeat de aplicación empieza
+después de enviar la entrada.
 
 ---
 
@@ -147,8 +167,10 @@ WebcastPushFrame {
 
 ### Heartbeat
 
-Cada ~10 s (coherente con `heartbeat_duration=10000`), enviar el `HeartBeatMessage`
-correspondiente. Si el envío falla, la conexión está muerta: cerrar y notificar.
+Cada ~10 s (coherente con `heartbeat_duration=10000`), enviar un `WebcastPushFrame` de
+tipo `hb` cuyo payload es `HeartbeatMessage{room_id, send_packet_seq_id}`. El contador
+empieza en `1` y aumenta en cada heartbeat. Si el envío falla, la conexión está muerta:
+cerrar y notificar.
 
 ---
 
