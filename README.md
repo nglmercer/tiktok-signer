@@ -17,7 +17,7 @@ received room-entry, heartbeat, and `msg` frames without Euler and without calli
 | `ttl-sign-core` | Presets, queries, cookie jar, `SignOutcome`, a stable event subset, and generated schema bindings with bounded dynamic decoding. |
 | `ttl-sign-webview` | Wry engine, JS bridge, session bootstrap, navigation, and page-WebSocket relay. |
 | `ttl-live-ws` | WebSocket client with heartbeat, acknowledgements, and typed rejection handling. |
-| `ttl-sign-server` | `GET /webcast/fetch` and `GET /healthz` endpoints. |
+| `ttl-sign-server` | `GET /webcast/fetch`, `GET /webcast/rooms/{room_id}/connect` (Node client), and `GET /healthz`. |
 
 > Protobuf field numbers are confirmed against a real response
 > (`2 = cursor`, `5 = internal_ext`, `7 = route_params`, `10 = push_server`).
@@ -32,13 +32,15 @@ received room-entry, heartbeat, and `msg` frames without Euler and without calli
 | Discover live channels | Works through the rendered `/live` DOM. |
 | `unique_id` → `room_id` | Works without signing or a display. |
 | Room info and gift table | Works; `/webcast/room/info/` and `/webcast/gift/list/` are read as JSON from the page. |
+| Page-signed URI reused outside the WebView | Works; delivers `msg` frames with no `/webcast/im/fetch/` call. |
 | Page-owned WebSocket | Works; TikTok signs and opens it. |
 | Room entry and heartbeat | Managed by TikTok's page and observed over IPC. |
 | Receive protobuf frames | Works; multiple `msg` frames received in live validation. |
 
-The old `/webcast/im/fetch/` replay remains diagnostic code but is no longer on the
-live-check critical path. It is unreliable because TikTok may return a silent empty-body
-rejection even with an authenticated session.
+`/webcast/im/fetch/` is no longer used anywhere on a critical path: it returns a silent
+empty-body rejection for this signer, with or without a session. Clients that need its
+protobuf are served a result rebuilt from the player's own signed socket URI instead — see
+the connector section below.
 
 ### Room state
 
@@ -184,6 +186,47 @@ cargo run -p ttl-sign-webview --example limit-probe -- [user] [requests]
 infrastructure the page carries, then calls `room/info` repeatedly as a guest until TikTok
 stops answering `status_code: 0`. Use it to obtain real signatures before writing anything
 that reacts to them.
+
+### tiktok-live-connector (Node) compatibility
+
+`examples/node-connector` points `tiktok-live-connector` at this project instead of Euler
+Stream:
+
+```sh
+cargo run -p ttl-sign-server                      # terminal 1
+cd examples/node-connector && npm install
+node verify-signer.mjs <username>                 # terminal 2
+```
+
+The Node client calls `GET /webcast/rooms/{room_id}/connect` (the Python client uses
+`/webcast/fetch`); both are served, and the connect route also returns `X-Room-Id`, which
+the Node client reads back.
+
+**Verified 2026-08-10 against live rooms: it works.** 203 events — chat, likes, members,
+follows, viewer counts — reached `tiktok-live-connector` with no Euler Stream involved.
+
+The interesting part is how, because `/webcast/im/fetch/` answers this signer with an empty
+body and cannot supply the `ProtoMessageFetchResult` the client expects. It is never asked
+to. The player signs its **own** WebSocket URI, and `bridge.js` records that URI before the
+connection is attempted, so with `block_page_websockets` enabled the engine captures a
+signed transport nothing has used. `ws_uri::fetch_result_from_ws_uri` rebuilds the protobuf
+from it: `push_server` from the URI base, `route_params` from its query, and a synthetic
+cursor, since the `ws_reuse_supplement` transport carries none and clients reject an empty
+one.
+
+Two details make the reconstruction survive:
+
+- **Values are decoded.** Clients re-encode `route_params` when rebuilding the query, so a
+  stored `%2F` would become `%252F` and break the signature. Storing `/` round-trips.
+- **The client's own parameters are removed.** The example empties
+  `WebSocketConfigDefaults.DEFAULT_WS_CLIENT_PARAMS`; otherwise the connector merges ~27
+  parameters of its own and appends `&version_code=270000`, sending a query TikTok never
+  signed.
+
+A browser also emits URIs that no Rust HTTP client will parse — `browser_version=5.0 (X11;
+Linux x86_64)` contains raw spaces, which fail with "invalid uri character".
+`ws_uri::sanitize_uri` percent-encodes only those, which does not disturb the signature, and
+`LiveConnection::open_uri` applies it automatically.
 
 ### Accounts are optional
 

@@ -1,0 +1,13 @@
+{
+  "name": "ttl-node-connector-check",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Verifies tiktok-live-connector against the local sign server",
+  "scripts": {
+    "verify": "node verify-signer.mjs"
+  },
+  "dependencies": {
+    "tiktok-live-connector": "^2.4.3"
+  }
+}

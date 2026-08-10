@@ -74,6 +74,10 @@ const PAGE_WS_QUEUE_CAPACITY: usize = 1_024;
 /// reloading leaves a permanently silent listener.
 const PAGE_SOCKET_RECOVERY_GRACE: Duration = Duration::from_secs(15);
 
+/// How long to wait for the player to build its signed WebSocket URI after a page load.
+const PAGE_WS_URI_ATTEMPTS: usize = 30;
+const PAGE_WS_URI_POLL: Duration = Duration::from_secs(1);
+
 /// Reloads attempted before concluding the room itself is gone.
 ///
 /// Without a cap, a room that simply ended would be reloaded forever.
@@ -783,6 +787,49 @@ impl Signer {
             .map_err(|_| SignError::EngineGone("event loop has closed".into()))?;
         rx.await
             .map_err(|_| SignError::EngineGone("engine discarded the request".into()))
+    }
+
+    /// Build a `ProtoMessageFetchResult` for a room without calling `/webcast/im/fetch/`.
+    ///
+    /// That endpoint answers with an empty body for this signer, so the protobuf clients
+    /// expect cannot be fetched. It can be reconstructed instead: the player signs its own
+    /// WebSocket URI, and `bridge.js` records it before the connection is attempted, so with
+    /// [`EngineConfig::block_page_websockets`] enabled the engine obtains a signed transport
+    /// that nothing has used — which also avoids two sockets competing for one room.
+    ///
+    /// Verified on 2026-08-10: a URI captured this way delivered `msg` frames when connected
+    /// from outside the WebView.
+    pub async fn page_ws_fetch_result(&self, room_id: &str) -> Result<FetchResult, SignError> {
+        // The player only builds a transport on the channel's own page, and the caller has a
+        // room id rather than a handle.
+        let info = self.room_info(room_id).await?;
+        if info.owner.unique_id.is_empty() {
+            return Err(SignError::Decode(format!(
+                "room {room_id} has no owner handle to open a page for"
+            )));
+        }
+        self.navigate(&room::live_page_url(&info.owner.unique_id))
+            .await?;
+
+        for attempt in 0..PAGE_WS_URI_ATTEMPTS {
+            if let Ok(urls) = self.page_ws_urls().await {
+                let candidate = urls.into_iter().rev().find(|url| {
+                    is_webcast_socket(url)
+                        && query_param(url, "room_id").as_deref() == Some(room_id)
+                });
+                if let Some(uri) = candidate {
+                    return ttl_sign_core::fetch_result_from_ws_uri(&uri).ok_or_else(|| {
+                        SignError::Decode("the player's WebSocket URI carried no parameters".into())
+                    });
+                }
+            }
+            if attempt + 1 != PAGE_WS_URI_ATTEMPTS {
+                tokio::time::sleep(PAGE_WS_URI_POLL).await;
+            }
+        }
+        Err(SignError::Timeout(
+            (PAGE_WS_URI_ATTEMPTS as u64) * PAGE_WS_URI_POLL.as_millis() as u64,
+        ))
     }
 
     /// Prevent the page from opening its own WebSockets from now on.

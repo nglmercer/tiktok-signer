@@ -404,6 +404,26 @@ impl FetchResult {
         Ok(out)
     }
 
+    /// Serialize back to the wire format.
+    ///
+    /// Needed to hand a `ProtoMessageFetchResult` to clients that expect TikTok's own bytes,
+    /// such as `tiktok-live-connector`, when the result was assembled locally rather than
+    /// returned by `/webcast/im/fetch/`.
+    pub fn encode(&self) -> Vec<u8> {
+        let mut writer = Writer::new();
+        writer
+            .str_field(fetch_field::CURSOR, &self.cursor)
+            .str_field(fetch_field::INTERNAL_EXT, &self.internal_ext);
+        for (key, value) in &self.route_params {
+            writer.map_entry(fetch_field::ROUTE_PARAMS, key, value);
+        }
+        writer
+            .u64_field(fetch_field::HEARTBEAT_DURATION, self.heartbeat_duration)
+            .bool_field(fetch_field::NEED_ACK, self.need_ack)
+            .str_field(fetch_field::PUSH_SERVER, &self.push_server);
+        writer.finish()
+    }
+
     /// Reason this response is a rejection, if applicable.
     ///
     /// A 200 with empty `push_server` means TikTok rejected silently

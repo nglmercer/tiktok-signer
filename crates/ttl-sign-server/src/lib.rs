@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -23,6 +23,8 @@ use ttl_sign_webview::Signer;
 const X_SET_TT_COOKIE: &str = "X-Set-TT-Cookie";
 /// Custom extension: the actual User-Agent so clients can reuse it on the WebSocket.
 const X_SET_TT_USER_AGENT: &str = "X-Set-TT-User-Agent";
+/// Room the signature belongs to. `tiktok-live-connector` reads this back.
+const X_ROOM_ID: &str = "X-Room-Id";
 const X_REQUEST_ID: &str = "X-Request-Id";
 
 pub struct AppState {
@@ -54,6 +56,10 @@ impl AppState {
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/webcast/fetch", get(webcast_fetch))
+        // Shape `tiktok-live-connector` (Node) asks for. It expects the same protobuf body
+        // as the Python client, but takes the room from the path and reads `x-room-id` off
+        // the response, so the two clients differ only in routing.
+        .route("/webcast/rooms/{room_id}/connect", get(webcast_connect))
         .route("/healthz", get(healthz))
         .with_state(state)
 }
@@ -69,13 +75,32 @@ pub struct FetchQuery {
     client: Option<String>,
 }
 
+/// `GET /webcast/rooms/{room_id}/connect` — the route `tiktok-live-connector` calls.
+///
+/// Same work as [`webcast_fetch`]; only the room's location differs.
+async fn webcast_connect(
+    State(state): State<Arc<AppState>>,
+    Path(room_id): Path<String>,
+    Query(query): Query<FetchQuery>,
+) -> Response {
+    sign_room(state, Some(room_id), query.client.as_deref()).await
+}
+
 async fn webcast_fetch(
     State(state): State<Arc<AppState>>,
     Query(query): Query<FetchQuery>,
 ) -> Response {
+    sign_room(state, query.room_id.clone(), query.client.as_deref()).await
+}
+
+async fn sign_room(
+    state: Arc<AppState>,
+    requested_room_id: Option<String>,
+    client: Option<&str>,
+) -> Response {
     let request_id = state.requests.fetch_add(1, Ordering::Relaxed) + 1;
 
-    let room_id = match query.room_id.as_deref() {
+    let room_id = match requested_room_id.as_deref() {
         Some(id) if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) => id.to_string(),
         Some(id) => {
             return error_response(
@@ -110,7 +135,7 @@ async fn webcast_fetch(
     };
 
     let started = Instant::now();
-    let outcome = state.signer.fetch(&room_id).await;
+    let outcome = sign_outcome(&state, &room_id).await;
     let latency_ms = started.elapsed().as_millis();
 
     match outcome {
@@ -119,7 +144,7 @@ async fn webcast_fetch(
             info!(
                 request_id,
                 room_id,
-                client = query.client.as_deref().unwrap_or("-"),
+                client = client.unwrap_or("-"),
                 latency_ms,
                 bytes = signed.protobuf.len(),
                 "signature issued"
@@ -136,6 +161,10 @@ async fn webcast_fetch(
             }
             if let Ok(v) = HeaderValue::from_str(&signed.user_agent) {
                 headers.insert(X_SET_TT_USER_AGENT, v);
+            }
+            // `tiktok-live-connector` reads the room back off the response.
+            if let Ok(v) = HeaderValue::from_str(&room_id) {
+                headers.insert(X_ROOM_ID, v);
             }
             headers.insert(X_REQUEST_ID, HeaderValue::from(request_id));
 
@@ -170,6 +199,34 @@ async fn webcast_fetch(
             error_response(status, err.to_string(), request_id, None)
         }
     }
+}
+
+/// Produce the protobuf a client needs to open the room's WebSocket.
+///
+/// Reconstructed from the player's own signed socket URI rather than fetched from
+/// `/webcast/im/fetch/`, which answers with an empty body for this signer. The response is
+/// byte-compatible either way: clients read `push_server`, `route_params`, `cursor`, and
+/// `internal_ext` and never learn where they came from.
+async fn sign_outcome(state: &Arc<AppState>, room_id: &str) -> SignOutcome {
+    let result = match state.signer.page_ws_fetch_result(room_id).await {
+        Ok(result) => result,
+        Err(error) => return SignOutcome::Transport(error),
+    };
+    if let Some(reason) = result.rejection_reason() {
+        return SignOutcome::Rejected(reason);
+    }
+
+    // The WebSocket must be opened with the same identity that signed the URI.
+    let cookies = match state.signer.cookies().await {
+        Ok(cookies) => cookies,
+        Err(error) => return SignOutcome::Transport(error),
+    };
+    SignOutcome::Ok(ttl_sign_core::SignedFetch {
+        protobuf: result.encode(),
+        cookies,
+        user_agent: state.signer.preset().user_agent(),
+        signed_url: result.push_server.clone(),
+    })
 }
 
 async fn healthz(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {

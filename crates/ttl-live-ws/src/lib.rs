@@ -146,15 +146,11 @@ impl LiveConnection {
             return Err(WsError::EmptyCookies);
         }
         let room_id = room_id_from_uri(uri)?;
-        Self::connect(
-            uri.to_string(),
-            cookies,
-            user_agent,
-            internal_ext,
-            room_id,
-            config,
-        )
-        .await
+        // A URI built by the browser can contain raw spaces (`browser_version=5.0 (X11; …)`)
+        // that `http::Uri` refuses to parse, failing before anything is sent. Encoding them
+        // does not disturb the signature.
+        let uri = ttl_sign_core::sanitize_uri(uri);
+        Self::connect(uri, cookies, user_agent, internal_ext, room_id, config).await
     }
 
     /// Like [`LiveConnection::open`], but from an already decoded [`FetchResult`]. The F1

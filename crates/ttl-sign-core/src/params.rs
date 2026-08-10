@@ -117,6 +117,38 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
+/// Decode `%XX` escapes.
+///
+/// `+` is deliberately left alone: these queries carry signatures whose bytes must survive
+/// verbatim, and TikTok percent-encodes a real space rather than using `+`.
+pub fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' if index + 2 < bytes.len() => {
+                match u8::from_str_radix(&value[index + 1..index + 3], 16) {
+                    Ok(byte) => {
+                        out.push(byte);
+                        index += 3;
+                    }
+                    // Not a valid escape: keep the `%` as an ordinary character.
+                    Err(_) => {
+                        out.push(b'%');
+                        index += 1;
+                    }
+                }
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(out).unwrap_or_else(|_| value.to_string())
+}
+
 /// Generate a 19-digit `device_id`, matching the real browser.
 pub fn random_device_id() -> String {
     let mut rng = rand::thread_rng();

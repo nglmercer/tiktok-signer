@@ -13,6 +13,7 @@
 //! - [`proto`] — transport envelope decoding and a stable subset of common live events.
 //! - [`gift_streak`] — collapses a burst of gift messages into one gift with its true total.
 //! - [`full_schema`] — generated bindings for the bundled TikTok Webcast schema snapshot.
+//! - [`ws_uri`] — rebuilds a `ProtoMessageFetchResult` from the player's signed socket URI.
 
 pub mod cookie;
 pub mod full_schema;
@@ -22,6 +23,7 @@ pub mod params;
 pub mod preset;
 pub mod proto;
 pub mod room;
+pub mod ws_uri;
 
 pub use cookie::CookieJar;
 pub use full_schema::{
@@ -39,3 +41,4 @@ pub use room::{
     room_lookup_url, webcast_refusal, Gift, LiveChannel, RoomInfo, RoomLookup, RoomOwner,
     WebcastRefusal,
 };
+pub use ws_uri::{fetch_result_from_ws_uri, sanitize_uri};
