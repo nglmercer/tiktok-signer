@@ -1,8 +1,8 @@
-//! Mensajes del puente JS↔Rust (`docs/04-spec-webview-bridge.md` §Mensajes IPC).
+//! JS↔Rust bridge messages (`docs/04-spec-webview-bridge.md` IPC messages).
 
 use serde::{Deserialize, Serialize};
 
-/// JS → Rust. `request_id` correlaciona con el `oneshot::Sender` que espera.
+/// JS → Rust. `request_id` correlates with the waiting `oneshot::Sender`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FromPage {
@@ -11,7 +11,7 @@ pub enum FromPage {
         #[serde(default)]
         sdk_version: Option<String>,
         /// Environment visible from inside the page. Query parameters are
-        /// alinean con esto en vez de adivinarlo desde Rust.
+        /// align with this instead of being guessed in Rust.
         #[serde(default)]
         env: Option<PageEnv>,
     },
@@ -26,11 +26,11 @@ pub enum FromPage {
         cookie: String,
     },
     /// The SDK sent a signed request. **It has no body**: `/webcast/im/fetch/` does not
-    /// return CORS headers, so the page cannot read the response. Rust
-    /// repite esta URL con su propio cliente HTTP (Plan B).
+    /// return CORS headers, so the page cannot read the response. Rust repeats this URL
+    /// with its own HTTP client (Plan B).
     Signed {
         request_id: u64,
-        /// URL ya firmada: incluye X-Bogus, X-Gnarly, X-Dynosaur y msToken.
+        /// Already signed URL: includes X-Bogus, X-Gnarly, X-Dynosaur, and msToken.
         url: String,
         #[serde(default)]
         cookie: String,
@@ -38,8 +38,8 @@ pub enum FromPage {
         #[serde(default)]
         page: String,
     },
-    /// Respuesta de texto: el lookup `uniqueId` → `room_id`, o el DOM renderizado.
-    /// No lleva cookies porque no interviene en ninguna firma.
+    /// Text response: `uniqueId` → `room_id` lookup or rendered DOM. It carries no cookies
+    /// because it does not participate in signing.
     Text {
         request_id: u64,
         status: u16,
@@ -50,7 +50,7 @@ pub enum FromPage {
 }
 
 /// What the page reports about itself: language, time zone, screen, and region of the
-/// cuenta. Sustituye a adivinarlo con un preset fijo.
+/// account. This replaces guessing with a fixed preset.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PageEnv {
     #[serde(default)]
@@ -75,14 +75,14 @@ pub struct ToPage {
 }
 
 impl ToPage {
-    /// La llamada que se pasa a `evaluate_script`.
+    /// Call passed to `evaluate_script`.
     pub fn to_script(&self) -> String {
-        let json = serde_json::to_string(self).expect("ToPage siempre serializa");
+        let json = serde_json::to_string(self).expect("ToPage always serializes");
         format!("window.__ttlSign({json})")
     }
 }
 
-/// Rust → JS para el paso sin firma: un GET de texto, o el DOM si `url` es `None`.
+/// Rust → JS for the unsigned step: a text GET, or the DOM when `url` is `None`.
 #[derive(Debug, Clone, Serialize)]
 pub struct ToPageText {
     pub request_id: u64,
@@ -92,7 +92,7 @@ pub struct ToPageText {
 
 impl ToPageText {
     pub fn to_script(&self) -> String {
-        let json = serde_json::to_string(self).expect("ToPageText siempre serializa");
+        let json = serde_json::to_string(self).expect("ToPageText always serializes");
         format!("window.__ttlText({json})")
     }
 }
@@ -136,7 +136,7 @@ mod tests {
                 assert_eq!(cookie, "msToken=abc");
                 assert!(url.contains("X-Gnarly"));
             }
-            other => panic!("mensaje inesperado: {other:?}"),
+            other => panic!("unexpected message: {other:?}"),
         }
     }
 
@@ -157,7 +157,7 @@ mod tests {
         assert!(matches!(msg, FromPage::Text { request_id: 3, .. }));
     }
 
-    /// Sin `url` el puente devuelve el DOM: la clave no debe aparecer siquiera.
+    /// Without `url`, the bridge returns the DOM: the key must not appear at all.
     #[test]
     fn dom_request_omits_the_url() {
         let script = ToPageText {

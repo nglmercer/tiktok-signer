@@ -55,7 +55,7 @@ impl RoomLookup {
         self.status != 4 && !self.room_id.is_empty() && self.room_id != "0"
     }
 
-    /// Parsea la respuesta de [`room_lookup_url`].
+    /// Parse the response from [`room_lookup_url`].
     pub fn from_json(raw: &str) -> Option<Self> {
         let value: serde_json::Value = serde_json::from_str(raw).ok()?;
         let user = value.get("data")?.get("user")?;

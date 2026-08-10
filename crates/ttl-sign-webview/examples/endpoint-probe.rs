@@ -1,11 +1,10 @@
-//! Compara endpoints de TikTok LIVE usando exactamente la misma ruta de firma.
+//! Compare TikTok LIVE endpoints using exactly the same signing path.
 //!
-//! Firma cada URL con el SDK de la página y la repite desde Rust, enseñando status y
-//! bytes. Sirve para separar dos cosas que se confunden con facilidad: "nuestra forma de
-//! repetir la petición está mal" y "ese endpoint ya no responde".
+//! Sign each URL with the page SDK and repeat it from Rust, showing status and bytes. This
+//! separates two commonly confused cases: our replay is wrong, or the endpoint is gone.
 //!
 //! ```sh
-//! cargo run -p ttl-sign-webview --example endpoint-probe -- usuario
+//! cargo run -p ttl-sign-webview --example endpoint-probe -- user
 //! ```
 
 use std::time::Duration;
@@ -20,7 +19,7 @@ fn main() -> ! {
         .init();
 
     let user = std::env::args().nth(1).unwrap_or_else(|| {
-        eprintln!("uso: endpoint-probe <usuario en directo>");
+        eprintln!("usage: endpoint-probe <live user>");
         std::process::exit(2);
     });
 
@@ -34,7 +33,7 @@ fn main() -> ! {
         rt.block_on(async move {
             let lookup = signer.room_lookup(&user).await.expect("lookup");
             println!(
-                "@{} room_id={} en_directo={}",
+                "@{} room_id={} live={}",
                 lookup.unique_id,
                 lookup.room_id,
                 lookup.is_live()
@@ -44,18 +43,18 @@ fn main() -> ! {
             for (label, url) in candidates(&lookup.room_id, &preset) {
                 match signer.sign_url(&url).await {
                     Ok(signed) => {
-                        let firmado = signed.url.contains("X-Gnarly=");
+                        let signed_by_sdk = signed.url.contains("X-Gnarly=");
                         match signer.replay_raw(&signed).await {
                             Ok((status, body)) => {
                                 let text = String::from_utf8_lossy(&body);
                                 let head = text.chars().take(90).collect::<String>();
                                 println!(
-                                    "{label:<22} firmado={firmado} status={status} bytes={} {}",
+                                    "{label:<22} signed={signed_by_sdk} status={status} bytes={} {}",
                                     body.len(),
                                     head.replace('\n', " ")
                                 );
-                                // ¿Trae lo que hace falta para abrir el WebSocket?
-                                let pistas: Vec<&str> = [
+                                // Does it contain what is needed to open the WebSocket?
+                                let hints: Vec<&str> = [
                                     "push_server",
                                     "route_params",
                                     "internal_ext",
@@ -65,8 +64,8 @@ fn main() -> ! {
                                 .into_iter()
                                 .filter(|k| text.contains(k))
                                 .collect();
-                                if !pistas.is_empty() {
-                                    println!("{:<22} → pistas de WebSocket: {pistas:?}", "");
+                                if !hints.is_empty() {
+                                    println!("{:<22} → WebSocket hints: {hints:?}", "");
                                     if let Some(i) = text.find("wss://") {
                                         println!(
                                             "{:<22} → {}",
@@ -76,10 +75,10 @@ fn main() -> ! {
                                     }
                                 }
                             }
-                            Err(e) => println!("{label:<22} firmado={firmado} ERROR {e}"),
+                            Err(e) => println!("{label:<22} signed={signed_by_sdk} ERROR {e}"),
                         }
                     }
-                    Err(e) => println!("{label:<22} no se pudo firmar: {e}"),
+                    Err(e) => println!("{label:<22} signing failed: {e}"),
                 }
             }
 
@@ -89,7 +88,7 @@ fn main() -> ! {
     })
 }
 
-/// Endpoints a comparar: el del camino crítico y otros que la página sí usa hoy.
+/// Endpoints to compare: the critical path and endpoints the page currently uses.
 fn candidates(room_id: &str, preset: &Preset) -> Vec<(String, String)> {
     let common = format!(
         "aid=1988&app_language={lang}&app_name=tiktok_web&browser_language={blang}\
@@ -107,7 +106,7 @@ fn candidates(room_id: &str, preset: &Preset) -> Vec<(String, String)> {
             FetchParams::new(room_id).url(preset),
         ),
         (
-            "im/fetch (mínimo)".into(),
+            "im/fetch (minimal)".into(),
             format!(
                 "https://webcast.tiktok.com/webcast/im/fetch/?{common}&room_id={room_id}\
                  &resp_content_type=protobuf&cursor=&internal_ext=&sup_ws_ds_opt=1&did_rule=3&fetch_rule=1"

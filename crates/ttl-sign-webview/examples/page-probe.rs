@@ -1,11 +1,11 @@
-//! Diagnóstico: qué hace realmente la página de un directo.
+//! Diagnostics: what a live page actually does.
 //!
-//! Carga `https://www.tiktok.com/@<usuario>/live`, espera a que el reproductor arranque
-//! y enseña qué peticiones `webcast` ha hecho la propia página. Es la forma de ver, sin
-//! adivinar, si `/webcast/im/fetch/` sale sola y con qué parámetros.
+//! Loads `https://www.tiktok.com/@<user>/live`, waits for the player, and shows which
+//! `webcast` requests the page made. This reveals whether `/webcast/im/fetch/` is sent
+//! automatically and which parameters it uses.
 //!
 //! ```sh
-//! cargo run -p ttl-sign-webview --example page-probe -- usuario
+//! cargo run -p ttl-sign-webview --example page-probe -- user
 //! ```
 
 use std::time::Duration;
@@ -19,18 +19,18 @@ fn main() -> ! {
         .init();
 
     let user = std::env::args().nth(1).unwrap_or_else(|| {
-        eprintln!("uso: page-probe <usuario> [expresión JS]");
+        eprintln!("usage: page-probe <user> [JavaScript expression]");
         std::process::exit(2);
     });
-    // Todo lo que venga después del usuario se evalúa en secuencia, con una pausa entre
-    // medias: hace falta para instalar un hook, dejar que la página trabaje y leer luego.
+    // Evaluate everything after the user in sequence, with pauses to install hooks, let the
+    // page work, and then read the result.
     let scripts: Vec<String> = std::env::args().skip(2).collect();
 
     let config = EngineConfig {
         landing_url: live_page_url(&user),
         sign_timeout: Duration::from_secs(30),
         block_page_websockets: false,
-        // Sin sesión el reproductor no arranca del todo, y entonces no hay nada que ver.
+        // Without a session the player does not fully start, leaving nothing to inspect.
         session: session::configured_path()
             .and_then(|p| session::load(&p).ok().flatten())
             .unwrap_or_default(),
@@ -40,7 +40,7 @@ fn main() -> ! {
     run(config, move |signer: Signer| {
         let rt = tokio::runtime::Runtime::new().expect("runtime de tokio");
         rt.block_on(async move {
-            // El reproductor tarda en arrancar: se le da margen antes de mirar.
+            // The player takes time to start; give it time before inspecting it.
             if !scripts.is_empty() {
                 for (i, js) in scripts.iter().enumerate() {
                     tokio::time::sleep(Duration::from_secs(if i == 0 { 6 } else { 12 })).await;
@@ -63,11 +63,11 @@ fn main() -> ! {
                     ("SDK", "typeof window.byted_acrawler"),
                     ("fetch nativo", "String(window.fetch).indexOf('[native code]') !== -1"),
                     (
-                        "peticiones webcast",
+                        "webcast requests",
                         "performance.getEntriesByType('resource').map(e=>e.name).filter(n=>n.indexOf('webcast')!==-1).slice(0,10)",
                     ),
                     (
-                        "websockets ya abiertos",
+                        "already-open WebSockets",
                         "performance.getEntriesByType('resource').map(e=>e.name).filter(n=>n.indexOf('ws')!==-1).slice(0,5)",
                     ),
                 ] {

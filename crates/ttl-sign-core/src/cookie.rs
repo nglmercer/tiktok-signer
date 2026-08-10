@@ -108,7 +108,7 @@ impl CookieJar {
 
     /// Does the jar contain the cookies required by the WebSocket?
     ///
-    /// `msToken` es el token anti-replay y `tt-target-idc` fija el datacenter; sin ellas
+    /// `msToken` is the anti-replay token and `tt-target-idc` selects the datacenter; without them
     /// the WebSocket handshake is rejected even when the signature is valid.
     pub fn has_required_for_ws(&self) -> bool {
         self.get("msToken").is_some_and(|v| !v.is_empty())

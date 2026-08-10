@@ -1,8 +1,7 @@
-//! Inicia sesión en TikTok a mano y guarda la sesión para el resto de herramientas.
+//! Log in to TikTok manually and save the session for the other tools.
 //!
-//! Abre una ventana real con la página de login, espera a que termines (con un plazo) y
-//! guarda las cookies de sesión en un fichero con permisos `0600`. A partir de ahí,
-//! `live-check` y el servidor la cogen solos.
+//! Opens a real login window, waits for completion with a deadline, and saves session
+//! cookies in a `0600` file. `live-check` and the server then load it automatically.
 //!
 //! ```sh
 //! cargo run -p ttl-sign-webview --example login
@@ -10,12 +9,12 @@
 //! cargo run -p ttl-sign-webview --example login -- --file /ruta/a/sesion
 //! ```
 //!
-//! Hace falta porque el flujo anónimo dejó de funcionar: `/webcast/im/fetch/` responde
-//! 200 con cuerpo vacío y `/webcast/room/enter/` dice `User doesn't login`
+//! Login is required because the anonymous flow no longer works: `/webcast/im/fetch/`
+//! returns 200 with an empty body and `/webcast/room/enter/` says `User doesn't login`
 //! (`docs/06-risks-and-ops.md` §Decisiones abiertas).
 //!
-//! **Lo que se guarda es la cuenta.** Con esa cookie, quien la tenga es tú para TikTok.
-//! Vive fuera del repositorio, solo la lee tu usuario, y se borra con `--logout`.
+//! **The saved data represents the account.** Anyone holding the cookie is you to TikTok.
+//! It lives outside the repository, is readable only by your user, and is deleted with `--logout`.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -31,31 +30,31 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut timeout = Duration::from_secs(300);
     let mut path = session::configured_path()
-        .ok_or("no sé dónde guardar la sesión: define TTL_SESSION_FILE")?;
+        .ok_or("cannot determine where to save session: set TTL_SESSION_FILE")?;
     let mut logout = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--timeout" => {
-                let value = args.next().ok_or("--timeout necesita segundos")?;
+                let value = args.next().ok_or("--timeout requires seconds")?;
                 let secs: u64 = value
                     .parse()
-                    .map_err(|_| format!("plazo inválido: {value}"))?;
+                    .map_err(|_| format!("invalid timeout: {value}"))?;
                 timeout = Duration::from_secs(secs);
             }
-            "--file" => path = PathBuf::from(args.next().ok_or("--file necesita una ruta")?),
+            "--file" => path = PathBuf::from(args.next().ok_or("--file requires a path")?),
             "--logout" => logout = true,
             "--help" | "-h" => {
                 println!(
-                    "uso: login [--timeout <segundos>] [--file <ruta>] [--logout]\n\
-                     \n  --timeout  cuánto se espera a que inicies sesión (por defecto 300)\
-                     \n  --file     dónde se guarda (por defecto $XDG_CONFIG_HOME/ttl-signer/session)\
-                     \n  --logout   borra la sesión guardada y sale"
+                    "usage: login [--timeout <seconds>] [--file <path>] [--logout]\n\
+                     \n  --timeout  login deadline in seconds (default 300)\
+                     \n  --file     save path (default $XDG_CONFIG_HOME/ttl-signer/session)\
+                     \n  --logout   delete saved session and exit"
                 );
                 std::process::exit(0);
             }
-            other => return Err(format!("argumento desconocido: {other}")),
+            other => return Err(format!("unknown argument: {other}")),
         }
     }
     Ok(Args {
@@ -83,50 +82,50 @@ fn main() -> ! {
 
     if args.logout {
         match std::fs::remove_file(&args.path) {
-            Ok(()) => println!("sesión borrada: {}", args.path.display()),
+            Ok(()) => println!("session deleted: {}", args.path.display()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                println!("no había sesión guardada en {}", args.path.display())
+                println!("no saved session at {}", args.path.display())
             }
             Err(e) => {
-                eprintln!("no se pudo borrar {}: {e}", args.path.display());
+                eprintln!("could not delete {}: {e}", args.path.display());
                 std::process::exit(1);
             }
         }
         std::process::exit(0);
     }
 
-    // Si ya hay sesión, se avisa antes de abrir nada: repetir el login por costumbre es
-    // exponer la cuenta sin motivo.
+    // If a session exists, warn before opening anything: repeating login unnecessarily is
+    // exposing the account without a reason.
     if let Ok(Some(jar)) = session::load(&args.path) {
         if session::is_logged_in(&jar) {
             println!(
-                "Ya hay una sesión guardada en {} ({}).\n\
-                 Para reemplazarla, inicia sesión igualmente en la ventana que se abre;\n\
-                 para borrarla, usa --logout.\n",
+                "A saved session already exists at {} ({}).\n\
+                 To replace it, log in through the window that opens;\n\
+                 to delete it, use --logout.\n",
                 args.path.display(),
-                jar // Display redacta los valores.
+                jar // Display redacts values.
             );
         }
     }
 
     println!(
-        "Se abrirá una ventana con la página de login de TikTok.\n\
-         Tienes {} s para iniciar sesión; la ventana se cierra sola al detectarlo.\n",
+        "A TikTok login window will open.\n\
+         You have {} s to log in; the window closes when login is detected.\n",
         args.timeout.as_secs()
     );
 
     run(EngineConfig::for_login(), move |signer: Signer| {
-        let rt = tokio::runtime::Runtime::new().expect("runtime de tokio");
+        let rt = tokio::runtime::Runtime::new().expect("Tokio runtime");
         let code = rt.block_on(async move {
-            // Un aviso cada 30 s: suficiente para saber que sigue vivo, poco suficiente
-            // para llenar la terminal.
-            let mut proximo_aviso = args.timeout.as_secs();
+            // One notice every 30 s: enough to show that it is alive without filling the
+            // terminal.
+            let mut next_notice = args.timeout.as_secs();
             let resultado = signer
                 .wait_for_login(args.timeout, |restante| {
-                    let quedan = restante.as_secs();
-                    if quedan <= proximo_aviso {
-                        println!("  esperando… {quedan} s restantes");
-                        proximo_aviso = quedan.saturating_sub(30);
+                    let remaining = restante.as_secs();
+                    if remaining <= next_notice {
+                        println!("  waiting… {remaining} s remaining");
+                        next_notice = remaining.saturating_sub(30);
                     }
                 })
                 .await;
@@ -134,26 +133,26 @@ fn main() -> ! {
             let code = match resultado {
                 Ok(jar) => match session::save(&args.path, &jar) {
                     Ok(()) => {
-                        println!("\nSesión iniciada y guardada en {}", args.path.display());
-                        println!("cookies: {jar}"); // redactadas
+                        println!("\nLogged in and saved session to {}", args.path.display());
+                        println!("cookies: {jar}"); // redacted
                         println!(
-                            "\nYa puedes usarla:\n\
+                            "\nYou can now use it:\n\
                              \n    cargo run -p ttl-sign-webview --example live-check\
                              \n    cargo run -p ttl-sign-server\n\
-                             \nPara borrarla: cargo run -p ttl-sign-webview --example login -- --logout"
+                             \nTo delete it: cargo run -p ttl-sign-webview --example login -- --logout"
                         );
                         0
                     }
                     Err(e) => {
-                        eprintln!("\nse inició sesión pero no se pudo guardar: {e}");
+                        eprintln!("\nlogin succeeded but session could not be saved: {e}");
                         1
                     }
                 },
                 Err(e) => {
-                    eprintln!("\nno se detectó ninguna sesión: {e}");
+                    eprintln!("\nno session detected: {e}");
                     eprintln!(
-                        "Si necesitas más tiempo: --timeout <segundos>. \
-                         Nada se ha guardado."
+                        "If you need more time: --timeout <seconds>. \
+                         Nothing was saved."
                     );
                     1
                 }

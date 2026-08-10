@@ -1,15 +1,14 @@
-//! Diagnóstico del WebSocket: enseña **todo** lo que entra y sale por el socket.
+//! WebSocket diagnostics: show **everything** entering and leaving the socket.
 //!
-//! `live-check` filtra los frames de transporte y solo cuenta los `msg`; cuando no llega
-//! nada, eso no distingue "el servidor calla" de "nos está hablando y lo descartamos".
-//! Aquí no se filtra nada.
+//! `live-check` filters transport frames and only counts `msg`; when no frame arrives
+//! no data does not distinguish a silent server from discarded messages. Nothing is filtered.
 //!
-//! Prueba además el guion que espera el servidor: entrada a la sala, silencio, luego un
-//! heartbeat de aplicación (`hb`) y un ping de protocolo (el handshake anuncia
+//! Also test the server's expected sequence: room entry, silence, then an application
+//! heartbeat (`hb`) and a protocol ping (the handshake announces
 //! `ping-interval`).
 //!
 //! ```sh
-//! cargo run -p ttl-sign-webview --example ws-probe -- <usuario en directo>
+//! cargo run -p ttl-sign-webview --example ws-probe -- <live-user>
 //! ```
 
 use std::time::{Duration, Instant};
@@ -29,7 +28,7 @@ fn main() -> ! {
         .init();
 
     let user = std::env::args().nth(1).unwrap_or_else(|| {
-        eprintln!("uso: ws-probe <usuario en directo>");
+        eprintln!("usage: ws-probe <live-user>");
         std::process::exit(2);
     });
 
@@ -37,7 +36,7 @@ fn main() -> ! {
         .and_then(|p| session::load(&p).ok().flatten())
         .unwrap_or_default();
     if !session::is_logged_in(&session) {
-        eprintln!("hace falta sesión: cargo run -p ttl-sign-webview --example login");
+        eprintln!("session required: cargo run -p ttl-sign-webview --example login");
         std::process::exit(1);
     }
 
@@ -54,7 +53,7 @@ fn main() -> ! {
             let signed = match signer.fetch(&lookup.room_id).await {
                 SignOutcome::Ok(s) => s,
                 other => {
-                    eprintln!("no se pudo firmar: {other:?}");
+                    eprintln!("signing failed: {other:?}");
                     std::process::exit(1);
                 }
             };
@@ -99,7 +98,7 @@ fn main() -> ! {
             );
             ws.send(Message::Binary(enter_room.encode()))
                 .await
-                .expect("entrada a la sala");
+                .expect("room entry");
 
             let t0 = Instant::now();
             let mut deadline = tokio::time::interval(Duration::from_secs(5));
@@ -113,7 +112,7 @@ fn main() -> ! {
                             1 => println!("[{:>5.1}s] escuchando en silencio…", t0.elapsed().as_secs_f32()),
                             2 => {
                                 let hb = PushFrame::heartbeat(room_id, 1);
-                                println!("[{:>5.1}s] → hb de aplicación ({:02x?})", t0.elapsed().as_secs_f32(), hb.encode());
+                                println!("[{:>5.1}s] → application heartbeat ({:02x?})", t0.elapsed().as_secs_f32(), hb.encode());
                                 ws.send(Message::Binary(hb.encode())).await.ok();
                             }
                             3 => {
@@ -130,7 +129,7 @@ fn main() -> ! {
                     entrada = ws.next() => {
                         let t = t0.elapsed().as_secs_f32();
                         match entrada {
-                            None => { println!("[{t:>5.1}s] socket cerrado por el otro lado"); break; }
+                            None => { println!("[{t:>5.1}s] socket closed by peer"); break; }
                             Some(Err(e)) => { println!("[{t:>5.1}s] error: {e}"); break; }
                             Some(Ok(Message::Binary(bytes))) => {
                                 match PushFrame::decode(&bytes) {

@@ -1,15 +1,15 @@
-//! Vuelca la respuesta de `/webcast/im/fetch/` y su estructura protobuf.
+//! Dump the `/webcast/im/fetch/` response and its protobuf structure.
 //!
-//! Sirve para lo que `docs/02-roadmap.md` pide en F0/F1: tener la respuesta real delante
-//! y **confirmar los números de campo** que `ttl-sign-core::proto` da por buenos, en vez
-//! de fiarse del esquema de los clientes de referencia.
+//! This supports the F0/F1 workflow in `docs/02-roadmap.md`: keep the real response visible
+//! and **confirm the field numbers** accepted by `ttl-sign-core::proto`, instead of
+//! instead of relying on reference-client schemas.
 //!
 //! ```sh
-//! cargo run -p ttl-sign-webview --example fetch-dump -- <usuario en directo>
-//! cargo run -p ttl-sign-webview --example fetch-dump -- <usuario> fixtures/f0/im_fetch.pb
+//! cargo run -p ttl-sign-webview --example fetch-dump -- <live-user>
+//! cargo run -p ttl-sign-webview --example fetch-dump -- <user> fixtures/f0/im_fetch.pb
 //! ```
 //!
-//! El `.pb` contiene datos de la sesión: `fixtures/` está en `.gitignore` por eso.
+//! The `.pb` contains session data; `fixtures/` is ignored by git for that reason.
 
 use std::time::Duration;
 
@@ -24,7 +24,7 @@ fn main() -> ! {
         .init();
 
     let user = std::env::args().nth(1).unwrap_or_else(|| {
-        eprintln!("uso: fetch-dump <usuario en directo> [fichero.pb]");
+        eprintln!("usage: fetch-dump <live-user> [file.pb]");
         std::process::exit(2);
     });
     let out_path = std::env::args().nth(2);
@@ -33,7 +33,7 @@ fn main() -> ! {
         .and_then(|p| session::load(&p).ok().flatten())
         .unwrap_or_default();
     if !session::is_logged_in(&session) {
-        eprintln!("hace falta sesión: cargo run -p ttl-sign-webview --example login");
+        eprintln!("session required: cargo run -p ttl-sign-webview --example login");
         std::process::exit(1);
     }
 
@@ -50,7 +50,7 @@ fn main() -> ! {
             let lookup = signer.room_lookup(&user).await.expect("lookup");
             println!("@{} room_id={}", lookup.unique_id, lookup.room_id);
 
-            // Comparar qué push_server da cada variante de sup_ws_ds_opt.
+            // Compare which push_server each sup_ws_ds_opt variant returns.
             for opt in [1u8, 0] {
                 let mut params = ttl_sign_core::FetchParams::new(&lookup.room_id);
                 params.sup_ws_ds_opt = opt;
@@ -72,27 +72,27 @@ fn main() -> ! {
             let signed = match signer.fetch(&lookup.room_id).await {
                 SignOutcome::Ok(signed) => signed,
                 other => {
-                    eprintln!("no se pudo firmar: {other:?}");
+                    eprintln!("signing failed: {other:?}");
                     std::process::exit(1);
                 }
             };
             println!("{} bytes de protobuf\n", signed.protobuf.len());
 
             if let Some(path) = &out_path {
-                std::fs::write(path, &signed.protobuf).expect("no se pudo escribir");
+                std::fs::write(path, &signed.protobuf).expect("could not write protobuf");
                 println!("guardado en {path}\n");
             }
 
             // --- Estructura cruda: campo por campo, sin interpretar ---
-            println!("campos del nivel superior:");
+            println!("top-level fields:");
             let mut messages = Vec::new();
             for (number, kind, size) in describe(&signed.protobuf).expect("protobuf ilegible") {
                 let nota = match number {
-                    1 => " (¿messages?)",
-                    2 => " (¿cursor?)",
-                    5 => " (¿internal_ext?)",
-                    7 => " (¿route_params?)",
-                    10 => " (¿push_server?)",
+                    1 => " (messages?)",
+                    2 => " (cursor?)",
+                    5 => " (internal_ext?)",
+                    7 => " (route_params?)",
+                    10 => " (push_server?)",
                     _ => "",
                 };
                 println!("  campo {number:<5} {kind:<8} {size:>7} bytes{nota}");
@@ -119,7 +119,7 @@ fn main() -> ! {
             }
 
             // --- Los mensajes que ya vienen en esta respuesta ---
-            println!("\nmensajes embebidos en la respuesta:");
+            println!("\nmessages embedded in the response:");
             let mut reader = Reader::new(&signed.protobuf);
             let mut vistos = 0usize;
             while let Some(Ok((number, wire))) = reader.next_field() {

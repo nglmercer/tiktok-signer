@@ -1,6 +1,6 @@
 //! Query-string construction.
 //!
-//! Dos consumidores:
+//! Two consumers:
 //!
 //! - [`FetchParams`] → query for `https://webcast.tiktok.com/webcast/im/fetch/`; it is the
 //!   only signed part.
@@ -60,7 +60,7 @@ impl Query {
         self.0.is_empty()
     }
 
-    /// Serializa a `k=v&k=v`, percent-encoding los valores.
+    /// Serialize as `k=v&k=v`, percent-encoding values.
     pub fn encode(&self) -> String {
         let mut out = String::new();
         for (k, v) in &self.0 {
@@ -74,7 +74,7 @@ impl Query {
         out
     }
 
-    /// Parsea `k=v&k=v`. No decodifica: se usa sobre queries ya normalizadas en tests.
+    /// Parse `k=v&k=v`. No decoding is performed: this is used on normalized test queries.
     pub fn parse(raw: &str) -> Self {
         let mut q = Query::new();
         for pair in raw.trim_start_matches('?').split('&') {
@@ -114,15 +114,15 @@ pub fn random_device_id() -> String {
     s
 }
 
-/// `last_rtt` plausible, en el rango que usa el cliente de referencia.
+/// Keep `last_rtt` plausible, within the range used by the reference client.
 pub fn random_last_rtt() -> u32 {
     rand::thread_rng().gen_range(100..=200)
 }
 
-/// Query de `/webcast/im/fetch/`.
+/// Query for `/webcast/im/fetch/`.
 ///
 /// `X-Bogus` / `X-Gnarly` / `msToken` are **not** added here; `webmssdk.js` adds them.
-/// dentro del webview al interceptar el `fetch` (`docs/01-architecture.md` §D2).
+/// inside the WebView when intercepting `fetch` (`docs/01-architecture.md` §D2).
 #[derive(Debug, Clone)]
 pub struct FetchParams {
     pub room_id: String,
@@ -133,10 +133,10 @@ pub struct FetchParams {
     pub contact_us: String,
     /// `sup_ws_ds_opt`: tells TikTok which WebSocket type we want.
     ///
-    /// Con `1` la respuesta trae un `push_server` de tipo
+    /// With `1`, the response includes a `push_server` of the type
     /// `ws_proxy/ws_reuse_supplement/`; the pattern documented by
     /// `docs/00-research.md` §1 es `webcast<N>-ws-web-<idc>`. Configurable para poder
-    /// comparar los dos contra una sala real.
+    /// so both variants can be compared against a real room.
     pub sup_ws_ds_opt: u8,
 }
 
@@ -152,7 +152,7 @@ impl FetchParams {
         }
     }
 
-    /// Construye la query completa a partir del preset.
+    /// Build the complete query from the preset.
     pub fn build(&self, preset: &Preset) -> Query {
         let d = &preset.device;
         let l = &preset.location;
@@ -199,7 +199,7 @@ impl FetchParams {
         q
     }
 
-    /// URL absoluta lista para pasar al `fetch` parcheado del webview.
+    /// Absolute URL ready for the WebView's patched `fetch`.
     pub fn url(&self, preset: &Preset) -> String {
         format!("{}?{}", FETCH_ENDPOINT, self.build(preset).encode())
     }
@@ -208,7 +208,7 @@ impl FetchParams {
 /// Endpoint to sign. The only endpoint on the critical path.
 pub const FETCH_ENDPOINT: &str = "https://webcast.tiktok.com/webcast/im/fetch/";
 
-/// Query del WebSocket: `route_params` firmados + nuestros params + el `version_code`
+/// WebSocket query: signed `route_params` + our parameters + the trailing `version_code`
 /// duplicado del final (`docs/05-spec-websocket-client.md`).
 #[derive(Debug, Clone)]
 pub struct WsParams {
@@ -216,14 +216,14 @@ pub struct WsParams {
     /// `gzip`, or empty to request no compression.
     pub compress: String,
     pub last_rtt: u32,
-    /// Cursor de la respuesta de `/webcast/im/fetch/`.
+    /// Cursor from the `/webcast/im/fetch/` response.
     ///
-    /// Va en la query del WebSocket, no en los `route_params`: comprobado contra una
-    /// respuesta real, donde `route_params` solo trae `wrss` e `imprp`. Sin cursor el
+    /// It belongs in the WebSocket query, not in `route_params`: verified against a
+    /// real response, where `route_params` only contains `wrss` and `imprp`. Without the cursor,
     /// handshake is accepted but **no frames arrive**, the hardest failure
     /// desconcertante de todo el flujo.
     pub cursor: String,
-    /// `internal_ext` de la misma respuesta. Mismo razonamiento.
+    /// `internal_ext` from the same response follows the same reasoning.
     pub internal_ext: String,
 }
 
@@ -241,7 +241,7 @@ impl WsParams {
         }
     }
 
-    /// Los params propios del cliente, sin los `route_params`.
+    /// Client-owned parameters, without `route_params`.
     pub fn client_params(&self, preset: &Preset) -> Query {
         let d = &preset.device;
         let l = &preset.location;
@@ -350,7 +350,7 @@ mod tests {
         assert_eq!(q.get("room_id"), Some("7300000000000000000"));
     }
 
-    /// Coherencia UA ↔ query: la causa nº1 de rechazo.
+    /// UA/query consistency: the number-one cause of rejection.
     #[test]
     fn fetch_query_browser_params_match_the_user_agent() {
         for p in Preset::all() {

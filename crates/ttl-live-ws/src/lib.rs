@@ -66,7 +66,7 @@ pub enum WsError {
     Closed(String),
 }
 
-/// Un frame `msg` ya listo para parsear.
+/// A `msg` frame ready to parse.
 #[derive(Debug, Clone)]
 pub struct LiveMessage {
     pub log_id: u64,
@@ -241,8 +241,8 @@ impl LiveConnection {
         stream
             .send(WsMessage::Binary(enter_room))
             .await
-            .map_err(|e| WsError::Closed(format!("entrada a la sala fallida: {e}")))?;
-        debug!(room_id, "entrada a la sala enviada");
+            .map_err(|e| WsError::Closed(format!("room entry failed: {e}")))?;
+        debug!(room_id, "room entry sent");
 
         let handshake_options = response
             .headers()

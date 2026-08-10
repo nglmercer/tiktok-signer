@@ -1,25 +1,25 @@
-//! Verificación contra un canal real, de principio a fin.
+//! End-to-end verification against a real channel.
 //!
-//! Recorre el flujo entero de `docs/00-research.md` §1 y dice en qué paso se rompe:
+//! Runs the complete flow and reports the step at which it fails:
 //!
 //! ```text
-//! 1. descubrir quién está en directo   (DOM renderizado de /live, sin firma)
-//! 2. unique_id → room_id + estado      (lookup JSON, sin firma)
-//! 3. /webcast/im/fetch/                 ← el único punto firmado
-//! 4. abrir el WebSocket y recibir frames
+//! 1. discover who is live (rendered /live DOM, unsigned)
+//! 2. unique_id → room_id + status (unsigned JSON lookup)
+//! 3. /webcast/im/fetch/ ← the only signed endpoint
+//! 4. open the WebSocket and receive frames
 //! ```
 //!
-//! Es el criterio de aceptación de F2 (y, si llega a los frames, también el de F4).
+//! This is the F2 acceptance criterion (and F4 if frames arrive).
 //!
 //! ```sh
-//! # descubre el canal solo
+//! # discover a channel automatically
 //! cargo run -p ttl-sign-webview --example live-check
 //!
-//! # o fuerza uno concreto, que es más fiable si sabes que está emitiendo
-//! cargo run -p ttl-sign-webview --example live-check -- usuario
+//! # or force a specific channel when you know it is live
+//! cargo run -p ttl-sign-webview --example live-check -- user
 //! ```
 //!
-//! Necesita display (X11/Wayland). Sin él: `xvfb-run -a cargo run …`.
+//! Requires a display (X11/Wayland). Without one: `xvfb-run -a cargo run …`.
 
 use std::time::{Duration, Instant};
 
@@ -37,17 +37,17 @@ fn main() -> ! {
         .init();
 
     let requested_user = std::env::args().nth(1);
-    // Hoy el flujo no funciona en anónimo: ver el paso 3.
-    let (config, origen) = configurar_sesion();
-    let autenticado = config.is_authenticated();
-    println!("sesión: {origen}");
+    // The flow currently requires authentication; see step 3.
+    let (config, session_source) = configure_session();
+    let authenticated = config.is_authenticated();
+    println!("session: {session_source}");
 
     run(config, move |signer| {
-        let rt = tokio::runtime::Runtime::new().expect("runtime de tokio");
-        let code = match rt.block_on(check(signer.clone(), requested_user, autenticado)) {
+        let rt = tokio::runtime::Runtime::new().expect("Tokio runtime");
+        let code = match rt.block_on(check(signer.clone(), requested_user, authenticated)) {
             Ok(()) => 0,
             Err(e) => {
-                eprintln!("\nFALLA: {e}");
+                eprintln!("\nFAILED: {e}");
                 1
             }
         };
@@ -56,49 +56,49 @@ fn main() -> ! {
     })
 }
 
-/// `TTL_SESSION_ID` manda; si no, la sesión que dejó el ejemplo `login`.
-fn configurar_sesion() -> (EngineConfig, String) {
+/// `TTL_SESSION_ID` takes precedence; otherwise use the session saved by `login`.
+fn configure_session() -> (EngineConfig, String) {
     if let Ok(id) = std::env::var("TTL_SESSION_ID") {
         if !id.is_empty() {
             return (
                 EngineConfig::default().with_session_id(id),
-                "autenticada (TTL_SESSION_ID)".into(),
+                "authenticated (TTL_SESSION_ID)".into(),
             );
         }
     }
     if let Some(path) = session::configured_path() {
         if let Ok(Some(jar)) = session::load(&path) {
             if session::is_logged_in(&jar) {
-                let origen = format!("autenticada ({})", path.display());
+                let source = format!("authenticated ({})", path.display());
                 return (
                     EngineConfig {
                         session: jar,
                         ..EngineConfig::default()
                     },
-                    origen,
+                    source,
                 );
             }
         }
     }
     (
         EngineConfig::default(),
-        "anónima — inicia sesión con: cargo run -p ttl-sign-webview --example login".into(),
+        "anonymous — log in with: cargo run -p ttl-sign-webview --example login".into(),
     )
 }
 
 async fn check(
     signer: Signer,
     requested_user: Option<String>,
-    autenticado: bool,
+    authenticated: bool,
 ) -> Result<(), String> {
-    // --- 1. ¿Quién está en directo? --------------------------------------------------
+    // --- 1. Who is live? -------------------------------------------------------------
     let user = match requested_user {
         Some(user) => {
-            println!("[1/4] canal indicado a mano: @{user}");
+            println!("[1/4] manually selected channel: @{user}");
             user
         }
         None => {
-            println!("[1/4] esperando a que /live pinte los canales…");
+            println!("[1/4] waiting for /live to render channels…");
             let channels = poll_channels(&signer).await?;
             for channel in channels.iter().take(10) {
                 println!(
@@ -113,88 +113,84 @@ async fn check(
             }
             let first = channels
                 .first()
-                .ok_or("la página /live no listó ningún canal (¿cargó del todo?)")?;
-            println!("      elegido: @{}", first.unique_id);
+                .ok_or("/live listed no channels (did it finish loading?)")?;
+            println!("      selected: @{}", first.unique_id);
             first.unique_id.clone()
         }
     };
 
     // --- 2. unique_id → room_id ------------------------------------------------------
-    println!("\n[2/4] resolviendo @{user} → room_id…");
+    println!("\n[2/4] resolving @{user} → room_id…");
     let lookup = signer
         .room_lookup(&user)
         .await
-        .map_err(|e| format!("el lookup falló: {e}"))?;
+        .map_err(|e| format!("lookup failed: {e}"))?;
     println!(
-        "      room_id={} estado={} título={:?}",
+        "      room_id={} status={} title={:?}",
         lookup.room_id, lookup.status, lookup.title
     );
     if !lookup.is_live() {
         return Err(format!(
-            "@{user} no está emitiendo (status={}). Firmar contra una sala apagada da un \
-             protobuf sin push_server, que parece un rechazo: prueba con otro canal.",
+            "@{user} is not live (status={}). Signing an offline room returns a protobuf \
+             without push_server and looks like a rejection; try another channel.",
             lookup.status
         ));
     }
 
-    // --- 3. La firma -----------------------------------------------------------------
-    // Antes hay que estar *en* la página del directo: es desde donde la hace el
-    // reproductor real, y desde la portada /live la petición ni sale.
+    // --- 3. Signing ------------------------------------------------------------------
+    // We must first be *on* the live page: this is where the real player sends the request;
+    // from the /live landing page it does not leave.
     let room_page = ttl_sign_core::room::live_page_url(&user);
-    println!("\n[3/4] navegando a {room_page} …");
+    println!("\n[3/4] navigating to {room_page} …");
     signer
         .navigate(&room_page)
         .await
-        .map_err(|e| format!("no se pudo cargar la página del directo: {e}"))?;
+        .map_err(|e| format!("could not load live page: {e}"))?;
 
-    println!("      firmando /webcast/im/fetch/ …");
+    println!("      signing /webcast/im/fetch/ …");
     let signed_at = Instant::now();
     let signed = match signer.fetch(&lookup.room_id).await {
         SignOutcome::Ok(signed) => signed,
-        SignOutcome::Rejected(reason) if !autenticado => {
+        SignOutcome::Rejected(reason) if !authenticated => {
             return Err(format!(
-                "TikTok rechazó la firma: {reason}.\n\n\
-                 La sesión es anónima, y eso hoy no basta: `/webcast/room/enter/` responde \
-                 \"User doesn\'t login\" y `/webcast/im/fetch/` responde 200 con cuerpo vacío, \
-                 que es el mismo rechazo dicho en voz baja. Por la misma ruta de firma, \
-                 `room/info` y `room/check_alive` sí responden, así que ni la firma ni la \
-                 repetición son el problema. Compruébalo con:\n\
-                 \n    cargo run -p ttl-sign-webview --example endpoint-probe -- <usuario>\n\
-                 \nPara probar autenticado, exporta la cookie `sessionid` de tu cuenta:\n\
+                "TikTok rejected the signature: {reason}.\n\n\
+                 The session is anonymous, which is currently insufficient: `/webcast/room/enter/` returns \
+                 \"User doesn\'t login\" and `/webcast/im/fetch/` returns 200 with an empty body, \
+                 which is the same silent rejection. The same signing path returns \
+                 `room/info` and `room/check_alive`, so neither signing nor replay is the problem. Test with:\n\
+                 \n    cargo run -p ttl-sign-webview --example endpoint-probe -- <user>\n\
+                 \nTo test authenticated, export your account's `sessionid` cookie:\n\
                  \n    TTL_SESSION_ID=<sessionid> cargo run -p ttl-sign-webview --example live-check\n"
             ))
         }
         SignOutcome::Rejected(reason) => {
             return Err(format!(
-                "TikTok rechazó la firma pese a la sesión autenticada: {reason}.\n\n\
-                 Si esto funcionaba hace un rato y ahora no, lo más probable es el límite \
-                 de tasa: firmar es interactuar con un antibot, y muchas firmas seguidas \
-                 desde la misma IP y la misma sesión lo despiertan \
-                 (docs/06-risks-and-ops.md §5). Espera un rato antes de insistir; \
-                 reintentar en bucle lo empeora.\n\n\
-                 Si nunca ha funcionado, mira la coherencia UA↔params (§1) y comprueba \
-                 con: cargo run -p ttl-sign-webview --example endpoint-probe -- <usuario>"
+                "TikTok rejected the signature despite authentication: {reason}.\n\n\
+                 If this worked recently and no longer does, rate limiting is likely: signing \
+                 interacts with anti-bot controls, and repeated signatures from one IP/session \
+                 can trigger them. Wait before trying again; looping makes it worse.\n\n\
+                 If it never worked, inspect UA↔params consistency and run: \
+                 cargo run -p ttl-sign-webview --example endpoint-probe -- <user>"
             ))
         }
-        SignOutcome::Transport(e) => return Err(format!("fallo de transporte: {e}")),
+        SignOutcome::Transport(e) => return Err(format!("transport failure: {e}")),
     };
     println!(
-        "      {} bytes en {:?}, {} cookies",
+        "      {} bytes in {:?}, {} cookies",
         signed.protobuf.len(),
         signed_at.elapsed(),
         signed.cookies.len()
     );
-    println!("      cookies: {}", signed.cookies); // redactadas
+    println!("      cookies: {}", signed.cookies); // redacted
 
     let result = FetchResult::decode(&signed.protobuf)
-        .map_err(|e| format!("el protobuf no se pudo decodificar: {e}. Confirma los números de campo en ttl-sign-core/src/proto.rs contra el fixture de F0"))?;
+        .map_err(|e| format!("could not decode protobuf: {e}. Confirm field numbers in ttl-sign-core/src/proto.rs against the F0 fixture"))?;
     println!("      push_server={}", result.push_server);
-    println!("      route_params={} entradas", result.route_params.len());
+    println!("      route_params={} entries", result.route_params.len());
 
-    // --- 4. El WebSocket -------------------------------------------------------------
-    // La URI se construye aquí y se firma en la página: el WS lleva firma propia, al
-    // contrario de lo que decía docs/00 §1.
-    println!("\n[4/4] firmando y conectando el WebSocket…");
+    // --- 4. WebSocket ----------------------------------------------------------------
+    // The URI is built here and signed in the page: the WebSocket has its own signature.
+    println!("\n[4/4] signing and connecting WebSocket…");
     let config = ConnectConfig::default();
     let mut params = WsParams::new(&lookup.room_id);
     params.compress = config.compress.clone();
@@ -206,9 +202,9 @@ async fn check(
     let uri = signer
         .sign_ws_uri(&uri)
         .await
-        .map_err(|e| format!("no se pudo firmar la URI del WebSocket: {e}"))?;
+        .map_err(|e| format!("could not sign WebSocket URI: {e}"))?;
     println!(
-        "      firmada: {}",
+        "      signed: {}",
         uri.split('?').next().unwrap_or_default()
     );
 
@@ -220,12 +216,9 @@ async fn check(
         &config,
     )
     .await
-    .map_err(|e| format!("no se pudo abrir el WebSocket: {e}"))?;
+    .map_err(|e| format!("could not open WebSocket: {e}"))?;
 
-    println!(
-        "      conectado {:?} después de firmar",
-        signed_at.elapsed()
-    );
+    println!("      connected {:?} after signing", signed_at.elapsed());
 
     let deadline = tokio::time::sleep(Duration::from_secs(30));
     tokio::pin!(deadline);
@@ -242,7 +235,7 @@ async fn check(
                         break;
                     }
                 }
-                Some(Err(e)) => return Err(format!("el WebSocket falló: {e}")),
+                Some(Err(e)) => return Err(format!("WebSocket failed: {e}")),
                 None => break,
             }
         }
@@ -250,23 +243,23 @@ async fn check(
     connection.close().await;
 
     if frames == 0 {
-        return Err("conectó pero no llegó ningún frame `msg` en 30 s".into());
+        return Err("connected but no `msg` frame arrived in 30 s".into());
     }
-    println!("\nOK: {frames} frames de @{user} con una firma propia. F2 y F4 pasan.");
+    println!("\nOK: {frames} frames from @{user} with an independent signature. F2 and F4 passed.");
     Ok(())
 }
 
-/// La página tarda en pintar los canales: se sondea el DOM en vez de leerlo una vez.
+/// The page takes time to render channels, so poll the DOM instead of reading it once.
 async fn poll_channels(signer: &Signer) -> Result<Vec<ttl_sign_core::LiveChannel>, String> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         match signer.live_channels().await {
             Ok(channels) if !channels.is_empty() => return Ok(channels),
             Ok(_) => {}
-            Err(e) => return Err(format!("no se pudo leer el DOM: {e}")),
+            Err(e) => return Err(format!("could not read DOM: {e}")),
         }
         if Instant::now() >= deadline {
-            return Err("30 s y /live seguía sin listar canales".into());
+            return Err("/live still listed no channels after 30 s".into());
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }

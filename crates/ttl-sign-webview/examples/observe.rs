@@ -1,15 +1,13 @@
-//! Mira lo que hace el reproductor real, sin pedirle nada a la página.
+//! Observe what the real player does without asking the page to perform extra work.
 //!
-//! Carga `https://www.tiktok.com/@<usuario>/live` con la sesión guardada y se limita a
-//! grabar: qué peticiones `webcast` salen, si su respuesta se puede leer desde la página,
-//! y qué URI de WebSocket abre el reproductor. Es la verdad de referencia contra la que
-//! comparar lo que construimos nosotros.
+//! Loads `https://www.tiktok.com/@<user>/live` with the saved session and records which
+//! `webcast` requests leave, whether their responses are readable, and which WebSocket URI
+//! the player opens. This is the reference for comparing our implementation.
 //!
-//! No firma nada por su cuenta: una sola carga de página, que es lo que haría cualquiera
-//! viendo un directo.
+//! It does not sign anything itself: it only loads the page, as a viewer would.
 //!
 //! ```sh
-//! cargo run -p ttl-sign-webview --example observe -- <usuario en directo>
+//! cargo run -p ttl-sign-webview --example observe -- <live user>
 //! ```
 
 use std::time::Duration;
@@ -24,7 +22,7 @@ fn main() -> ! {
         .init();
 
     let user = std::env::args().nth(1).unwrap_or_else(|| {
-        eprintln!("uso: observe <usuario en directo>");
+        eprintln!("usage: observe <live user>");
         std::process::exit(2);
     });
 
@@ -32,15 +30,15 @@ fn main() -> ! {
         .and_then(|p| session::load(&p).ok().flatten())
         .unwrap_or_default();
     if !session::is_logged_in(&session) {
-        eprintln!("hace falta sesión: cargo run -p ttl-sign-webview --example login");
+        eprintln!("session required: cargo run -p ttl-sign-webview --example login");
         std::process::exit(1);
     }
 
     let config = EngineConfig {
         landing_url: live_page_url(&user),
         sign_timeout: Duration::from_secs(30),
-        // Esta herramienta necesita ver la URI que abre el reproductor real y no conecta
-        // un socket Rust propio.
+        // This tool must see the URI opened by the real player and must not open its own
+        // Rust socket.
         block_page_websockets: false,
         session,
         ..EngineConfig::default()
@@ -49,34 +47,34 @@ fn main() -> ! {
     run(config, move |signer: Signer| {
         let rt = tokio::runtime::Runtime::new().expect("runtime de tokio");
         rt.block_on(async move {
-            // Lo primero, si la sesión llegó a la página: si no, todo lo demás se explica
-            // solo y no hace falta seguir mirando.
+            // First verify that the session reached the page; otherwise the remaining
+            // observations are explained and there is no point continuing.
             match signer.cookies().await {
                 Ok(jar) => {
                     let mut names: Vec<&str> = jar.iter().map(|(k, _)| k).collect();
                     names.sort_unstable();
-                    println!("cookies del webview: {}", names.join(" "));
+                    println!("WebView cookies: {}", names.join(" "));
                     println!(
-                        "sesión en el navegador: {}",
+                        "browser session: {}",
                         if session::is_logged_in(&jar) {
-                            "sí"
+                            "yes"
                         } else {
-                            "NO — la página navegará como anónima"
+                            "NO — the page will browse anonymously"
                         }
                     );
                 }
-                Err(e) => println!("no se pudieron leer las cookies: {e}"),
+                Err(e) => println!("could not read cookies: {e}"),
             }
             match signer
                 .eval("String(!!(document.cookie||'').match(/sid_guard|sessionid/))")
                 .await
             {
-                Ok(v) => println!("la página se ve a sí misma con sesión: {v}"),
-                Err(e) => println!("no se pudo preguntar a la página: {e}"),
+                Ok(v) => println!("page sees itself as logged in: {v}"),
+                Err(e) => println!("could not query page: {e}"),
             }
 
-            // El reproductor tarda en arrancar. Se mira varias veces en vez de una:
-            // interesa tanto qué pide como en qué orden.
+            // The player takes time to start. Observe it several times because both the
+            // requests and their order matter.
             for t in [8u64, 8, 14] {
                 tokio::time::sleep(Duration::from_secs(t)).await;
                 println!("\n=== t+{t}s ===");
@@ -90,11 +88,13 @@ fn main() -> ! {
 
 async fn dump(signer: &Signer) {
     match signer.captures().await {
-        Ok(captures) if captures.is_empty() => println!("  (la página no ha pedido nada de im/)"),
+        Ok(captures) if captures.is_empty() => {
+            println!("  (page has not requested anything from im/)")
+        }
         Ok(captures) => {
             for c in &captures {
                 println!(
-                    "  {} vía {} status={} tipo={:?} {} bytes{}",
+                    "  {} via {} status={} type={:?} {} bytes{}",
                     c.endpoint(),
                     c.via,
                     c.status,
@@ -106,9 +106,9 @@ async fn dump(signer: &Signer) {
                         .unwrap_or_default()
                 );
                 if !c.text.is_empty() {
-                    println!("    cuerpo: {}", c.text.replace('\n', " "));
+                    println!("    body: {}", c.text.replace('\n', " "));
                 }
-                // Los parámetros son lo que se compara contra los nuestros.
+                // Compare these parameters with ours.
                 if let Some(query) = c.url.split_once('?').map(|(_, q)| q) {
                     println!("    params: {}", resumir(query));
                 }
@@ -122,16 +122,16 @@ async fn dump(signer: &Signer) {
                             r.cursor,
                             r.internal_ext.len()
                         ),
-                        Err(e) => println!("    protobuf ilegible: {e}"),
+                        Err(e) => println!("    unreadable protobuf: {e}"),
                     }
                 }
             }
         }
-        Err(e) => println!("  no se pudieron leer las capturas: {e}"),
+        Err(e) => println!("  could not read captures: {e}"),
     }
 
     match signer.page_ws_urls().await {
-        Ok(urls) if urls.is_empty() => println!("  (la página no ha abierto ningún WebSocket)"),
+        Ok(urls) if urls.is_empty() => println!("  (page has not opened any WebSocket)"),
         Ok(urls) => {
             for url in &urls {
                 let (base, query) = url.split_once('?').unwrap_or((url.as_str(), ""));
@@ -139,12 +139,12 @@ async fn dump(signer: &Signer) {
                 println!("    params: {}", resumir(query));
             }
         }
-        Err(e) => println!("  no se pudo leer la lista de WebSockets: {e}"),
+        Err(e) => println!("  could not read WebSocket list: {e}"),
     }
 }
 
-/// `k=v` separados por espacios, con los valores largos o sensibles recortados: las
-/// firmas y los tokens no aportan nada leídos enteros y sí ocupan la pantalla.
+/// `k=v` pairs separated by spaces, with long or sensitive values shortened: full
+/// signatures and tokens add no value and clutter the terminal.
 fn resumir(query: &str) -> String {
     query
         .split('&')

@@ -71,7 +71,7 @@ pub fn save(path: &Path, jar: &CookieJar) -> io::Result<()> {
     Ok(())
 }
 
-/// Lee las cookies guardadas. `Ok(None)` si el fichero no existe.
+/// Read stored cookies. Returns `Ok(None)` when the file does not exist.
 pub fn load(path: &Path) -> io::Result<Option<CookieJar>> {
     match std::fs::read_to_string(path) {
         Ok(contents) => Ok(Some(CookieJar::parse(contents.trim()))),
@@ -80,7 +80,7 @@ pub fn load(path: &Path) -> io::Result<Option<CookieJar>> {
     }
 }
 
-/// Se queda solo con las cookies de [`PERSISTED`] que tengan valor.
+/// Keep only [`PERSISTED`] cookies that have a value.
 pub fn filter(jar: &CookieJar) -> CookieJar {
     jar.iter()
         .filter(|(name, value)| PERSISTED.contains(name) && !value.is_empty())

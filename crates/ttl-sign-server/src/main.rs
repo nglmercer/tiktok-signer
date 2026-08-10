@@ -60,7 +60,7 @@ fn main() -> ! {
 
     // `run` owns the main thread; the HTTP server lives in the worker.
     run(config, move |signer| {
-        let rt = tokio::runtime::Runtime::new().expect("no se pudo crear el runtime de tokio");
+        let rt = tokio::runtime::Runtime::new().expect("could not create the Tokio runtime");
         if let Err(e) = rt.block_on(serve(signer, bind, max_concurrent)) {
             tracing::error!(error = %e, "HTTP server failed");
             std::process::exit(1);

@@ -48,7 +48,7 @@ mod frame_field {
     pub const PAYLOAD: u32 = 8;
 }
 
-/// Campos de una entrada de `map<string, string>`.
+/// Fields of a `map<string, string>` entry.
 mod map_entry_field {
     pub const KEY: u32 = 1;
     pub const VALUE: u32 = 2;
@@ -62,7 +62,7 @@ pub enum ProtoError {
     Truncated,
     /// Varint longer than 10 bytes.
     VarintOverflow,
-    /// Wire type que este decodificador no conoce (3 y 4, grupos: obsoletos).
+    /// Wire type unknown to this decoder (3 and 4 are obsolete groups).
     UnsupportedWireType(u8),
 }
 
@@ -80,7 +80,7 @@ impl std::error::Error for ProtoError {}
 
 // --- Decodificador de bajo nivel --------------------------------------------------
 
-/// Valor de un campo tal y como viene en el wire.
+/// Field value as represented on the wire.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WireValue<'a> {
     Varint(u64),
@@ -111,7 +111,7 @@ impl<'a> WireValue<'a> {
     }
 }
 
-/// Itera los campos de un mensaje protobuf sin conocer su esquema.
+/// Iterate over protobuf message fields without knowing the schema.
 pub struct Reader<'a> {
     buf: &'a [u8],
     pos: usize,
@@ -146,7 +146,7 @@ impl<'a> Reader<'a> {
         Ok(slice)
     }
 
-    /// Siguiente campo, o `None` al final del mensaje.
+    /// Next field, or `None` at the end of the message.
     pub fn next_field(&mut self) -> Option<Result<(u32, WireValue<'a>), ProtoError>> {
         if self.pos >= self.buf.len() {
             return None;
@@ -180,8 +180,8 @@ impl<'a> Reader<'a> {
 
 // --- Codificador de bajo nivel ----------------------------------------------------
 
-/// Escribe mensajes protobuf. Solo lo necesario para emitir `ack`, heartbeats y la
-/// entrada inicial a una sala.
+/// Write protobuf messages. Only the parts needed for `ack`, heartbeats, and the
+/// initial room entry are implemented.
 #[derive(Debug, Default, Clone)]
 pub struct Writer {
     buf: Vec<u8>,
@@ -208,7 +208,7 @@ impl Writer {
         self.varint((u64::from(field) << 3) | u64::from(wire_type));
     }
 
-    /// Campo varint. Se omite si vale 0, como hace proto3.
+    /// Varint field. Omitted when zero, as proto3 does.
     pub fn u64_field(&mut self, field: u32, value: u64) -> &mut Self {
         if value != 0 {
             self.tag(field, 0);
@@ -235,7 +235,7 @@ impl Writer {
         self.bytes_field(field, value.as_bytes())
     }
 
-    /// Entrada de `map<string, string>`.
+    /// `map<string, string>` entry.
     pub fn map_entry(&mut self, field: u32, key: &str, value: &str) -> &mut Self {
         let mut entry = Writer::new();
         entry.str_field(map_entry_field::KEY, key);
@@ -248,7 +248,7 @@ impl Writer {
     }
 }
 
-/// Decodifica una entrada de `map<string, string>`.
+/// Decode a `map<string, string>` entry.
 fn decode_map_entry(buf: &[u8]) -> Option<(String, String)> {
     let mut key = None;
     let mut value = String::new();
@@ -285,23 +285,23 @@ pub fn describe(buf: &[u8]) -> Result<Vec<(u32, &'static str, usize)>, ProtoErro
 
 // --- ProtoMessageFetchResult ------------------------------------------------------
 
-/// Lo que hace falta de `ProtoMessageFetchResult` para abrir el WebSocket.
+/// The subset of `ProtoMessageFetchResult` required to open the WebSocket.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FetchResult {
     /// WebSocket URI base. Empty in a 200 response means silent rejection.
     pub push_server: String,
-    /// Params **ya firmados por TikTok**. Se usan tal cual.
+    /// Parameters **already signed by TikTok**. Used as-is.
     pub route_params: Vec<(String, String)>,
     /// Required; without it the response is invalid.
     pub cursor: String,
-    /// Payload de los `ack`.
+    /// Payload for `ack` frames.
     pub internal_ext: String,
     pub heartbeat_duration: u64,
     pub need_ack: bool,
 }
 
 impl FetchResult {
-    /// Decodifica los campos conocidos e ignora el resto.
+    /// Decode known fields and ignore the rest.
     ///
     /// No validation: an empty `push_server` is returned as-is and is
     /// [`FetchResult::rejection_reason`] quien lo interpreta.
@@ -333,7 +333,7 @@ impl FetchResult {
         Ok(out)
     }
 
-    /// Motivo por el que esta respuesta es un rechazo, si lo es.
+    /// Reason this response is a rejection, if applicable.
     ///
     /// A 200 with empty `push_server` means TikTok rejected silently
     /// (`docs/00-research.md` §1).
@@ -348,7 +348,7 @@ impl FetchResult {
 
 // --- WebcastPushFrame -------------------------------------------------------------
 
-/// Sobre de transporte del WebSocket.
+/// WebSocket transport envelope.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PushFrame {
     pub seq_id: u64,
@@ -411,7 +411,7 @@ impl PushFrame {
         self.payload_type == "msg"
     }
 
-    /// Valor de `compress_type` en las cabeceras del frame.
+    /// Value of `compress_type` in frame headers.
     pub fn compress_type(&self) -> Option<&str> {
         self.headers
             .iter()
@@ -419,7 +419,7 @@ impl PushFrame {
             .map(|(_, v)| v.as_str())
     }
 
-    /// El `ack` que corresponde a este frame (`docs/05` §Ack).
+    /// The `ack` corresponding to this frame (`docs/05` §Ack).
     ///
     /// Payload is `internal_ext`, or `-` when empty.
     pub fn ack(&self, internal_ext: &str) -> Self {
@@ -439,7 +439,7 @@ impl PushFrame {
 
     /// Frame sent immediately after the handshake to enter the room.
     ///
-    /// El `room_id` no va en el sobre: va dentro de `WebcastImEnterRoomMessage`, que es
+    /// `room_id` is not in the envelope: it is inside `WebcastImEnterRoomMessage`, the
     /// el payload de `im_enter_room`. Sin este frame TikTok puede aceptar el 101 y dejar
     /// el socket completamente silencioso.
     pub fn enter_room(room_id: u64) -> Self {
@@ -480,7 +480,7 @@ mod tests {
     /// Build a synthetic `ProtoMessageFetchResult` using the documented schema.
     fn sample_fetch_result() -> Vec<u8> {
         let mut w = Writer::new();
-        w.bytes_field(1, b"\x0a\x03msg") // messages[0], se ignora
+        w.bytes_field(1, b"\x0a\x03msg") // messages[0], ignored
             .str_field(fetch_field::CURSOR, "1720000000000_abc")
             .str_field(fetch_field::INTERNAL_EXT, "internal_src:dim|...")
             .map_entry(fetch_field::ROUTE_PARAMS, "wss_push_room_id", "7300")

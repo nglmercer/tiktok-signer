@@ -9,7 +9,7 @@
 //! ```
 //!
 //! To discover *who* is live, use the rendered DOM from
-//! `https://www.tiktok.com/live`, y eso necesita el webview:
+//! `https://www.tiktok.com/live`, which requires the WebView:
 //! `cargo run -p ttl-sign-webview --example live-check`.
 
 use anyhow::{Context, Result};

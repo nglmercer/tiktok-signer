@@ -19,7 +19,7 @@ use std::fmt;
 pub struct DevicePreset {
     /// `browser_name` query value. In practice this is always `Mozilla`.
     pub browser_name: String,
-    /// `browser_version` de la query: el UA **sin** el prefijo `Mozilla/`.
+    /// `browser_version` from the query: the UA **without** the `Mozilla/` prefix.
     pub browser_version: String,
     /// `browser_platform` de la query (`Win32`, `Linux x86_64`, `MacIntel`).
     pub browser_platform: String,
@@ -28,7 +28,7 @@ pub struct DevicePreset {
 }
 
 impl DevicePreset {
-    /// Chrome estable sobre Windows 10/11. Preset por defecto.
+    /// Stable Chrome on Windows 10/11. Default preset.
     pub fn chrome_windows() -> Self {
         Self {
             browser_name: "Mozilla".into(),
@@ -63,7 +63,7 @@ impl DevicePreset {
         format!("{}/{}", self.browser_name, self.browser_version)
     }
 
-    /// Todos los presets conocidos. Usado por los tests de coherencia.
+    /// All known presets. Used by consistency tests.
     pub fn all() -> Vec<Self> {
         vec![
             Self::chrome_windows(),
@@ -149,7 +149,7 @@ impl Default for ScreenPreset {
 }
 
 /// Complete preset passed to [`crate::FetchParams`] and [`crate::WsParams`];
-/// no existe camino para construir una query con un preset y firmar con otro.
+/// there is no way to build a query with one preset and sign with another.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Preset {
     pub device: DevicePreset,
@@ -171,7 +171,7 @@ impl Preset {
         self.device.user_agent()
     }
 
-    /// Todas las combinaciones conocidas, para tests de coherencia.
+    /// All known combinations for consistency tests.
     pub fn all() -> Vec<Self> {
         let mut out = Vec::new();
         for device in DevicePreset::all() {
@@ -193,14 +193,14 @@ impl fmt::Display for Preset {
 mod tests {
     use super::*;
 
-    /// El test que exige `docs/06-risks-and-ops.md` §1: UA y params no se pueden separar.
+    /// Test required by `docs/06-risks-and-ops.md` §1: UA and parameters cannot diverge.
     #[test]
     fn ua_is_derived_from_browser_params() {
         for d in DevicePreset::all() {
             let ua = d.user_agent();
             assert!(
                 ua.starts_with(&format!("{}/", d.browser_name)),
-                "el UA no empieza por browser_name: {ua}"
+                "UA does not start with browser_name: {ua}"
             );
             assert!(
                 ua.ends_with(&d.browser_version),
@@ -228,7 +228,7 @@ mod tests {
         for l in LocationPreset::all() {
             assert!(
                 l.browser_language.starts_with(&l.language),
-                "{} no es un dialecto de {}",
+                "{} is not a dialect of {}",
                 l.browser_language,
                 l.language
             );

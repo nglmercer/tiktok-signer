@@ -19,7 +19,7 @@ use tracing::{info, warn};
 use ttl_sign_core::{RejectReason, SignError, SignOutcome};
 use ttl_sign_webview::Signer;
 
-/// Cabecera que exige el cliente Python: sin ella aborta con `EMPTY_COOKIES`.
+/// Header required by the Python client: without it, the client aborts with `EMPTY_COOKIES`.
 const X_SET_TT_COOKIE: &str = "X-Set-TT-Cookie";
 /// Custom extension: the actual User-Agent so clients can reuse it on the WebSocket.
 const X_SET_TT_USER_AGENT: &str = "X-Set-TT-User-Agent";
@@ -59,7 +59,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 }
 
 /// Parameters sent by clients. Most are ignored: browser parameters are
-/// regenera el servidor desde su propio preset, y el UA usado se devuelve en
+/// regenerates the server-side preset, and the UA used is returned in
 /// `X-Set-TT-User-Agent` para que el cliente abra el WS con el mismo
 /// (`docs/03-spec-sign-server.md` §Regla).
 #[derive(Debug, Deserialize)]

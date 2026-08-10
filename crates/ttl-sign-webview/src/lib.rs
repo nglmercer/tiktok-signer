@@ -1,14 +1,12 @@
-//! Motor de firma basado en webview.
+//! WebView-based signing engine.
 //!
-//! Implementa el **Plan A** de `docs/01-architecture.md` §D2: no se reimplementa el
-//! algoritmo de firma, se deja que la propia página de TikTok firme y ejecute la
-//! petición, y se recogen los bytes por IPC.
+//! Implements **Plan A**: it does not reimplement signing; TikTok's page signs and executes
+//! the request, and the engine collects bytes over IPC.
 //!
-//! # Modelo de hilos
+//! # Thread model
 //!
-//! `wry`/`tao` exigen que el event loop viva en el hilo principal, y `run()` no retorna.
-//! Por eso el punto de entrada es [`run`], que se queda con el hilo principal y entrega
-//! un [`Signer`] a un worker:
+//! `wry`/`tao` require the event loop on the main thread, and `run()` does not return.
+//! [`run`] therefore owns the main thread and gives a [`Signer`] to a worker:
 //!
 //! ```no_run
 //! use ttl_sign_webview::{run, EngineConfig};
@@ -22,9 +20,8 @@
 //! });
 //! ```
 //!
-//! `#[tokio::main]` en `main()` **no** sirve: el event loop tiene que estar en el hilo
-//! principal. Es el error de integración más probable, de ahí que la API no permita
-//! construir el motor de otra forma.
+//! `#[tokio::main]` in `main()` **does not work**: the event loop must run on the main
+//! thread. The API prevents constructing the engine in another way.
 
 pub mod ipc;
 pub mod session;
@@ -49,51 +46,49 @@ use ttl_sign_core::{
 
 use crate::ipc::{FromPage, PageEnv, ToPage, ToPageText};
 
-/// Cada cuánto se mira si ya hay sesión durante el login.
+/// Login-session polling interval.
 const POLL_LOGIN: Duration = Duration::from_secs(2);
 
-/// Documento barato del origen TikTok usado para primear las cookies antes de la página
-/// real. La primera navegación necesariamente ocurre antes de que un document-start script
-/// pueda run; la segunda ya sale con la sesión puesta en la cabecera HTTP.
+/// Cheap TikTok-origin document used to prime cookies before the real page. The first
+/// navigation necessarily occurs before a document-start script can run; the second carries
+/// the session in its HTTP header.
 const SESSION_BOOTSTRAP_URL: &str = "https://www.tiktok.com/robots.txt";
 
-/// Script inyectado antes que los de la página.
+/// Script injected before page scripts.
 pub const BRIDGE_JS: &str = include_str!("bridge.js");
 
-/// Configuración del motor.
+/// Engine configuration.
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
-    /// Preset de dispositivo: genera el UA del webview **y** los params de la query.
+    /// Device preset: generates the WebView UA **and** query parameters.
     pub preset: Preset,
-    /// Página sobre la que se firma. Tiene que ser una URL de TikTok que cargue
-    /// `webmssdk.js`; una live cualquiera vale.
+    /// Page used for signing. It must be a TikTok URL that loads `webmssdk.js`; any live
+    /// page is sufficient.
     pub landing_url: String,
-    /// Tiempo máximo de una firma. Por encima de esto el resultado caducaría igualmente
-    /// (~30 s de vida útil), así que fallar rápido es mejor que esperar.
+    /// Maximum signing time. The result expires after roughly 30 seconds, so failing fast
+    /// is preferable to waiting.
     pub sign_timeout: Duration,
-    /// Ventana para que aparezca `window.byted_acrawler`.
+    /// Deadline for `window.byted_acrawler` to appear.
     pub sdk_ready_timeout: Duration,
-    /// Email de contacto que pide la spec de Euler (`contact_us`). Opcional.
+    /// Contact email required by the Euler spec (`contact_us`). Optional.
     pub contact_us: String,
-    /// Ventana visible. Solo para el flujo de login, donde hace falta que la persona vea
-    /// la página y pueda teclear; para firmar va invisible.
+    /// Visible window. Used only for login, where a person must see and type into the page;
+    /// signing runs invisibly.
     pub visible: bool,
-    /// Evita que el reproductor abra su propio WebSocket. El cliente Rust abre el socket
-    /// con los parámetros devueltos por `/im/fetch/`; dejar dos sockets para la misma sala
-    /// y sesión hace que TikTok acepte ambos pero deje al segundo en silencio.
+    /// Prevent the player from opening its own WebSocket. Rust opens the socket with the
+    /// parameters returned by `/im/fetch/`; two sockets for the same room/session cause the
+    /// second one to remain silent.
     pub block_page_websockets: bool,
-    /// Cookies de una cuenta real. Vacío = sesión anónima.
+    /// Cookies from a real account. Empty means anonymous session.
     ///
-    /// Verificado el 2026-08-10 contra directos reales: **sin ella no hay flujo**.
+    /// Verified on 2026-08-10 against real live rooms: **the flow requires it**.
     /// `/webcast/room/enter/` responde literalmente `User doesn't login`, y
-    /// `/webcast/im/fetch/` responde 200 con cuerpo vacío, que es el mismo rechazo dicho
-    /// en voz baja. Los endpoints que no dependen de sesión (`room/info`,
-    /// `room/check_alive`) sí responden por esta misma ruta de firma, así que el problema
-    /// no está en cómo firmamos ni en cómo repetimos.
+    /// `/webcast/im/fetch/` returns 200 with an empty body, the same silent rejection.
+    /// Session-independent endpoints (`room/info`, `room/check_alive`) respond through the
+    /// same signing path, so the problem is neither signing nor replay.
     ///
-    /// Implica exponer la sesión de una cuenta al componente que firma
-    /// (`docs/06-risks-and-ops.md` §Decisiones abiertas). Con `sessionid`, el WebSocket
-    /// **exige** además que la cookie viaje en el handshake, o rechaza con
+    /// This exposes an account session to the signing component. With `sessionid`, the
+    /// WebSocket also **requires** the cookie in the handshake or rejects with
     /// "illegal secret key".
     pub session: CookieJar,
 }
@@ -101,10 +96,9 @@ pub struct EngineConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
-            // En Linux el webview reporta `navigator.platform = "Linux x86_64"`, y
-            // `with_user_agent` no lo cambia: un preset de Windows deja `browser_platform`
-            // y el UA contando historias distintas, que es la causa nº1 de rechazo
-            // (`docs/06-risks-and-ops.md` §1). Observado en F2.
+            // On Linux WebView reports `navigator.platform = "Linux x86_64"`, and
+            // `with_user_agent` does not change it. A Windows preset would mismatch
+            // `browser_platform` and the UA, a leading rejection cause.
             preset: Preset {
                 device: default_device_preset(),
                 ..Preset::default()
@@ -121,7 +115,7 @@ impl Default for EngineConfig {
 }
 
 impl EngineConfig {
-    /// Configura la sesión a partir de una cookie `sessionid` suelta.
+    /// Configure the session from a standalone `sessionid` cookie.
     pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
         let session_id = session_id.into();
         if !session_id.is_empty() {
@@ -130,8 +124,7 @@ impl EngineConfig {
         self
     }
 
-    /// Configuración para el flujo de login: ventana visible, sin sesión previa y
-    /// aterrizando en la página de login.
+    /// Login configuration: visible window, no existing session, and the login page.
     pub fn for_login() -> Self {
         Self {
             visible: true,
@@ -141,13 +134,13 @@ impl EngineConfig {
         }
     }
 
-    /// ¿Hay sesión configurada?
+    /// Is a session configured?
     pub fn is_authenticated(&self) -> bool {
         session::is_logged_in(&self.session)
     }
 }
 
-/// El preset que casa con el motor de webview de esta plataforma.
+/// Preset matching this platform's WebView engine.
 fn default_device_preset() -> ttl_sign_core::DevicePreset {
     if cfg!(target_os = "linux") {
         ttl_sign_core::DevicePreset::chrome_linux()
@@ -158,58 +151,57 @@ fn default_device_preset() -> ttl_sign_core::DevicePreset {
     }
 }
 
-/// Trabajo inyectado en el event loop desde el runtime de tokio.
+/// Work injected into the event loop from the Tokio runtime.
 enum UserEvent {
     Sign {
         url: String,
         reply: oneshot::Sender<Result<SignedRequest, SignError>>,
     },
-    /// Paso 1 sin firma. `url: None` pide el DOM ya renderizado.
+    /// Unsigned step 1. `url: None` requests the rendered DOM.
     Text {
         url: Option<String>,
         reply: oneshot::Sender<Result<String, SignError>>,
     },
-    /// Cookies actuales del webview. No espera al gate: en la página de login el SDK
-    /// puede no llegar a cargar nunca, y aun así hay sesión que leer.
+    /// Current WebView cookies. Does not wait for the readiness gate: the login page may
+    /// never load the SDK, while cookies are still readable.
     Cookies {
         reply: oneshot::Sender<CookieJar>,
     },
-    /// Navega la página a otra URL y vuelve a cerrar el gate de readiness.
+    /// Navigate to another URL and reset the readiness gate.
     Navigate {
         url: String,
         reply: oneshot::Sender<Result<(), SignError>>,
     },
-    /// Despierta el event loop desde el handler de IPC.
+    /// Wake the event loop from the IPC handler.
     ///
-    /// Hace falta porque el handler corre fuera del closure del event loop: cuando marca
-    /// la instancia como lista, nadie vacía la cola de peticiones hasta que llega *algún*
-    /// evento. Sin esto, todo lo encolado antes de `ready` se queda ahí hasta que caduca.
+    /// The handler runs outside the event-loop closure. When it marks the instance ready,
+    /// queued requests need an event to drain; without this they remain until expiry.
     Wake,
     Shutdown,
 }
 
-/// Lo que devuelve la página: una URL ya firmada y las cookies con las que se firmó.
-/// El cuerpo lo trae Rust después, repitiendo esta petición.
+/// Page result: an already signed URL and the cookies used to sign it. Rust fetches the body
+/// afterward by repeating the request.
 #[derive(Debug, Clone)]
 pub struct SignedRequest {
-    /// URL con X-Bogus, X-Gnarly, X-Dynosaur y msToken puestos por webmssdk.
+    /// URL with X-Bogus, X-Gnarly, X-Dynosaur, and msToken added by webmssdk.
     pub url: String,
     pub cookies: CookieJar,
     pub user_agent: String,
-    /// Página desde la que se firmó. Va como `Referer` al repetir.
+    /// Page that produced the signature. Sent as `Referer` when replaying.
     pub page_url: String,
 }
 
-/// Una petición `webcast` que el puente vio pasar, con su respuesta.
+/// A `webcast` request observed by the bridge, with its response.
 ///
-/// La graba el wrapper de `fetch`/XHR que se instala **antes** que webmssdk, así que la
-/// URL ya viene firmada por el SDK y el cuerpo es el que recibió la página.
+/// Recorded by the `fetch`/XHR wrapper installed **before** webmssdk, so the URL is already
+/// signed by the SDK and the body is what the page received.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Capture {
     pub url: String,
     #[serde(default)]
     pub status: u16,
-    /// `Response.type`: `cors` o `basic` se pueden leer; `opaque` no.
+    /// `Response.type`: `cors` and `basic` are readable; `opaque` is not.
     #[serde(default, rename = "kind")]
     pub response_type: String,
     /// `fetch` o `xhr`.
@@ -217,11 +209,10 @@ pub struct Capture {
     pub via: String,
     #[serde(default)]
     pub bytes: usize,
-    /// Cuerpo en base64. Vacío si no se pudo leer.
+    /// Base64 body. Empty when it could not be read.
     #[serde(default)]
     pub body: String,
-    /// Cuerpo en claro cuando es corto y no se guardó en `body`: los errores de TikTok
-    /// son JSON de dos líneas y leerlos ahorra media investigación.
+    /// Plain text body when short and not stored in `body`.
     #[serde(default)]
     pub text: String,
     #[serde(default)]
@@ -229,7 +220,7 @@ pub struct Capture {
 }
 
 impl Capture {
-    /// Cuerpo decodificado. Vacío si el puente no pudo leerlo.
+    /// Decoded body. Empty when the bridge could not read it.
     pub fn decoded(&self) -> Vec<u8> {
         use base64::Engine;
         base64::engine::general_purpose::STANDARD
@@ -242,30 +233,29 @@ impl Capture {
     }
 }
 
-/// Handle async del motor. Clonable y `Send`: es lo que ve el servidor HTTP.
+/// Async engine handle. Cloneable and `Send`; this is what the HTTP server sees.
 #[derive(Clone)]
 pub struct Signer {
     proxy: EventLoopProxy<UserEvent>,
     config: EngineConfig,
     http: reqwest::Client,
-    /// El preset **vivo**: el dispositivo lo fija la configuración (de él sale el UA del
-    /// webview, que no se puede cambiar en caliente), pero idioma, zona horaria, pantalla
-    /// y región los corrige la propia página en cuanto está lista.
+    /// The **live** preset: configuration fixes the device (and its immutable WebView UA),
+    /// while the page corrects language, time zone, screen, and region when ready.
     preset: Arc<Mutex<Preset>>,
 }
 
 impl Signer {
-    /// Firma y ejecuta `/webcast/im/fetch/` para una sala.
+    /// Sign and execute `/webcast/im/fetch/` for a room.
     ///
-    /// No devuelve `Result`: los tres finales posibles están en [`SignOutcome`], y ahí
-    /// un rechazo (detección) nunca se confunde con un error de transporte.
+    /// Does not return `Result`: the three outcomes are represented by [`SignOutcome`], and
+    /// detection rejection is never confused with a transport error.
     pub async fn fetch(&self, room_id: impl Into<String>) -> SignOutcome {
         let mut params = FetchParams::new(room_id);
         params.contact_us = self.config.contact_us.clone();
         self.fetch_with(params).await
     }
 
-    /// Igual que [`Signer::fetch`], con control total sobre los parámetros (cursor,
+    /// Like [`Signer::fetch`], with full control over parameters (`cursor`,
     /// `internal_ext`).
     pub async fn fetch_with(&self, params: FetchParams) -> SignOutcome {
         let preset = self.preset();
@@ -275,11 +265,10 @@ impl Signer {
         }
     }
 
-    /// Firma una URL de TikTok LIVE y la devuelve firmada, **sin ejecutarla**.
+    /// Sign a TikTok LIVE URL and return it signed, **without executing it**.
     ///
-    /// Es el `GET /webcast/sign_url` que la spec de Euler marca como opcional, y la
-    /// herramienta con la que se compara un endpoint contra otro cuando uno deja de
-    /// responder.
+    /// This corresponds to Euler's optional `GET /webcast/sign_url` and is useful for
+    /// comparing endpoints when one stops responding.
     pub async fn sign_url(&self, url: &str) -> Result<SignedRequest, SignError> {
         let (tx, rx) = oneshot::channel();
         self.proxy
@@ -287,34 +276,31 @@ impl Signer {
                 url: url.to_string(),
                 reply: tx,
             })
-            .map_err(|_| SignError::EngineGone("el event loop se ha cerrado".into()))?;
+            .map_err(|_| SignError::EngineGone("event loop has closed".into()))?;
 
         match tokio::time::timeout(self.config.sign_timeout, rx).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(SignError::EngineGone(
-                "el motor descartó la petición".into(),
-            )),
+            Ok(Err(_)) => Err(SignError::EngineGone("engine discarded the request".into())),
             Err(_) => Err(SignError::Timeout(
                 self.config.sign_timeout.as_millis() as u64
             )),
         }
     }
 
-    /// Repite una petición firmada y devuelve status y bytes crudos, sin interpretarlos.
+    /// Replay a signed request and return raw status and bytes without interpreting them.
     pub async fn replay_raw(&self, signed: &SignedRequest) -> Result<(u16, Vec<u8>), SignError> {
         let mut signed = signed.clone();
 
-        // El `msToken` de la query y el de la cookie tienen que ser el mismo. Al firmar,
-        // la petición sale desde el navegador y TikTok responde con un `x-ms-token`
-        // nuevo, así que la cookie del webview ya ha rotado cuando la leemos: mandaríamos
-        // la cookie nueva con una query firmada con la vieja.
+        // The query `msToken` and cookie `msToken` must match. When signing,
+        // The browser request receives a new `x-ms-token`, so the WebView cookie has rotated
+        // by the time we read it. Otherwise we would send a new cookie with an old signature.
         if let Some(query_token) = query_param(&signed.url, "msToken") {
             signed.cookies.set("msToken", query_token);
         }
 
-        // Cabeceras de navegador, no de cliente HTTP: se replican las del reproductor
+        // Browser headers, not generic HTTP-client headers: mirror the player
         // real, incluido `Accept: */*` (no `application/protobuf`), el `Referer` de la
-        // página del directo y unos client hints coherentes con el UA.
+        // live page and client hints consistent with the User-Agent.
         let referer = if signed.page_url.is_empty() {
             "https://www.tiktok.com/".to_string()
         } else {
@@ -353,17 +339,17 @@ impl Signer {
         Ok((status, bytes))
     }
 
-    /// Repite la petición firmada e interpreta el resultado.
+    /// Replay a signed request and interpret the result.
     ///
-    /// Es el Plan B de `docs/01-architecture.md` §D2: la respuesta de
-    /// `/webcast/im/fetch/` no se puede leer desde la página, y fuera del navegador esa
-    /// restricción no existe.
+    /// This is Plan B from `docs/01-architecture.md` §D2: the response from
+    /// `/webcast/im/fetch/` cannot be read from the page, while the restriction does not
+    /// exist outside the browser.
     async fn replay(&self, signed: SignedRequest) -> SignOutcome {
         debug!(
-            // Sin la query: lleva msToken y X-Gnarly en claro.
+            // Without the query: it exposes msToken and X-Gnarly in clear text.
             endpoint = %signed.url.split('?').next().unwrap_or_default(),
             cookies = ?signed.cookies.iter().map(|(k, _)| k).collect::<Vec<_>>(),
-            "repitiendo la petición firmada desde Rust"
+            "replaying signed request from Rust"
         );
         match self.replay_raw(&signed).await {
             Ok((status, body)) => build_outcome(
@@ -377,25 +363,25 @@ impl Signer {
         }
     }
 
-    /// Cookies actuales del webview, incluidas las `HttpOnly`.
+    /// Current WebView cookies, including `HttpOnly` cookies.
     ///
-    /// Contienen la sesión: no imprimirlas en claro.
+    /// They contain the session; never print them in clear text.
     pub async fn cookies(&self) -> Result<CookieJar, SignError> {
         let (tx, rx) = oneshot::channel();
         self.proxy
             .send_event(UserEvent::Cookies { reply: tx })
-            .map_err(|_| SignError::EngineGone("el event loop se ha cerrado".into()))?;
+            .map_err(|_| SignError::EngineGone("the event loop has closed".into()))?;
         rx.await
-            .map_err(|_| SignError::EngineGone("el motor descartó la petición".into()))
+            .map_err(|_| SignError::EngineGone("engine discarded the request".into()))
     }
 
-    /// Espera a que la persona inicie sesión en la ventana, hasta `timeout`.
+    /// Wait for a person to log in through the window, up to `timeout`.
     ///
-    /// Sondea las cookies del webview buscando `sessionid`. Devuelve las cookies de
-    /// sesión ya filtradas, listas para guardar con [`session::save`].
+    /// Poll WebView cookies for `sessionid`. Returns filtered session cookies ready for
+    /// [`session::save`].
     ///
-    /// `on_tick` recibe el tiempo restante en cada sondeo; sirve para ir informando sin
-    /// que este crate imprima nada por su cuenta.
+    /// `on_tick` receives remaining time on each poll, allowing callers to report progress
+    /// without this crate printing anything.
     pub async fn wait_for_login(
         &self,
         timeout: Duration,
@@ -407,22 +393,20 @@ impl Signer {
             if session::is_logged_in(&jar) {
                 return Ok(session::filter(&jar));
             }
-            let restante = deadline.saturating_duration_since(Instant::now());
-            if restante.is_zero() {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
                 return Err(SignError::LoginTimeout(timeout.as_secs()));
             }
-            on_tick(restante);
-            tokio::time::sleep(POLL_LOGIN.min(restante)).await;
+            on_tick(remaining);
+            tokio::time::sleep(POLL_LOGIN.min(remaining)).await;
         }
     }
 
-    /// Lleva el webview a otra página y espera a que el puente vuelva a estar listo.
+    /// Navigate the WebView and wait for the bridge to become ready again.
     ///
-    /// Hace falta para firmar: la petición `/webcast/im/fetch/` solo sale adelante desde
-    /// la página del propio directo (`https://www.tiktok.com/@usuario/live`), que es
-    /// donde la hace el reproductor real. Desde la portada `/live` el `fetch` parcheado
-    /// resuelve a `undefined` y el XHR sale con status 0: la petición ni se emite.
-    /// Verificado en F2.
+    /// Required for signing: `/webcast/im/fetch/` only leaves from the live page where the
+    /// real player sends it. From the `/live` landing page the patched `fetch` resolves to
+    /// `undefined` and XHR has status 0, so no request is emitted.
     pub async fn navigate(&self, url: &str) -> Result<(), SignError> {
         let (tx, rx) = oneshot::channel();
         if self
@@ -433,76 +417,66 @@ impl Signer {
             })
             .is_err()
         {
-            return Err(SignError::EngineGone("el event loop se ha cerrado".into()));
+            return Err(SignError::EngineGone("event loop has closed".into()));
         }
         match tokio::time::timeout(self.config.sdk_ready_timeout, rx).await {
             Ok(Ok(result)) => result?,
-            Ok(Err(_)) => {
-                return Err(SignError::EngineGone(
-                    "el motor descartó la navegación".into(),
-                ))
-            }
+            Ok(Err(_)) => return Err(SignError::EngineGone("engine discarded navigation".into())),
             Err(_) => {
                 return Err(SignError::Timeout(
                     self.config.sdk_ready_timeout.as_millis() as u64,
                 ))
             }
         }
-        // Cualquier petición espera al gate: pedir el DOM equivale a esperar a `ready`.
+        // Every request waits for the gate; requesting the DOM is equivalent to waiting for
+        // `ready`.
         self.dom().await.map(|_| ())
     }
 
-    /// Resuelve `unique_id` → `room_id` y estado del directo. **Sin firma**
-    /// (`docs/00-research.md` §1).
+    /// Resolve `unique_id` → `room_id` and live status. **Unsigned**.
     ///
-    /// Se hace desde la página para reutilizar sesión y UA reales, aunque el endpoint
-    /// no lo exija.
+    /// Runs from the page to reuse the real session and User-Agent, although the endpoint
+    /// does not require them.
     pub async fn room_lookup(&self, unique_id: &str) -> Result<RoomLookup, SignError> {
         let body = self.fetch_text(&room::room_lookup_url(unique_id)).await?;
         RoomLookup::from_json(&body).ok_or_else(|| {
-            SignError::Decode(format!("respuesta inesperada del lookup de @{unique_id}"))
+            SignError::Decode(format!("unexpected lookup response for @{unique_id}"))
         })
     }
 
-    /// Canales en directo, leídos del DOM **ya renderizado** de la página actual.
+    /// Live channels read from the current page's **rendered** DOM.
     ///
-    /// El motor tiene que estar cargado en una página que los liste (por defecto
-    /// `https://www.tiktok.com/live`). Un `GET` pelado a esa URL no sirve: los datos los
-    /// pinta el cliente, así que el HTML crudo llega vacío.
+    /// The engine must be on a page that lists them (by default `https://www.tiktok.com/live`).
+    /// A raw `GET` is insufficient: the client renders the data, so raw HTML is empty.
     ///
-    /// Devuelve la lista tal cual: si está vacía, es que la página aún no había pintado
-    /// nada, no que no haya nadie emitiendo.
+    /// Returns the list as-is: empty means the page has not rendered yet, not that nobody is
+    /// live.
     pub async fn live_channels(&self) -> Result<Vec<LiveChannel>, SignError> {
         let dom = self.dom().await?;
         Ok(room::extract_live_channels(&dom))
     }
 
-    /// DOM renderizado de la página actual.
+    /// Rendered DOM of the current page.
     pub async fn dom(&self) -> Result<String, SignError> {
         self.text_request(None).await
     }
 
-    /// Firma la URI de un WebSocket.
+    /// Sign a WebSocket URI.
     ///
-    /// Corrige lo que decía `docs/00-research.md` §1 ("el WS no lleva firma propia"): la
-    /// URI que abre el reproductor real lleva `X-Gnarly`. Sin ella el handshake se acepta
-    /// igual —101, `handshake-msg: OK`— y luego no llega ni un frame, que es el fallo más
-    /// difícil de diagnosticar de todo el flujo.
+    /// The real player's URI contains `X-Gnarly`. Without it the handshake is accepted
+    /// (`101`, `handshake-msg: OK`) but no frames arrive, the hardest failure to diagnose.
     ///
-    /// Se firma pasando la **misma query** por el firmador de peticiones HTTP, con el
-    /// esquema cambiado a `https`, y devolviendo el `wss` con los parámetros que el SDK
-    /// haya añadido. Tres caminos, en este orden:
+    /// Sign by passing the **same query** through the HTTP request signer with an `https`
+    /// scheme, then return `wss` with SDK-added parameters. Three paths, in order:
     ///
-    /// 1. La URI que ya construyó el reproductor en esta misma página. Es la referencia
-    ///    exacta y evita gastar otra firma para un GET artificial al host WS.
-    /// 2. El firmador de `fetch` (el mismo que usa `/webcast/im/fetch/`), que es quien
-    ///    pone `X-Gnarly`.
-    /// 3. `byted_acrawler.frontierSign`, que existe pero hoy solo devuelve `X-Bogus`.
-    ///    Se conserva como último respaldo y porque es la API declarada para esto.
+    /// 1. URI already built by the player on this page: exact reference and no artificial GET.
+    /// 2. The `fetch` signer used by `/webcast/im/fetch/`, which adds `X-Gnarly`.
+    /// 3. `byted_acrawler.frontierSign`, retained as a fallback even though it currently
+    ///    returns only `X-Bogus`.
     pub async fn sign_ws_uri(&self, uri: &str) -> Result<String, SignError> {
         let (scheme, resto) = match uri.split_once("://") {
             Some((scheme, resto)) => (scheme, resto),
-            None => return Err(SignError::Decode(format!("URI sin esquema: {uri}"))),
+            None => return Err(SignError::Decode(format!("URI has no scheme: {uri}"))),
         };
 
         // The page's constructor wrapper records the URL before optionally blocking the
@@ -510,14 +484,14 @@ impl Signer {
         if let Some(page_uri) = self.page_ws_candidate(uri).await {
             debug!(
                 endpoint = %uri.split('?').next().unwrap_or(uri),
-                "reutilizando URI WS firmada por la página"
+                "reusing page-signed WebSocket URI"
             );
             return Ok(page_uri);
         }
 
         let como_https = format!("https://{resto}");
 
-        // 2. Firmador de peticiones: es el que añade X-Gnarly.
+        // 2. Request signer: it adds X-Gnarly.
         if let Ok(signed) = self.sign_url(&como_https).await {
             if signed.url.contains("X-Gnarly=") {
                 let sin_esquema = signed
@@ -529,17 +503,19 @@ impl Signer {
             }
         }
 
-        // 3. Respaldo: la API declarada del SDK.
+        // 3. Fallback: the SDK's declared API.
         let url_json = serde_json::to_string(uri).map_err(|e| SignError::Decode(e.to_string()))?;
         let script = format!(
             "JSON.stringify(window.byted_acrawler.frontierSign({{ url: {url_json} }}) || {{}})"
         );
         let raw = self.eval(&script).await?;
         let params: std::collections::BTreeMap<String, String> = serde_json::from_str(&raw)
-            .map_err(|e| SignError::Decode(format!("frontierSign devolvió algo raro: {e}")))?;
+            .map_err(|e| {
+                SignError::Decode(format!("frontierSign returned unexpected data: {e}"))
+            })?;
         if params.is_empty() {
             return Err(SignError::Bridge(
-                "nadie firmó la URI del WebSocket: ni el firmador de fetch ni frontierSign".into(),
+                "neither the fetch signer nor frontierSign signed the WebSocket URI".into(),
             ));
         }
 
@@ -553,11 +529,10 @@ impl Signer {
         Ok(signed)
     }
 
-    /// Lo que el puente grabó de las peticiones `webcast` que hizo la **propia página**.
+    /// `webcast` requests recorded by the **page itself**.
     ///
-    /// Es la verdad de referencia: el reproductor real firma con los parámetros correctos
-    /// y con la sesión correcta, así que comparar contra esto separa "construimos mal la
-    /// petición" de "TikTok nos rechaza".
+    /// This is the reference truth: the real player signs with correct parameters and the
+    /// correct session, separating a malformed request from TikTok rejection.
     pub async fn captures(&self) -> Result<Vec<Capture>, SignError> {
         let raw = self
             .eval("JSON.stringify(window.__ttlCaptures||[])")
@@ -566,7 +541,7 @@ impl Signer {
             .map_err(|e| SignError::Decode(format!("capturas ilegibles: {e}")))
     }
 
-    /// URIs de WebSocket que ha abierto la página, en orden.
+    /// WebSocket URIs opened by the page, in order.
     pub async fn page_ws_urls(&self) -> Result<Vec<String>, SignError> {
         let raw = self.eval("JSON.stringify(window.__ttlWsUrls||[])").await?;
         serde_json::from_str(&raw)
@@ -604,26 +579,24 @@ impl Signer {
         None
     }
 
-    /// Impide que la página abra sus propios WebSockets a partir de ahora.
+    /// Prevent the page from opening its own WebSockets from now on.
     ///
-    /// Dos conexiones a la misma sala con la misma sesión se estorban: el servidor acepta
-    /// la segunda y no le manda nada. Si el WebSocket lo va a abrir Rust, el de la página
-    /// sobra.
+    /// Two connections to the same room/session interfere: the server accepts the second
+    /// but sends no events. If Rust opens the WebSocket, the page connection is unnecessary.
     pub async fn block_page_websockets(&self) -> Result<(), SignError> {
         self.eval("(window.__ttlBlockWs=true,'ok')")
             .await
             .map(|_| ())
     }
 
-    /// Evalúa una expresión JS en la página y devuelve el resultado como texto.
+    /// Evaluate a JavaScript expression in the page and return text.
     ///
-    /// Herramienta de diagnóstico: sirve para ver qué está pidiendo la página realmente
-    /// o si un símbolo del SDK sigue existiendo. No participa en el camino de la firma.
+    /// Diagnostic tool for page requests and SDK symbols. It does not participate in signing.
     pub async fn eval(&self, js: &str) -> Result<String, SignError> {
         self.text_request(Some(format!("js:{js}"))).await
     }
 
-    /// GET de texto desde dentro de la página, con su sesión y su UA.
+    /// Text GET from inside the page with its session and User-Agent.
     pub async fn fetch_text(&self, url: &str) -> Result<String, SignError> {
         self.text_request(Some(url.to_string())).await
     }
@@ -635,24 +608,21 @@ impl Signer {
             .send_event(UserEvent::Text { url, reply: tx })
             .is_err()
         {
-            return Err(SignError::EngineGone("el event loop se ha cerrado".into()));
+            return Err(SignError::EngineGone("event loop has closed".into()));
         }
         match tokio::time::timeout(self.config.sign_timeout, rx).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(SignError::EngineGone(
-                "el motor descartó la petición".into(),
-            )),
+            Ok(Err(_)) => Err(SignError::EngineGone("engine discarded the request".into())),
             Err(_) => Err(SignError::Timeout(
                 self.config.sign_timeout.as_millis() as u64
             )),
         }
     }
 
-    /// El preset con el que firma este motor. El WebSocket tiene que usar este mismo UA.
+    /// Preset used by this engine. The WebSocket must use the same User-Agent.
     ///
-    /// Se devuelve una copia porque la página puede corregir idioma, región, zona horaria
-    /// y pantalla cuando emite `ready`; mantener una referencia a un `Mutex` no sería una
-    /// API segura para el worker.
+    /// Return a copy because the page can correct language, region, time zone, and screen
+    /// when it emits `ready`; holding a Mutex reference would not be a safe worker API.
     pub fn preset(&self) -> Preset {
         self.preset
             .lock()
@@ -660,43 +630,42 @@ impl Signer {
             .unwrap_or_else(|_| self.config.preset.clone())
     }
 
-    /// Pide el cierre ordenado del event loop.
+    /// Request orderly event-loop shutdown.
     pub fn shutdown(&self) {
         let _ = self.proxy.send_event(UserEvent::Shutdown);
     }
 }
 
-/// Una firma esperando a que el SDK esté listo.
+/// A signature waiting for the SDK.
 type QueuedSign = (String, oneshot::Sender<Result<SignedRequest, SignError>>);
 
-/// Una petición de texto esperando a que la página esté lista.
+/// A text request waiting for the page.
 type QueuedText = (Option<String>, oneshot::Sender<Result<String, SignError>>);
 
-/// Estado compartido entre el event loop y el handler de IPC. Ambos corren en el hilo
-/// principal, así que `Rc<RefCell<_>>` es suficiente y evita locks.
+/// State shared by the event loop and IPC handler. Both run on the main thread, so
+/// `Rc<RefCell<_>>` is sufficient and avoids locks.
 #[derive(Default)]
 struct Shared {
     next_id: u64,
-    /// Peticiones en vuelo, por `request_id`.
+    /// In-flight signing requests by `request_id`.
     pending: HashMap<u64, oneshot::Sender<Result<SignedRequest, SignError>>>,
-    /// Peticiones de texto en vuelo (paso 1, sin firma).
+    /// In-flight text requests (unsigned step 1).
     pending_text: HashMap<u64, oneshot::Sender<Result<String, SignError>>>,
-    /// Peticiones recibidas antes de que el SDK estuviese listo.
+    /// Requests received before the SDK was ready.
     queued: Vec<QueuedSign>,
-    /// Igual, para las de texto: `ready` implica además que el documento ya cargó, que
-    /// es lo que hace falta para que el DOM tenga algo que leer.
+    /// Likewise for text: `ready` also means the document loaded, which is required to read
+    /// its DOM.
     queued_text: Vec<QueuedText>,
     ready: bool,
-    /// Cuándo empezó a contar el gate de readiness. Se reinicia en cada navegación.
+    /// When the readiness gate started. Reset on each navigation.
     gate_started: Option<Instant>,
     sdk_version: Option<String>,
     signs: u64,
-    /// Cookies visibles al documento. En WebKitGTK pueden no aparecer en el cookie
-    /// manager aunque sí viajen en las peticiones hechas desde la página.
+    /// Cookies visible to the document. WebKitGTK may omit them from the cookie manager
+    /// even though page requests carry them.
     page_cookies: CookieJar,
-    /// Hay una navegación inicial a `robots.txt` que solo existe para que el puente pueda
-    /// poner las cookies en el origen TikTok. Mientras está pendiente, un `ready` del
-    /// documento de arranque no autoriza firmas.
+    /// Initial `robots.txt` navigation used so the bridge can install cookies at the TikTok
+    /// origin. While pending, bootstrap-document `ready` does not authorize signing.
     session_bootstrap_pending: bool,
     session_bootstrap_ready: bool,
 }
@@ -712,7 +681,7 @@ impl Shared {
             Some(tx) => {
                 let _ = tx.send(result);
             }
-            None => debug!(request_id, "resultado sin petición en vuelo, se descarta"),
+            None => debug!(request_id, "result has no in-flight request; discarded"),
         }
     }
 
@@ -721,11 +690,11 @@ impl Shared {
             Some(tx) => {
                 let _ = tx.send(result);
             }
-            None => debug!(request_id, "texto sin petición en vuelo, se descarta"),
+            None => debug!(request_id, "text has no in-flight request; discarded"),
         }
     }
 
-    /// Falla todo lo que estuviera esperando. Se usa cuando el SDK no arranca.
+    /// Fail everything waiting. Used when the SDK does not start.
     fn fail_all(&mut self, make_error: impl Fn() -> SignError) {
         for (_, tx) in self.pending.drain() {
             let _ = tx.send(Err(make_error()));
@@ -742,10 +711,10 @@ impl Shared {
     }
 }
 
-/// Arranca el motor. **Se queda con el hilo principal y no retorna.**
+/// Start the engine. **It owns the main thread and does not return.**
 ///
-/// `worker` corre en un hilo aparte y recibe el [`Signer`]; es donde va el runtime de
-/// tokio (servidor HTTP, cliente propio, lo que sea).
+/// `worker` runs on another thread and receives [`Signer`]; this is where the Tokio runtime
+/// lives (HTTP server, custom client, or anything else).
 pub fn run<F>(config: EngineConfig, worker: F) -> !
 where
     F: FnOnce(Signer) + Send + 'static,
@@ -755,13 +724,13 @@ where
 
     let window = WindowBuilder::new()
         .with_title(if config.visible {
-            "Inicia sesión en TikTok — se cerrará solo al terminar"
+            "Log in to TikTok — this window closes after login"
         } else {
             "ttl-sign-webview"
         })
         .with_visible(config.visible)
         .build(&event_loop)
-        .expect("no se pudo crear la ventana (¿hay display? si no, usa Xvfb)");
+        .expect("could not create window (is a display available? otherwise use Xvfb)");
 
     let shared = Rc::new(RefCell::new(Shared::default()));
     let user_agent = config.preset.user_agent();
@@ -772,8 +741,8 @@ where
     let ipc_ua = user_agent.clone();
     let ipc_preset = Arc::clone(&preset);
     let ipc_proxy = proxy.clone();
-    // El webview aún no existe cuando se construye el handler, y el handler necesita
-    // leer el cookie manager: se comparte por una celda que se rellena justo después.
+    // The WebView does not exist when the handler is built, but the handler needs to read
+    // the cookie manager; share it through a cell filled immediately afterward.
     let webview_slot: Rc<RefCell<Option<Rc<wry::WebView>>>> = Rc::new(RefCell::new(None));
     let ipc_slot = Rc::clone(&webview_slot);
 
@@ -797,7 +766,7 @@ where
             let msg: FromPage = match serde_json::from_str(body) {
                 Ok(m) => m,
                 Err(e) => {
-                    warn!(error = %e, "mensaje IPC ilegible");
+                    warn!(error = %e, "unreadable IPC message");
                     return;
                 }
             };
@@ -807,11 +776,11 @@ where
                 .map(|wv| cookies_from_webview(wv))
                 .unwrap_or_default();
             handle_page_message(&ipc_shared, msg, &ipc_ua, jar_from_webview, &ipc_preset);
-            // El handler no es el event loop: hay que despertarlo para que drene la cola.
+            // The handler is not the event loop; wake it so it can drain the queue.
             let _ = ipc_proxy.send_event(UserEvent::Wake);
         });
 
-    let webview = build_webview(builder, &window).expect("no se pudo crear el webview");
+    let webview = build_webview(builder, &window).expect("could not create WebView");
 
     let webview = Rc::new(webview);
     *webview_slot.borrow_mut() = Some(Rc::clone(&webview));
@@ -819,7 +788,7 @@ where
     if !config.session.is_empty() {
         info!(
             cookies = config.session.len(),
-            "sesión preparada para el documento de arranque"
+            "session prepared for bootstrap document"
         );
     }
 
@@ -838,7 +807,7 @@ where
     let landing_url = config.landing_url.clone();
 
     event_loop.run(move |event, _target, control_flow| {
-        // Wait despierta con cada evento; el deadline del SDK se comprueba en cada paso.
+        // Wait wakes on every event; check the SDK deadline on every pass.
         *control_flow = ControlFlow::Wait;
 
         {
@@ -848,7 +817,7 @@ where
                 .gate_started
                 .is_some_and(|t| t.elapsed() > sdk_ready_timeout);
             if !state.ready && waiting && expired {
-                error!("el SDK no apareció en {sdk_ready_timeout:?}");
+                error!("SDK did not appear within {sdk_ready_timeout:?}");
                 state.fail_all(|| SignError::SdkNotReady);
             }
         }
@@ -857,7 +826,7 @@ where
             Event::UserEvent(UserEvent::Sign { url, reply }) => {
                 let mut state = shared.borrow_mut();
                 if !state.ready {
-                    debug!("petición en cola: el SDK todavía no está listo");
+                    debug!("request queued: SDK is not ready");
                     state.queued.push((url, reply));
                     return;
                 }
@@ -870,7 +839,7 @@ where
             Event::UserEvent(UserEvent::Text { url, reply }) => {
                 let mut state = shared.borrow_mut();
                 if !state.ready {
-                    debug!("petición de texto en cola: la página aún no está lista");
+                    debug!("text request queued: page is not ready");
                     state.queued_text.push((url, reply));
                     return;
                 }
@@ -896,12 +865,12 @@ where
                     .map_err(|e| SignError::EngineGone(e.to_string()));
                 let _ = reply.send(result);
             }
-            // Solo sirve para llegar al drenaje de colas de más abajo.
+            // Only used to reach the queue-draining logic below.
             Event::UserEvent(UserEvent::Wake) => {}
             Event::UserEvent(UserEvent::Shutdown) => {
                 shared
                     .borrow_mut()
-                    .fail_all(|| SignError::EngineGone("cierre solicitado".into()));
+                    .fail_all(|| SignError::EngineGone("shutdown requested".into()));
                 *control_flow = ControlFlow::Exit;
             }
             _ => {}
@@ -923,17 +892,17 @@ where
             }
         };
         if navigate_after_bootstrap {
-            info!(url = %landing_url, "sesión instalada; navegando a la página real");
+            info!(url = %landing_url, "session installed; navigating to real page");
             if let Err(e) = webview.load_url(&landing_url) {
-                error!(error = %e, "no se pudo cargar la página autenticada");
+                error!(error = %e, "could not load authenticated page");
                 shared
                     .borrow_mut()
                     .fail_all(|| SignError::EngineGone(e.to_string()));
             }
         }
 
-        // El puente puede haber emitido `ready` desde el handler de IPC mientras había
-        // peticiones en cola; es aquí donde se drenan.
+        // The bridge may have emitted `ready` from the IPC handler while requests were
+        // queued; drain them here.
         let to_dispatch: Vec<(u64, String)> = {
             let mut state = shared.borrow_mut();
             if !state.ready || state.queued.is_empty() {
@@ -975,21 +944,20 @@ where
     })
 }
 
-/// Prepara los pares que el puente instalará desde el origen de TikTok.
+/// Prepare cookie pairs for the bridge to install at the TikTok origin.
 ///
-/// En WebKitGTK `WebView::set_cookie` puede quedar en el cookie manager sin participar en
-/// la primera navegación. La asignación desde el initialization script ocurre en el mismo
-/// origen y antes de que TikTok ejecute su bootstrap, por lo que las cookies sí viajan en
-/// el SSR y en los XHR posteriores.
+/// With WebKitGTK, `WebView::set_cookie` may remain in the cookie manager without affecting
+/// the first navigation. The initialization script assigns them at the same origin before
+/// TikTok's bootstrap, so cookies travel in SSR and later XHR requests.
 fn session_initialization_script(jar: &CookieJar, block_page_websockets: bool) -> String {
     let pairs: Vec<(&str, &str)> = jar.iter().collect();
-    let json = serde_json::to_string(&pairs).expect("las cookies siempre serializan");
+    let json = serde_json::to_string(&pairs).expect("cookies always serialize");
     format!("window.__ttlSession = {json}; window.__ttlBlockWs = {block_page_websockets};")
 }
 
-/// En Linux la ventana es invisible, así que GTK nunca la *realiza* y no hay window
-/// handle que darle a `build()`: falla con `WindowHandleError(Unavailable)`. La forma
-/// correcta ahí es meter el webview directamente en el contenedor GTK de la ventana.
+/// On Linux the window is invisible, so GTK never realizes it and `build()` has no window
+/// handle, returning `WindowHandleError(Unavailable)`. Put the WebView directly in the
+/// window's GTK container instead.
 #[cfg(target_os = "linux")]
 fn build_webview(
     builder: WebViewBuilder<'_>,
@@ -1000,7 +968,7 @@ fn build_webview(
 
     let vbox = window
         .default_vbox()
-        .expect("tao siempre crea un vbox en GTK");
+        .expect("tao always creates a GTK vbox");
     builder.build_gtk(vbox)
 }
 
@@ -1012,19 +980,19 @@ fn build_webview(
     builder.build(window)
 }
 
-/// Lanza una firma dentro de la página.
+/// Dispatch a signature inside the page.
 fn dispatch(webview: &wry::WebView, shared: &Rc<RefCell<Shared>>, request_id: u64, url: String) {
     let msg = ToPage { request_id, url };
-    debug!(request_id, "firma solicitada a la página");
+    debug!(request_id, "signature requested from page");
     if let Err(e) = webview.evaluate_script(&msg.to_script()) {
-        error!(request_id, error = %e, "no se pudo inyectar la firma");
+        error!(request_id, error = %e, "could not inject signature");
         shared
             .borrow_mut()
             .resolve(request_id, Err(SignError::EngineGone(e.to_string())));
     }
 }
 
-/// Lanza una petición de texto (o de DOM, si `url` es `None`) dentro de la página.
+/// Dispatch a text request (or DOM request when `url` is `None`) inside the page.
 fn dispatch_text(
     webview: &wry::WebView,
     shared: &Rc<RefCell<Shared>>,
@@ -1033,15 +1001,15 @@ fn dispatch_text(
 ) {
     let msg = ToPageText { request_id, url };
     if let Err(e) = webview.evaluate_script(&msg.to_script()) {
-        error!(request_id, error = %e, "no se pudo inyectar la petición de texto");
+        error!(request_id, error = %e, "could not inject text request");
         shared
             .borrow_mut()
             .resolve_text(request_id, Err(SignError::EngineGone(e.to_string())));
     }
 }
 
-/// Cookies del cookie manager de WebKit, que **sí** incluye las `HttpOnly`
-/// (`docs/04-spec-webview-bridge.md` §Cookies). `document.cookie` no las ve.
+/// Cookies from WebKit's cookie manager, which **does** include `HttpOnly`; `document.cookie`
+/// cannot see them.
 fn cookies_from_webview(webview: &wry::WebView) -> CookieJar {
     match webview.cookies() {
         Ok(cookies) => cookies
@@ -1049,13 +1017,13 @@ fn cookies_from_webview(webview: &wry::WebView) -> CookieJar {
             .map(|c| (c.name().to_string(), c.value().to_string()))
             .collect(),
         Err(e) => {
-            warn!(error = %e, "no se pudieron leer las cookies del webview");
+            warn!(error = %e, "could not read WebView cookies");
             CookieJar::new()
         }
     }
 }
 
-/// Traduce un mensaje del puente a un [`SignOutcome`] y resuelve al que espera.
+/// Translate a bridge message into [`SignOutcome`] and resolve its waiter.
 fn handle_page_message(
     shared: &Rc<RefCell<Shared>>,
     msg: FromPage,
@@ -1088,7 +1056,7 @@ fn handle_page_message(
                 state.session_bootstrap_ready =
                     installed != 0 && has_session && host.ends_with("tiktok.com");
             }
-            debug!(installed, %host, "cookies de sesión ofrecidas al documento");
+            debug!(installed, %host, "session cookies offered to document");
         }
         FromPage::Text {
             request_id,
@@ -1098,10 +1066,10 @@ fn handle_page_message(
             let result = if status == 200 {
                 Ok(body)
             } else {
-                // Sin firma de por medio, un no-200 aquí es un fallo normal del paso 1,
-                // no una detección: no toca `SignOutcome::Rejected`.
+                // Without signing, a non-200 here is a normal step-1 failure, not detection;
+                // do not map it to `SignOutcome::Rejected`.
                 Err(SignError::Transport(format!(
-                    "el paso sin firma respondió HTTP {status}"
+                    "unsigned step returned HTTP {status}"
                 )))
             };
             shared.borrow_mut().resolve_text(request_id, result);
@@ -1111,13 +1079,13 @@ fn handle_page_message(
             message,
         } => {
             if request_id == 0 {
-                // No corresponde a ninguna firma: es el gate de readiness.
-                error!(%message, "el puente falló antes de estar listo");
+                // Not a signing response: this is the readiness gate.
+                error!(%message, "bridge failed before becoming ready");
                 let mut state = shared.borrow_mut();
                 state.ready = false;
                 state.fail_all(|| SignError::SdkNotReady);
             } else {
-                // Puede ser de una firma o de una petición de texto: solo uno de los dos
+                // It may belong to a signature or text request: only one of the two
                 // mapas la tiene.
                 let mut state = shared.borrow_mut();
                 if state.pending_text.contains_key(&request_id) {
@@ -1133,8 +1101,8 @@ fn handle_page_message(
             cookie,
             page,
         } => {
-            // El manager aporta las HttpOnly; la cookie del documento se aplica después
-            // porque es la que refleja la rotación más reciente de `msToken` y de la sesión
+            // The manager supplies HttpOnly cookies; document cookies are merged afterward
+            // because they reflect the latest `msToken` and session rotation.
             // inyectada en WebKitGTK.
             let mut cookies = jar_from_webview;
             cookies.merge(&CookieJar::parse(&cookie));
@@ -1149,10 +1117,10 @@ fn handle_page_message(
     }
 }
 
-/// Alinea los parámetros que firma Rust con el entorno que ve el webview real.
+/// Align parameters signed by Rust with the environment seen by the real WebView.
 fn apply_page_env(preset: &Arc<Mutex<Preset>>, env: &PageEnv) {
     let Ok(mut current) = preset.lock() else {
-        warn!("no se pudo actualizar el preset desde el entorno de la página");
+        warn!("could not update preset from page environment");
         return;
     };
 
@@ -1176,10 +1144,10 @@ fn apply_page_env(preset: &Arc<Mutex<Preset>>, env: &PageEnv) {
     }
 }
 
-/// Clasifica la respuesta ya repetida desde Rust.
+/// Classify the response replayed by Rust.
 ///
-/// El punto delicado: un 200 con cuerpo vacío o con `push_server` vacío es **rechazo**,
-/// no un error transitorio (`docs/06-risks-and-ops.md` §2).
+/// The critical distinction: a 200 with an empty body or empty `push_server` is **rejection**,
+/// not a transient error.
 fn build_outcome(
     status: u16,
     url: &str,
@@ -1211,7 +1179,7 @@ fn build_outcome(
     })
 }
 
-/// Valor de un parámetro de la query, ya decodificado en lo que necesitamos.
+/// Query parameter value, decoded as needed.
 fn query_param(url: &str, name: &str) -> Option<String> {
     let query = url.split_once('?')?.1;
     query
@@ -1225,7 +1193,7 @@ fn query_param(url: &str, name: &str) -> Option<String> {
         })
 }
 
-/// Percent-encoding de un valor de query. Los valores de firma llevan `/`, `+` y `=`.
+/// Percent-encode a query value. Signature values contain `/`, `+`, and `=`.
 fn urlencode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for b in value.bytes() {
@@ -1239,8 +1207,8 @@ fn urlencode(value: &str) -> String {
     out
 }
 
-/// `sec-ch-ua-platform` coherente con el preset. Si no cuadra con el UA, es una
-/// incoherencia más de las que TikTok mira.
+/// `sec-ch-ua-platform` value consistent with the preset. A mismatch with the UA is another
+/// inconsistency TikTok checks.
 fn platform_hint(preset: &Preset) -> &'static str {
     match preset.device.os.as_str() {
         "windows" => "\"Windows\"",
@@ -1249,10 +1217,10 @@ fn platform_hint(preset: &Preset) -> &'static str {
     }
 }
 
-/// Cliente HTTP para repetir la petición firmada.
+/// HTTP client for replaying signed requests.
 ///
-/// Sin redirecciones automáticas: un 3xx aquí sería TikTok mandándonos a otro sitio, y
-/// seguirlo enmascararía el rechazo.
+/// No automatic redirects: a 3xx would mean TikTok sent us elsewhere, and following it
+/// would mask rejection.
 fn http_client(user_agent: &str) -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(user_agent.to_string())
@@ -1325,8 +1293,8 @@ mod tests {
             CookieJar::parse("msToken=abc; ttwid=xyz"),
             "UA-de-prueba",
         );
-        let signed = outcome.ok().expect("debería ser una firma válida");
-        // El WS necesita exactamente estas cookies y este UA, no otros.
+        let signed = outcome.ok().expect("expected a valid signature");
+        // The WebSocket needs exactly these cookies and this UA, not different ones.
         assert_eq!(signed.cookies.get("ttwid"), Some("xyz"));
         assert_eq!(signed.user_agent, "UA-de-prueba");
         assert!(signed.signed_url.contains("X-Gnarly"));

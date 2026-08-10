@@ -56,7 +56,7 @@ fn parse_curl(raw: &str) -> Result<CurlFixture> {
         match token.as_str() {
             "curl" | "--compressed" | "--location" | "-L" | "-s" | "--silent" => i += 1,
             "-H" | "--header" => {
-                let value = tokens.get(i + 1).context("-H sin valor")?;
+                let value = tokens.get(i + 1).context("-H requires a value")?;
                 if let Some((k, v)) = value.split_once(':') {
                     let (k, v) = (k.trim(), v.trim());
                     if k.eq_ignore_ascii_case("cookie") {
@@ -68,7 +68,7 @@ fn parse_curl(raw: &str) -> Result<CurlFixture> {
                 i += 2;
             }
             "-b" | "--cookie" => {
-                let value = tokens.get(i + 1).context("-b sin valor")?;
+                let value = tokens.get(i + 1).context("-b requires a value")?;
                 fixture.cookies.merge(&CookieJar::parse(value));
                 i += 2;
             }
@@ -136,13 +136,13 @@ async fn main() -> Result<()> {
     let mut pb_path = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--pb" => pb_path = Some(args.next().context("--pb sin ruta")?),
+            "--pb" => pb_path = Some(args.next().context("--pb requires a path")?),
             other => bail!("argumento desconocido: {other}"),
         }
     }
 
     let raw = std::fs::read_to_string(&curl_path)
-        .with_context(|| format!("no se pudo leer {curl_path}"))?;
+        .with_context(|| format!("could not read {curl_path}"))?;
     let fixture = parse_curl(&raw)?;
 
     let room_id = fixture
@@ -221,10 +221,7 @@ async fn main() -> Result<()> {
     .await
     .context("could not open WebSocket")?;
 
-    println!(
-        "      conectado en {:?} desde la firma",
-        signed_at.elapsed()
-    );
+    println!("      connected in {:?} after signing", signed_at.elapsed());
     if !connection.handshake_options().is_empty() {
         println!(
             "      handshake-options: {:?}",
