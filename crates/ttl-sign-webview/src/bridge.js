@@ -407,6 +407,46 @@
     };
   }
 
+  // --- Verification challenge ------------------------------------------------------
+  //
+  // TikTok loads `secsdk`, which renders a verification puzzle into the page when it wants
+  // to check that a human is present. Detection is by observable effect — a captcha
+  // container that is actually laid out — rather than by a status code, because the codes
+  // that accompany it have not been observed and guessing them would produce false
+  // positives on ordinary errors.
+  //
+  // This reports the challenge; it does not attempt to answer it. The engine's remedy is to
+  // show the window so a person can solve it, exactly as the login flow does.
+  var CAPTCHA_SELECTORS = [
+    "#captcha_container",
+    "[id*='captcha']",
+    "[class*='captcha']",
+    "[class*='secsdk-captcha']",
+  ];
+  window.__ttlChallenge = function () {
+    var found = null;
+    try {
+      for (var i = 0; i < CAPTCHA_SELECTORS.length && !found; i++) {
+        var nodes = document.querySelectorAll(CAPTCHA_SELECTORS[i]);
+        for (var j = 0; j < nodes.length; j++) {
+          var node = nodes[j];
+          // An element that exists but is not rendered is scaffolding, not a challenge.
+          var box = node.getBoundingClientRect();
+          if (box.width > 0 && box.height > 0) {
+            found = {
+              selector: CAPTCHA_SELECTORS[i],
+              id: node.id || "",
+              width: Math.round(box.width),
+              height: Math.round(box.height),
+            };
+            break;
+          }
+        }
+      }
+    } catch (e) {}
+    return JSON.stringify({ present: !!found, detail: found });
+  };
+
   var sleep = function (ms) {
     return new Promise(function (r) { setTimeout(r, ms); });
   };

@@ -138,6 +138,60 @@ pub fn gift_list_url(room_id: &str) -> String {
     webcast_url("gift/list", room_id)
 }
 
+/// TikTok refused a webcast request while still answering `200`.
+///
+/// Every `webcast.tiktok.com` JSON endpoint reports success as `status_code: 0` and failure
+/// as a non-zero code with a human-readable message. Deliberately **not** an enum of known
+/// codes: the interesting refusals (rate limiting, verification) have not been observed
+/// first-hand, and inventing constants for them would produce a classifier that silently
+/// mislabels whatever TikTok actually sends. The code and message are passed through so a
+/// caller can log and react to the real value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebcastRefusal {
+    pub status_code: i64,
+    pub message: String,
+}
+
+impl std::fmt::Display for WebcastRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.message.is_empty() {
+            write!(
+                f,
+                "TikTok refused the request (status_code={})",
+                self.status_code
+            )
+        } else {
+            write!(
+                f,
+                "TikTok refused the request (status_code={}): {}",
+                self.status_code, self.message
+            )
+        }
+    }
+}
+
+/// Read the refusal out of a webcast JSON envelope, if it is one.
+///
+/// `None` means the response reported success, or is not a webcast envelope at all.
+pub fn webcast_refusal(raw: &str) -> Option<WebcastRefusal> {
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let status_code = value.get("status_code")?.as_i64()?;
+    if status_code == 0 {
+        return None;
+    }
+    let data = value.get("data");
+    // TikTok puts the reason in `data.message`, and sometimes only in `data.prompts`.
+    let message = data
+        .map(|data| string_at(data, "message"))
+        .filter(|message| !message.is_empty())
+        .or_else(|| data.map(|data| string_at(data, "prompts")))
+        .unwrap_or_default();
+    Some(WebcastRefusal {
+        status_code,
+        message,
+    })
+}
+
 /// The broadcaster of a room.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RoomOwner {
@@ -591,6 +645,41 @@ mod tests {
         assert!(RoomInfo::from_json(rejected).is_none());
         assert!(RoomInfo::from_json("not json").is_none());
         assert!(parse_gift_list(rejected).is_none());
+    }
+
+    /// A refusal must be reported as such, with TikTok's own code and words, instead of
+    /// being flattened into "could not parse".
+    #[test]
+    fn a_refusal_is_read_out_of_the_envelope() {
+        // Shape captured from a real `ranklist/online_audience` rejection.
+        let raw = r#"{"data":{"message":"Request params error","prompts":"Request params error"},
+                      "extra":{"now":1786378962758},"status_code":10011}"#;
+        let refusal = webcast_refusal(raw).expect("this is a refusal");
+        assert_eq!(refusal.status_code, 10011);
+        assert_eq!(refusal.message, "Request params error");
+        assert!(refusal.to_string().contains("10011"));
+        assert!(refusal.to_string().contains("Request params error"));
+    }
+
+    #[test]
+    fn a_successful_envelope_is_not_a_refusal() {
+        assert!(webcast_refusal(ROOM_INFO_JSON).is_none());
+        // Not a webcast envelope at all.
+        assert!(webcast_refusal(r#"{"anything":1}"#).is_none());
+        assert!(webcast_refusal("<html>").is_none());
+    }
+
+    /// Some refusals carry the reason only in `prompts`, and some carry no words at all.
+    #[test]
+    fn a_refusal_without_a_message_still_reports_its_code() {
+        let only_prompts = webcast_refusal(r#"{"data":{"prompts":"slow down"},"status_code":8}"#)
+            .expect("this is a refusal");
+        assert_eq!(only_prompts.message, "slow down");
+
+        let bare = webcast_refusal(r#"{"status_code":99}"#).expect("this is a refusal");
+        assert_eq!(bare.status_code, 99);
+        assert!(bare.message.is_empty());
+        assert!(bare.to_string().contains("99"));
     }
 
     #[test]

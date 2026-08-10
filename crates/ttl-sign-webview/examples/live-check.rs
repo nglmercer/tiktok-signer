@@ -46,7 +46,8 @@ fn main() -> ! {
         .init();
 
     let requested_user = std::env::args().nth(1);
-    // The flow currently requires authentication; see step 3.
+    // A session is optional: the whole flow was verified anonymously. One is used when
+    // available only because it is the closer match to a real viewer.
     let (config, session_source) = configure_session();
     println!("session: {session_source}");
 
@@ -63,7 +64,11 @@ fn main() -> ! {
     })
 }
 
-/// `TTL_SESSION_ID` takes precedence; otherwise use the session saved by `login`.
+/// Guest by default; an account is opt-in.
+///
+/// Listening needs no identity, and `sessionid` *is* the account: attaching one makes TikTok
+/// attribute everything this automated browser does to a real user. A stored session is
+/// therefore used only when explicitly asked for, via `TTL_SESSION_ID` or `TTL_USE_SESSION=1`.
 fn configure_session() -> (EngineConfig, String) {
     if let Ok(id) = std::env::var("TTL_SESSION_ID") {
         if !id.is_empty() {
@@ -73,23 +78,29 @@ fn configure_session() -> (EngineConfig, String) {
             );
         }
     }
-    if let Some(path) = session::configured_path() {
-        if let Ok(Some(jar)) = session::load(&path) {
-            if session::is_logged_in(&jar) {
-                let source = format!("authenticated ({})", path.display());
-                return (
-                    page_transport_config(EngineConfig {
-                        session: jar,
-                        ..EngineConfig::default()
-                    }),
-                    source,
-                );
+    if std::env::var("TTL_USE_SESSION").is_ok_and(|value| value == "1") {
+        if let Some(path) = session::configured_path() {
+            if let Ok(Some(jar)) = session::load(&path) {
+                if session::is_logged_in(&jar) {
+                    let source = format!("authenticated ({})", path.display());
+                    return (
+                        page_transport_config(EngineConfig {
+                            session: jar,
+                            ..EngineConfig::default()
+                        }),
+                        source,
+                    );
+                }
             }
         }
+        return (
+            page_transport_config(EngineConfig::default()),
+            "guest (TTL_USE_SESSION=1 was set, but no stored session was found)".into(),
+        );
     }
     (
         page_transport_config(EngineConfig::default()),
-        "anonymous — log in with: cargo run -p ttl-sign-webview --example login".into(),
+        "guest — no account needed to listen (TTL_USE_SESSION=1 to use a stored one)".into(),
     )
 }
 

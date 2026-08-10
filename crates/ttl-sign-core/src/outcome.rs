@@ -74,6 +74,24 @@ pub enum SignError {
     /// The response could not be decoded.
     #[error("could not decode response: {0}")]
     Decode(String),
+
+    /// TikTok answered `200` and refused in the envelope (`status_code != 0`).
+    ///
+    /// Distinct from [`SignError::Transport`] and [`SignError::Decode`] because it is
+    /// neither a network problem nor a parsing bug: the request arrived and was understood.
+    /// Whether retrying helps depends on the code, so this carries the raw value instead of
+    /// deciding for the caller.
+    #[error("{0}")]
+    Refused(crate::room::WebcastRefusal),
+}
+
+impl SignError {
+    /// Did TikTok understand the request and refuse it?
+    ///
+    /// Retrying a refusal in a tight loop is what turns a soft limit into a hard one.
+    pub fn is_refusal(&self) -> bool {
+        matches!(self, Self::Refused(_))
+    }
 }
 
 /// The three possible signing outcomes. There is no fourth.

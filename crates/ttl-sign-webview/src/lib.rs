@@ -101,17 +101,23 @@ pub struct EngineConfig {
     /// parameters returned by `/im/fetch/`; two sockets for the same room/session cause the
     /// second one to remain silent.
     pub block_page_websockets: bool,
-    /// Cookies from a real account. Empty means anonymous session.
+    /// Cookies from a real account. **Empty is the recommended default.**
     ///
-    /// Verified on 2026-08-10 against real live rooms: **the flow requires it**.
-    /// `/webcast/room/enter/` literally returns `User doesn't login`, and
-    /// `/webcast/im/fetch/` returns 200 with an empty body, the same silent rejection.
-    /// Session-independent endpoints (`room/info`, `room/check_alive`) respond through the
-    /// same signing path, so the problem is neither signing nor replay.
+    /// Listening does not need an account. Verified anonymously against a real live room on
+    /// 2026-08-10: channel discovery, `unique_id` → `room_id`, `/webcast/room/info/`,
+    /// `/webcast/gift/list/`, and the page-owned WebSocket with its chat events all work
+    /// with an empty jar, because TikTok's own page serves logged-out viewers.
     ///
-    /// This exposes an account session to the signing component. With `sessionid`, the
-    /// WebSocket also **requires** the cookie in the handshake or rejects with
-    /// "illegal secret key".
+    /// The earlier "the flow requires a session" note applied to the **replay** path, where
+    /// Rust re-issued `/webcast/im/fetch/` itself: that endpoint answers 200 with an empty
+    /// body and `/webcast/room/enter/` says `User doesn't login`. The page relay does not
+    /// use that path.
+    ///
+    /// Set this only for what genuinely needs an identity (subscriber-only rooms, acting as
+    /// a user). It is a real cost: `sessionid` **is** the account, so anything TikTok
+    /// penalises is then attributed to it rather than to a disposable guest device. It is
+    /// not a remedy for rate limiting — see [`Signer::reload`] and a fresh guest identity
+    /// for that.
     pub session: CookieJar,
 }
 
@@ -198,6 +204,11 @@ enum UserEvent {
     SubscribePageWebSocket {
         reply: oneshot::Sender<mpsc::Receiver<PageWebSocketEvent>>,
     },
+    /// Show or hide the window so a person can answer a verification.
+    SetVisible {
+        visible: bool,
+        reply: oneshot::Sender<()>,
+    },
     /// Wake the event loop from the IPC handler.
     ///
     /// The handler runs outside the event-loop closure. When it marks the instance ready,
@@ -258,6 +269,30 @@ pub struct DecodedSchemaEvent {
     pub message_id: u64,
     pub method: String,
     pub event: SchemaMessage,
+}
+
+/// A verification puzzle TikTok rendered into the page.
+///
+/// Reported, never answered. The supported remedy is [`Signer::set_window_visible`]: show
+/// the window and let a person solve it, which is the same mechanism the login flow uses.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct Challenge {
+    /// Is a verification currently rendered and laid out?
+    pub present: bool,
+    /// What matched, for logging. `None` when nothing is showing.
+    #[serde(default)]
+    pub detail: Option<ChallengeDetail>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct ChallengeDetail {
+    pub selector: String,
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
 }
 
 /// Page result: an already signed URL and the cookies used to sign it. Rust fetches the body
@@ -545,6 +580,9 @@ impl Signer {
     /// room's live page, where the SDK is loaded.
     pub async fn room_info(&self, room_id: &str) -> Result<RoomInfo, SignError> {
         let body = self.fetch_text(&room::room_info_url(room_id)).await?;
+        if let Some(refusal) = room::webcast_refusal(&body) {
+            return Err(SignError::Refused(refusal));
+        }
         RoomInfo::from_json(&body).ok_or_else(|| {
             SignError::Decode(format!("unexpected room/info response for room {room_id}"))
         })
@@ -557,6 +595,9 @@ impl Signer {
     /// IPC bridge, so a short [`EngineConfig::sign_timeout`] may need raising.
     pub async fn gift_list(&self, room_id: &str) -> Result<Vec<Gift>, SignError> {
         let body = self.fetch_text(&room::gift_list_url(room_id)).await?;
+        if let Some(refusal) = room::webcast_refusal(&body) {
+            return Err(SignError::Refused(refusal));
+        }
         room::parse_gift_list(&body).ok_or_else(|| {
             SignError::Decode(format!("unexpected gift/list response for room {room_id}"))
         })
@@ -695,6 +736,49 @@ impl Signer {
             }
         }
         None
+    }
+
+    /// Is TikTok currently showing a verification puzzle?
+    ///
+    /// Worth checking when a request comes back as [`SignError::Refused`]: it separates "the
+    /// request was wrong" from "TikTok wants to see a human", which have different remedies.
+    pub async fn challenge(&self) -> Result<Challenge, SignError> {
+        let raw = self
+            .eval("window.__ttlChallenge ? window.__ttlChallenge() : '{}'")
+            .await?;
+        serde_json::from_str(&raw)
+            .map_err(|error| SignError::Decode(format!("unreadable challenge state: {error}")))
+    }
+
+    /// Wait for a verification to be solved, polling until `timeout`.
+    ///
+    /// Pair with [`Signer::set_window_visible`]: show the window, call this, and continue
+    /// once the person has answered. Returns immediately when nothing is being challenged.
+    pub async fn wait_for_challenge(&self, timeout: Duration) -> Result<(), SignError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if !self.challenge().await?.present {
+                return Ok(());
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(SignError::LoginTimeout(timeout.as_secs()));
+            }
+            tokio::time::sleep(POLL_LOGIN.min(remaining)).await;
+        }
+    }
+
+    /// Show or hide the engine window.
+    ///
+    /// The engine runs invisibly; this makes it possible to hand the page to a person when
+    /// TikTok asks for verification, then hide it again afterwards.
+    pub async fn set_window_visible(&self, visible: bool) -> Result<(), SignError> {
+        let (tx, rx) = oneshot::channel();
+        self.proxy
+            .send_event(UserEvent::SetVisible { visible, reply: tx })
+            .map_err(|_| SignError::EngineGone("event loop has closed".into()))?;
+        rx.await
+            .map_err(|_| SignError::EngineGone("engine discarded the request".into()))
     }
 
     /// Prevent the page from opening its own WebSockets from now on.
@@ -1190,6 +1274,11 @@ where
                 let (tx, rx) = mpsc::channel(PAGE_WS_QUEUE_CAPACITY);
                 shared.borrow_mut().page_ws_subscribers.push(tx);
                 let _ = reply.send(rx);
+            }
+            Event::UserEvent(UserEvent::SetVisible { visible, reply }) => {
+                window.set_visible(visible);
+                info!(visible, "engine window visibility changed");
+                let _ = reply.send(());
             }
             // Only used to reach the queue-draining logic below.
             Event::UserEvent(UserEvent::Wake) => {}

@@ -56,6 +56,34 @@ Call both after navigating to the room's live page. `gift_list` returns a few me
 (626 gifts in the verified room), so request it once per session and keep the table: gift
 events carry only a `gift_id`, and pricing them requires it.
 
+### Refusals and verification
+
+Webcast JSON endpoints answer `200` and report failure inside the envelope. A non-zero
+`status_code` becomes `SignError::Refused`, carrying TikTok's own code and message rather
+than being flattened into a parse error:
+
+```text
+room_info("1") -> TikTok refused the request (status_code=10011): Request params error
+```
+
+There is deliberately **no table of known codes**. Rate-limit and verification codes have
+not been observed first-hand here, and constants invented for them would mislabel whatever
+TikTok actually sends. Check `error.is_refusal()`, log the real code, and back off.
+
+When a refusal might mean "prove you are human", ask the page directly:
+
+```rust
+if signer.challenge().await?.present {
+    signer.set_window_visible(true).await?;      // hand the puzzle to a person
+    signer.wait_for_challenge(Duration::from_secs(180)).await?;
+    signer.set_window_visible(false).await?;
+}
+```
+
+Detection is by observable effect — a captcha container that is actually laid out — not by
+guessed status codes, so an ordinary error is not reported as a challenge. Measured as
+`present: false` on a healthy page.
+
 ### Recovery
 
 `subscribe_live_events` and `subscribe_schema_events` survive the page losing its transport.
@@ -83,7 +111,24 @@ cargo run -p ttl-sign-webview --example endpoint-probe -- <user>
 cargo run -p ttl-sign-webview --example fetch-dump -- <user>
 cargo run -p ttl-sign-webview --example ws-probe -- <user>
 cargo run -p ttl-sign-webview --example page-probe -- <user> "<js>"
+cargo run -p ttl-sign-webview --example limit-probe -- [user] [requests]
 ```
+
+`limit-probe` captures what a refusal actually looks like: it reports the verification
+infrastructure the page carries, then calls `room/info` repeatedly as a guest until TikTok
+stops answering `status_code: 0`. Use it to obtain real signatures before writing anything
+that reacts to them.
+
+### Accounts are optional
+
+Listening works as a **guest**. Verified anonymously against a real live room on
+2026-08-10: discovery, `unique_id` → `room_id`, `room/info`, `gift/list`, and the page
+WebSocket with its chat events all work with no cookies at all, because TikTok's page serves
+logged-out viewers.
+
+Prefer guest. `sessionid` *is* the account, so using one attributes everything the automated
+browser does to it, and an account is not a fix for rate limiting — a fresh guest identity
+is. Log in only for what genuinely needs an identity, such as subscriber-only rooms.
 
 ### Log in
 
