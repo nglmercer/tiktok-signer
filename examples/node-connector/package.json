@@ -5,9 +5,16 @@
   "type": "module",
   "description": "Verifies tiktok-live-connector against the local sign server",
   "scripts": {
-    "verify": "node verify-signer.mjs"
+    "typecheck": "tsc --noEmit",
+    "verify": "bun run verify-signer.ts",
+    "verify:node": "tsx verify-signer.ts"
   },
   "dependencies": {
     "tiktok-live-connector": "^2.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
   }
 }

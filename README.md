@@ -195,8 +195,13 @@ Stream:
 ```sh
 cargo run -p ttl-sign-server                      # terminal 1
 cd examples/node-connector && npm install
-node verify-signer.mjs <username>                 # terminal 2
+bun run verify-signer.ts <username>               # terminal 2
+npm run verify:node -- <username>                 # or tsx, on plain Node
+npm run typecheck                                 # types only, no live channel
 ```
+
+The example is TypeScript because the connector types its event handlers, so each payload is
+inferred from the protobuf schema.
 
 The Node client calls `GET /webcast/rooms/{room_id}/connect` (the Python client uses
 `/webcast/fetch`); both are served, and the connect route also returns `X-Room-Id`, which
