@@ -6,7 +6,8 @@
 //! 1. discover who is live (rendered /live DOM, unsigned)
 //! 2. unique_id → room_id + status (unsigned JSON lookup)
 //! 3. navigate to the live page and let TikTok open its own WebSocket
-//! 4. relay and decode the page-owned WebSocket frames over IPC
+//! 4. read room metadata and the gift table (signed by the page, read as JSON)
+//! 5. relay and decode the page-owned WebSocket frames over IPC
 //! ```
 //!
 //! This is the F2 acceptance criterion (and F4 if frames arrive).
@@ -26,14 +27,14 @@ use std::time::{Duration, Instant};
 
 use flate2::read::GzDecoder;
 use ttl_sign_core::proto::{LiveEvent, PushFrame, WebcastEventBatch};
-use ttl_sign_core::SchemaValue;
-use ttl_sign_webview::{
-    run, session, DecodedSchemaEvent, EngineConfig, PageWebSocketEvent, Signer,
-};
+use ttl_sign_core::{decode_webcast_message, Gift, RoomInfo, SchemaMessage, SchemaValue};
+use ttl_sign_webview::{is_webcast_socket, run, session, EngineConfig, PageWebSocketEvent, Signer};
 
 const PAGE_TRANSPORT_TIMEOUT: Duration = Duration::from_secs(45);
 const REQUIRED_MESSAGE_FRAMES: usize = 3;
 const MAX_EVENT_TEXT_CHARS: usize = 240;
+/// The gift table is a few megabytes of JSON crossing the IPC bridge.
+const REST_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn main() -> ! {
     tracing_subscriber::fmt()
@@ -94,6 +95,7 @@ fn configure_session() -> (EngineConfig, String) {
 
 fn page_transport_config(mut config: EngineConfig) -> EngineConfig {
     config.block_page_websockets = false;
+    config.sign_timeout = REST_TIMEOUT;
     config
 }
 
@@ -101,11 +103,11 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
     // --- 1. Who is live? -------------------------------------------------------------
     let user = match requested_user {
         Some(user) => {
-            println!("[1/4] manually selected channel: @{user}");
+            println!("[1/5] manually selected channel: @{user}");
             user
         }
         None => {
-            println!("[1/4] waiting for /live to render channels…");
+            println!("[1/5] waiting for /live to render channels…");
             let channels = poll_channels(&signer).await?;
             for channel in channels.iter().take(10) {
                 println!(
@@ -127,7 +129,7 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
     };
 
     // --- 2. unique_id → room_id ------------------------------------------------------
-    println!("\n[2/4] resolving @{user} → room_id…");
+    println!("\n[2/5] resolving @{user} → room_id…");
     let lookup = signer
         .room_lookup(&user)
         .await
@@ -149,23 +151,53 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
     // This is intentionally independent of /webcast/im/fetch/. TikTok's own page signs
     // and opens the socket, enters the room, and sends heartbeats. The initialization
     // bridge mirrors transport frames to Rust without changing the page connection.
+    // One subscription, not two. Subscribing twice relays and decodes every frame twice and
+    // lets the two streams interleave, so schema lines drift away from the events they
+    // describe. Each frame is decoded both ways in place below instead.
     let mut page_events = signer
         .subscribe_page_websocket()
         .await
         .map_err(|e| format!("could not subscribe to page WebSocket: {e}"))?;
-    let mut schema_events = signer
-        .subscribe_schema_events()
-        .await
-        .map_err(|e| format!("could not subscribe to schema events: {e}"))?;
 
     let room_page = ttl_sign_core::room::live_page_url(&user);
-    println!("\n[3/4] navigating to {room_page} …");
+    println!("\n[3/5] navigating to {room_page} …");
     signer
         .navigate(&room_page)
         .await
         .map_err(|e| format!("could not load live page: {e}"))?;
 
-    println!("[4/4] waiting for TikTok's page WebSocket and relayed frames…");
+    // --- 4. Room state ---------------------------------------------------------------
+    //
+    // The event stream reports *changes*; this reports the room as it already is. TikTok
+    // signs these requests through the page's patched `fetch`, and unlike
+    // `/webcast/im/fetch/` they answer with CORS headers, so the body is readable.
+    println!("\n[4/5] reading room metadata…");
+    let room_info = signer
+        .room_info(&lookup.room_id)
+        .await
+        .map_err(|e| format!("room/info failed: {e}"))?;
+    print_room_info(&room_info);
+
+    // A missing gift table degrades gift events to bare IDs; it does not invalidate the
+    // transport this check is about.
+    let gifts = match signer.gift_list(&lookup.room_id).await {
+        Ok(gifts) => {
+            println!("      gifts: {} available", gifts.len());
+            if let Some(cheapest) = gifts.iter().min_by_key(|gift| gift.diamond_count) {
+                println!(
+                    "        cheapest: {} ({} diamonds, id={})",
+                    cheapest.name, cheapest.diamond_count, cheapest.id
+                );
+            }
+            gifts
+        }
+        Err(error) => {
+            println!("      gifts: unavailable ({error})");
+            Vec::new()
+        }
+    };
+
+    println!("\n[5/5] waiting for TikTok's page WebSocket and relayed frames…");
     let deadline = tokio::time::sleep(PAGE_TRANSPORT_TIMEOUT);
     tokio::pin!(deadline);
 
@@ -185,7 +217,7 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
                     return Err("page WebSocket relay closed before the WebView".into());
                 };
                 match event {
-                    PageWebSocketEvent::Open { url } if is_live_transport(&url) => {
+                    PageWebSocketEvent::Open { url } if is_webcast_socket(&url) => {
                         println!(
                             "      page socket opened: {}",
                             url.split('?').next().unwrap_or(&url)
@@ -217,7 +249,7 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
                                                 match message.decode_event() {
                                                     Ok(event) => {
                                                         decoded_events += 1;
-                                                        print_event(message.message_id, &event);
+                                                        print_event(message.message_id, &event, &gifts);
                                                     }
                                                     Err(error) => {
                                                         decode_errors += 1;
@@ -225,6 +257,29 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
                                                             "        [decode-error] method={} id={} error={error}",
                                                             message.method,
                                                             message.message_id
+                                                        );
+                                                    }
+                                                }
+                                                // Decode the same payload against the full
+                                                // schema snapshot here, so each schema line
+                                                // sits directly under its own event.
+                                                match decode_webcast_message(
+                                                    &message.method,
+                                                    &message.payload,
+                                                ) {
+                                                    Ok(event) => {
+                                                        schema_event_count += 1;
+                                                        print_schema_event(
+                                                            message.message_id,
+                                                            &message.method,
+                                                            &event,
+                                                        );
+                                                    }
+                                                    Err(error) => {
+                                                        schema_decode_errors += 1;
+                                                        println!(
+                                                            "        [schema-decode-error] method={} error={error}",
+                                                            message.method
                                                         );
                                                     }
                                                 }
@@ -266,32 +321,11 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
                     }
                     PageWebSocketEvent::Error { url, message }
                         if active_url.as_deref() == Some(url.as_str())
-                            || (active_url.is_none() && is_live_transport(&url)) =>
+                            || (active_url.is_none() && is_webcast_socket(&url)) =>
                     {
                         return Err(format!("TikTok's page WebSocket failed: {message}"));
                     }
                     _ => {}
-                }
-            }
-            schema_event = schema_events.recv() => {
-                let Some(schema_event) = schema_event else {
-                    return Err("schema event relay closed before the WebView".into());
-                };
-                match schema_event {
-                    Ok(event) => {
-                        schema_event_count += 1;
-                        print_schema_event(&event);
-                        if message_frames >= REQUIRED_MESSAGE_FRAMES
-                            && decoded_events > 0
-                            && schema_event_count > 0
-                        {
-                            break;
-                        }
-                    }
-                    Err(error) => {
-                        schema_decode_errors += 1;
-                        println!("        [schema-decode-error] {error}");
-                    }
                 }
             }
         }
@@ -335,10 +369,6 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
     Ok(())
 }
 
-fn is_live_transport(url: &str) -> bool {
-    url.starts_with("wss://") && (url.contains("/webcast/im/") || url.contains("webcast-ws"))
-}
-
 fn decode_event_batch(frame: &PushFrame) -> Result<WebcastEventBatch, String> {
     let payload =
         if frame.compress_type() == Some("gzip") || frame.payload.starts_with(&[0x1f, 0x8b]) {
@@ -354,7 +384,31 @@ fn decode_event_batch(frame: &PushFrame) -> Result<WebcastEventBatch, String> {
     WebcastEventBatch::decode(&payload).map_err(|error| error.to_string())
 }
 
-fn print_event(message_id: u64, event: &LiveEvent) {
+/// Room state as it stands before the first event arrives.
+fn print_room_info(info: &RoomInfo) {
+    println!(
+        "      @{} ({}) — {} followers",
+        info.owner.unique_id, info.owner.nickname, info.owner.follower_count
+    );
+    println!(
+        "      title={:?} status={} live={}",
+        info.title,
+        info.status,
+        info.is_live()
+    );
+    println!(
+        "      viewers={} total_viewers={} likes={} comments={} shares={} new_follows={}",
+        info.viewer_count,
+        info.total_viewers,
+        info.like_count,
+        info.comment_count,
+        info.share_count,
+        info.follow_count
+    );
+    println!("      started_at={} (unix)", info.create_time);
+}
+
+fn print_event(message_id: u64, event: &LiveEvent, gifts: &[Gift]) {
     match event {
         LiveEvent::Chat { user, content } => println!(
             "        [chat] id={message_id} @{}: {}",
@@ -366,10 +420,24 @@ fn print_event(message_id: u64, event: &LiveEvent) {
             gift_id,
             repeat_count,
             repeat_end,
-        } => println!(
-            "        [gift] id={message_id} @{} gift_id={gift_id} repeat={repeat_count} end={repeat_end}",
-            user.label()
-        ),
+        } => {
+            // A gift event carries only an id; the gift table turns it into a name and a
+            // diamond value.
+            let gift = gifts.iter().find(|gift| gift.id == *gift_id);
+            let named = match gift {
+                Some(gift) => format!(
+                    "{} ({} diamonds ×{repeat_count} = {})",
+                    gift.name,
+                    gift.diamond_count,
+                    gift.diamond_count.saturating_mul(*repeat_count)
+                ),
+                None => format!("gift_id={gift_id} ×{repeat_count}"),
+            };
+            println!(
+                "        [gift] id={message_id} @{} {named} end={repeat_end}",
+                user.label()
+            );
+        }
         LiveEvent::Like { user, count, total } => println!(
             "        [like] id={message_id} @{} count={count} total={total}",
             user.label()
@@ -407,16 +475,15 @@ fn print_event(message_id: u64, event: &LiveEvent) {
     }
 }
 
-fn print_schema_event(event: &DecodedSchemaEvent) {
+fn print_schema_event(message_id: u64, method: &str, event: &SchemaMessage) {
     println!(
-        "        [schema] id={} method={} type={}",
-        event.message_id,
-        event.method,
-        event.event.schema_name()
+        "          [schema] id={message_id} method={method} type={}{}",
+        event.schema_name(),
+        if event.truncated { " (truncated)" } else { "" }
     );
-    if let Some(field) = event.event.field_named("content") {
+    if let Some(field) = event.field_named("content") {
         if let SchemaValue::Text(content) = &field.value {
-            println!("          content={}", one_line(content));
+            println!("            content={}", one_line(content));
         }
     }
 }

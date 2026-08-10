@@ -31,4 +31,7 @@ pub use outcome::{RejectReason, SignError, SignOutcome, SignedFetch};
 pub use params::{FetchParams, Query, WsParams};
 pub use preset::{DevicePreset, LocationPreset, Preset, ScreenPreset};
 pub use proto::FetchResult;
-pub use room::{extract_live_channels, room_lookup_url, LiveChannel, RoomLookup};
+pub use room::{
+    extract_live_channels, gift_list_url, is_live_status, parse_gift_list, room_info_url,
+    room_lookup_url, Gift, LiveChannel, RoomInfo, RoomLookup, RoomOwner,
+};

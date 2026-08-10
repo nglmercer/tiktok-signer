@@ -22,6 +22,7 @@
   });
   const ASYNC_EVENT_DELAY_MS = 0;
   const MAX_CAPTURES = 40;
+  const MAX_WS_URLS = 40;
   const MAX_CAPTURE_BODY_BYTES = 400000;
   const MAX_CAPTURE_TEXT_BYTES = 400;
   const MAX_RELAY_FRAME_BYTES = 8 * 1024 * 1024;
@@ -263,7 +264,12 @@
   BlockedWebSocket.CLOSED = WEBSOCKET_STATES.CLOSED;
   var WrappedWebSocket = function (url, protocols) {
     try {
+      // Capped like `__ttlCaptures`: a long session reconnects many times, and only the
+      // most recent URIs are ever compared against.
       window.__ttlWsUrls.push(String(url));
+      while (window.__ttlWsUrls.length > MAX_WS_URLS) {
+        window.__ttlWsUrls.shift();
+      }
     } catch (e) {}
     if (window.__ttlBlockWs) {
       // Intercepting is preferable to throwing: an exception here would break the player

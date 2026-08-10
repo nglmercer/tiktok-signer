@@ -31,6 +31,7 @@ received room-entry, heartbeat, and `msg` frames without Euler and without calli
 |---|---|
 | Discover live channels | Works through the rendered `/live` DOM. |
 | `unique_id` → `room_id` | Works without signing or a display. |
+| Room info and gift table | Works; `/webcast/room/info/` and `/webcast/gift/list/` are read as JSON from the page. |
 | Page-owned WebSocket | Works; TikTok signs and opens it. |
 | Room entry and heartbeat | Managed by TikTok's page and observed over IPC. |
 | Receive protobuf frames | Works; multiple `msg` frames received in live validation. |
@@ -38,6 +39,34 @@ received room-entry, heartbeat, and `msg` frames without Euler and without calli
 The old `/webcast/im/fetch/` replay remains diagnostic code but is no longer on the
 live-check critical path. It is unreliable because TikTok may return a silent empty-body
 rejection even with an authenticated session.
+
+### Room state
+
+The WebSocket reports *changes*; it never reports the room as it already is. Two endpoints
+on `webcast.tiktok.com` fill that gap. They are signed, but the page's patched `fetch` signs
+them, and unlike `/webcast/im/fetch/` they answer with CORS headers, so the body is readable
+from inside the page:
+
+```rust
+let info = signer.room_info(&room_id).await?;   // title, owner, viewers, likes, cover
+let gifts = signer.gift_list(&room_id).await?;  // gift id → name and diamond cost
+```
+
+Call both after navigating to the room's live page. `gift_list` returns a few megabytes
+(626 gifts in the verified room), so request it once per session and keep the table: gift
+events carry only a `gift_id`, and pricing them requires it.
+
+### Recovery
+
+`subscribe_live_events` and `subscribe_schema_events` survive the page losing its transport.
+TikTok's page normally reconnects on its own; if it has not done so within 15 seconds, the
+engine reloads the page, which makes it sign, connect, and re-enter the room from scratch.
+After three failed attempts the subscription reports that the room is gone rather than
+reloading forever. `Signer::reload()` exposes the same step manually.
+
+Subscriber queues are bounded. A consumer that stops reading is disconnected instead of
+being served a stream with silently missing frames — a closed channel is diagnosable, a gap
+in a protobuf event stream is not.
 
 ### Schema coverage
 

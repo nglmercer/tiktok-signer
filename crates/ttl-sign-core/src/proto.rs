@@ -290,15 +290,28 @@ impl Writer {
 }
 
 /// Decode a `map<string, string>` entry.
+///
+/// Fields that are not readable as strings are skipped rather than discarding the entry:
+/// this decoder exists to survive TikTok adding fields, and dropping a whole `route_params`
+/// or header pair because of one unexpected neighbour would silently break the transport.
 fn decode_map_entry(buf: &[u8]) -> Option<(String, String)> {
     let mut key = None;
     let mut value = String::new();
     let mut reader = Reader::new(buf);
     while let Some(field) = reader.next_field() {
-        let (number, wire) = field.ok()?;
+        // A truncated entry still yields whatever was decoded before the damage.
+        let Ok((number, wire)) = field else { break };
         match number {
-            map_entry_field::KEY => key = Some(wire.as_str()?.to_owned()),
-            map_entry_field::VALUE => value = wire.as_str()?.to_owned(),
+            map_entry_field::KEY => {
+                if let Some(decoded) = wire.as_str() {
+                    key = Some(decoded.to_owned());
+                }
+            }
+            map_entry_field::VALUE => {
+                if let Some(decoded) = wire.as_str() {
+                    value = decoded.to_owned();
+                }
+            }
             _ => {}
         }
     }
@@ -954,6 +967,21 @@ mod tests {
             ]
         );
         assert_eq!(r.rejection_reason(), None);
+    }
+
+    /// A future TikTok field inside a map entry must not delete the pair around it.
+    #[test]
+    fn map_entries_survive_unexpected_neighbour_fields() {
+        let entry = Writer::new()
+            .str_field(map_entry_field::KEY, "wss_push_room_id")
+            .u64_field(3, 42) // field TikTok has not shipped yet
+            .str_field(map_entry_field::VALUE, "7300")
+            .clone()
+            .finish();
+        assert_eq!(
+            decode_map_entry(&entry),
+            Some(("wss_push_room_id".to_string(), "7300".to_string()))
+        );
     }
 
     #[test]

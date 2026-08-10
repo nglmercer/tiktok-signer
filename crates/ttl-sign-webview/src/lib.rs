@@ -43,7 +43,7 @@ use wry::WebViewBuilder;
 use flate2::read::GzDecoder;
 
 use ttl_sign_core::proto::{LiveEvent, PushFrame, WebcastEventBatch};
-use ttl_sign_core::room::{self, LiveChannel, RoomLookup};
+use ttl_sign_core::room::{self, Gift, LiveChannel, RoomInfo, RoomLookup};
 use ttl_sign_core::{
     decode_webcast_message, CookieJar, FetchParams, FetchResult, Preset, RejectReason,
     SchemaMessage, SignError, SignOutcome, SignedFetch,
@@ -61,6 +61,23 @@ const SESSION_BOOTSTRAP_URL: &str = "https://www.tiktok.com/robots.txt";
 
 /// Script injected before page scripts.
 pub const BRIDGE_JS: &str = include_str!("bridge.js");
+
+/// Frames buffered per page-WebSocket subscriber before it is considered stalled.
+///
+/// Large enough to absorb a slow consumer across several event batches; small enough that a
+/// consumer that stopped reading entirely cannot grow the process without bound.
+const PAGE_WS_QUEUE_CAPACITY: usize = 1_024;
+
+/// How long to wait for TikTok's page to reopen its own transport before reloading the page.
+///
+/// The page normally reconnects on its own. Reloading immediately would fight it; never
+/// reloading leaves a permanently silent listener.
+const PAGE_SOCKET_RECOVERY_GRACE: Duration = Duration::from_secs(15);
+
+/// Reloads attempted before concluding the room itself is gone.
+///
+/// Without a cap, a room that simply ended would be reloaded forever.
+const MAX_RECOVERY_ATTEMPTS: usize = 3;
 
 /// Engine configuration.
 #[derive(Debug, Clone)]
@@ -179,7 +196,7 @@ enum UserEvent {
     },
     /// Subscribe to the WebSocket already owned by TikTok's page.
     SubscribePageWebSocket {
-        reply: oneshot::Sender<mpsc::UnboundedReceiver<PageWebSocketEvent>>,
+        reply: oneshot::Sender<mpsc::Receiver<PageWebSocketEvent>>,
     },
     /// Wake the event loop from the IPC handler.
     ///
@@ -305,7 +322,15 @@ pub struct Signer {
     /// The **live** preset: configuration fixes the device (and its immutable WebView UA),
     /// while the page corrects language, time zone, screen, and region when ready.
     preset: Arc<Mutex<Preset>>,
+    /// Page the engine was last asked to load. [`Signer::reload`] returns to it.
+    current_url: Arc<Mutex<String>>,
 }
+
+/// Decoder from one relayed frame to its events.
+///
+/// The outer `Result` is the frame; the inner one is each message inside it, so a single
+/// undecodable event cannot discard the batch around it.
+type DecodeFrame<T> = fn(&str, &[u8]) -> Result<Vec<Result<T, SignError>>, SignError>;
 
 impl Signer {
     /// Sign and execute `/webcast/im/fetch/` for a room.
@@ -482,6 +507,9 @@ impl Signer {
         {
             return Err(SignError::EngineGone("event loop has closed".into()));
         }
+        if let Ok(mut current) = self.current_url.lock() {
+            url.clone_into(&mut current);
+        }
         match tokio::time::timeout(self.config.sdk_ready_timeout, rx).await {
             Ok(Ok(result)) => result?,
             Ok(Err(_)) => return Err(SignError::EngineGone("engine discarded navigation".into())),
@@ -504,6 +532,33 @@ impl Signer {
         let body = self.fetch_text(&room::room_lookup_url(unique_id)).await?;
         RoomLookup::from_json(&body).ok_or_else(|| {
             SignError::Decode(format!("unexpected lookup response for @{unique_id}"))
+        })
+    }
+
+    /// Full room metadata: title, owner, cover, and counters.
+    ///
+    /// This is the state a listener cannot rebuild from the event stream, which only reports
+    /// changes: viewers, likes, and follower counts already accumulated before connecting.
+    ///
+    /// Unlike [`Signer::room_lookup`], the endpoint **is** signed — but the page's patched
+    /// `fetch` signs it, so no signing work happens here. Call it after navigating to the
+    /// room's live page, where the SDK is loaded.
+    pub async fn room_info(&self, room_id: &str) -> Result<RoomInfo, SignError> {
+        let body = self.fetch_text(&room::room_info_url(room_id)).await?;
+        RoomInfo::from_json(&body).ok_or_else(|| {
+            SignError::Decode(format!("unexpected room/info response for room {room_id}"))
+        })
+    }
+
+    /// Every gift the room offers, with its diamond cost.
+    ///
+    /// Needed to price a `WebcastGiftMessage`: gift events carry only a `gift_id`. Request
+    /// this once and keep the table; the response is a few megabytes and crosses the JSON
+    /// IPC bridge, so a short [`EngineConfig::sign_timeout`] may need raising.
+    pub async fn gift_list(&self, room_id: &str) -> Result<Vec<Gift>, SignError> {
+        let body = self.fetch_text(&room::gift_list_url(room_id)).await?;
+        room::parse_gift_list(&body).ok_or_else(|| {
+            SignError::Decode(format!("unexpected gift/list response for room {room_id}"))
         })
     }
 
@@ -699,7 +754,7 @@ impl Signer {
     /// Subscribe before navigating to a live page so the initial `open` event is retained.
     pub async fn subscribe_page_websocket(
         &self,
-    ) -> Result<mpsc::UnboundedReceiver<PageWebSocketEvent>, SignError> {
+    ) -> Result<mpsc::Receiver<PageWebSocketEvent>, SignError> {
         let (tx, rx) = oneshot::channel();
         self.proxy
             .send_event(UserEvent::SubscribePageWebSocket { reply: tx })
@@ -714,7 +769,7 @@ impl Signer {
     /// protobuf methods are emitted as [`LiveEvent::Unknown`] instead of being discarded.
     pub async fn subscribe_live_events(
         &self,
-    ) -> Result<mpsc::UnboundedReceiver<Result<DecodedLiveEvent, SignError>>, SignError> {
+    ) -> Result<mpsc::Receiver<Result<DecodedLiveEvent, SignError>>, SignError> {
         self.subscribe_decoded_events(decode_live_frame).await
     }
 
@@ -724,24 +779,83 @@ impl Signer {
     /// and retains structurally decoded raw fields for methods that TikTok adds later.
     pub async fn subscribe_schema_events(
         &self,
-    ) -> Result<mpsc::UnboundedReceiver<Result<DecodedSchemaEvent, SignError>>, SignError> {
+    ) -> Result<mpsc::Receiver<Result<DecodedSchemaEvent, SignError>>, SignError> {
         self.subscribe_decoded_events(decode_schema_frame).await
     }
 
+    /// Shared relay: page frames in, decoded events out, with recovery when the transport
+    /// disappears.
+    ///
+    /// `decode_frame` reports frame-level failures (a corrupt envelope, a broken gzip
+    /// stream) as the outer error, and per-message failures individually, so one
+    /// undecodable event never discards the rest of its batch.
     async fn subscribe_decoded_events<T>(
         &self,
-        decode_frame: fn(&str, &[u8]) -> Result<Vec<T>, SignError>,
-    ) -> Result<mpsc::UnboundedReceiver<Result<T, SignError>>, SignError>
+        decode_frame: DecodeFrame<T>,
+    ) -> Result<mpsc::Receiver<Result<T, SignError>>, SignError>
     where
         T: Send + 'static,
     {
         let mut page_events = self.subscribe_page_websocket().await?;
-        let (tx, rx) = mpsc::unbounded_channel();
+        // Bounded, and fed from an async task that can await, so a slow consumer applies
+        // real backpressure instead of either growing memory or losing events.
+        let (tx, rx) = mpsc::channel(PAGE_WS_QUEUE_CAPACITY);
+        let signer = self.clone();
         tokio::spawn(async move {
             let mut active_socket: Option<String> = None;
-            while let Some(page_event) = page_events.recv().await {
+            // Set while no transport is open: the deadline at which the page has failed to
+            // reconnect on its own and this task reloads it.
+            let mut recover_at: Option<tokio::time::Instant> = None;
+            let mut recovery_attempts = 0usize;
+
+            loop {
+                let next = match recover_at {
+                    Some(deadline) => {
+                        match tokio::time::timeout_at(deadline, page_events.recv()).await {
+                            Ok(event) => event,
+                            Err(_) => {
+                                recovery_attempts += 1;
+                                if recovery_attempts > MAX_RECOVERY_ATTEMPTS {
+                                    // The room has most likely ended. Stop reloading, but
+                                    // keep relaying in case the page recovers by itself.
+                                    recover_at = None;
+                                    let _ = tx
+                                        .send(Err(SignError::EngineGone(format!(
+                                            "page transport did not return after \
+                                             {MAX_RECOVERY_ATTEMPTS} reloads"
+                                        ))))
+                                        .await;
+                                    continue;
+                                }
+                                info!(
+                                    attempt = recovery_attempts,
+                                    "page transport did not return; reloading the live page"
+                                );
+                                if let Err(error) = signer.reload().await {
+                                    if tx.send(Err(error)).await.is_err() {
+                                        return;
+                                    }
+                                }
+                                // Re-arm: a reload that fails, or that loads a page which
+                                // never reconnects, must not end recovery silently. An
+                                // `Open` below cancels this.
+                                recover_at =
+                                    Some(tokio::time::Instant::now() + PAGE_SOCKET_RECOVERY_GRACE);
+                                continue;
+                            }
+                        }
+                    }
+                    None => page_events.recv().await,
+                };
+                let Some(page_event) = next else {
+                    return;
+                };
+
                 match page_event {
                     PageWebSocketEvent::Open { url } if is_webcast_socket(&url) => {
+                        // The page reconnected (on its own or after a reload); stand down.
+                        recover_at = None;
+                        recovery_attempts = 0;
                         active_socket = Some(url);
                     }
                     PageWebSocketEvent::Binary { url, data }
@@ -750,13 +864,13 @@ impl Signer {
                         match decode_frame(&url, &data) {
                             Ok(events) => {
                                 for event in events {
-                                    if tx.send(Ok(event)).is_err() {
+                                    if tx.send(event).await.is_err() {
                                         return;
                                     }
                                 }
                             }
                             Err(error) => {
-                                if tx.send(Err(error)).is_err() {
+                                if tx.send(Err(error)).await.is_err() {
                                     return;
                                 }
                             }
@@ -766,10 +880,12 @@ impl Signer {
                         if active_socket.as_deref() == Some(url.as_str()) =>
                     {
                         active_socket = None;
+                        recover_at = Some(tokio::time::Instant::now() + PAGE_SOCKET_RECOVERY_GRACE);
                         if tx
                             .send(Err(SignError::EngineGone(format!(
                                 "page WebSocket closed: code={code} reason={reason}"
                             ))))
+                            .await
                             .is_err()
                         {
                             return;
@@ -778,7 +894,7 @@ impl Signer {
                     PageWebSocketEvent::Error { url, message }
                         if active_socket.as_deref() == Some(url.as_str()) =>
                     {
-                        if tx.send(Err(SignError::Transport(message))).is_err() {
+                        if tx.send(Err(SignError::Transport(message))).await.is_err() {
                             return;
                         }
                     }
@@ -787,6 +903,19 @@ impl Signer {
             }
         });
         Ok(rx)
+    }
+
+    /// Reload the page the engine is currently on.
+    ///
+    /// Recovery path when TikTok's page loses its transport and does not restore it: a fresh
+    /// load makes the page sign, connect, and enter the room again from scratch.
+    pub async fn reload(&self) -> Result<(), SignError> {
+        let url = self
+            .current_url
+            .lock()
+            .map(|url| url.clone())
+            .unwrap_or_else(|_| self.config.landing_url.clone());
+        self.navigate(&url).await
     }
 
     /// Request orderly event-loop shutdown.
@@ -833,7 +962,7 @@ struct Shared {
     session_bootstrap_pending: bool,
     session_bootstrap_ready: bool,
     /// Consumers observing the WebSocket managed by TikTok's page.
-    page_ws_subscribers: Vec<mpsc::UnboundedSender<PageWebSocketEvent>>,
+    page_ws_subscribers: Vec<mpsc::Sender<PageWebSocketEvent>>,
 }
 
 impl Shared {
@@ -860,9 +989,29 @@ impl Shared {
         }
     }
 
+    /// Fan out one relayed frame to every subscriber.
+    ///
+    /// The queues are bounded, and this runs on the event loop, which cannot await. A
+    /// subscriber that falls behind is therefore **disconnected** rather than served a
+    /// silently incomplete stream: its receiver observes a closed channel, which is a
+    /// diagnosable failure, while dropped frames in the middle of a protobuf event stream
+    /// are not. Unbounded queues were the alternative, and they grow without limit when a
+    /// consumer stalls.
     fn publish_page_websocket(&mut self, event: PageWebSocketEvent) {
-        self.page_ws_subscribers
-            .retain(|subscriber| subscriber.send(event.clone()).is_ok());
+        self.page_ws_subscribers.retain(|subscriber| {
+            match subscriber.try_send(event.clone()) {
+                Ok(()) => true,
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    warn!(
+                        capacity = PAGE_WS_QUEUE_CAPACITY,
+                        "page WebSocket subscriber fell behind; disconnecting it"
+                    );
+                    false
+                }
+                // The consumer is gone; stop cloning frames for it.
+                Err(mpsc::error::TrySendError::Closed(_)) => false,
+            }
+        });
     }
 
     /// Fail everything waiting. Used when the SDK does not start.
@@ -966,6 +1115,7 @@ where
     std::thread::spawn({
         let signer = Signer {
             proxy,
+            current_url: Arc::new(Mutex::new(config.landing_url.clone())),
             config: config.clone(),
             http: http_client(&user_agent),
             preset: Arc::clone(&preset),
@@ -1037,7 +1187,7 @@ where
                 let _ = reply.send(result);
             }
             Event::UserEvent(UserEvent::SubscribePageWebSocket { reply }) => {
-                let (tx, rx) = mpsc::unbounded_channel();
+                let (tx, rx) = mpsc::channel(PAGE_WS_QUEUE_CAPACITY);
                 shared.borrow_mut().page_ws_subscribers.push(tx);
                 let _ = reply.send(rx);
             }
@@ -1333,16 +1483,25 @@ fn handle_page_message(
     }
 }
 
-fn is_webcast_socket(url: &str) -> bool {
+/// Is this URL TikTok's live event transport, rather than one of the other sockets a page
+/// opens (messaging, analytics)?
+pub fn is_webcast_socket(url: &str) -> bool {
     url.starts_with("wss://") && (url.contains("/webcast/im/") || url.contains("webcast-ws"))
 }
 
-fn decode_live_frame(url: &str, data: &[u8]) -> Result<Vec<DecodedLiveEvent>, SignError> {
+/// Decode one relayed frame into the stable event subset.
+///
+/// Each message is reported on its own: a batch commonly mixes methods, and one that this
+/// decoder cannot read must not take its neighbours with it.
+fn decode_live_frame(
+    url: &str,
+    data: &[u8],
+) -> Result<Vec<Result<DecodedLiveEvent, SignError>>, SignError> {
     let Some((frame_log_id, batch)) = decode_event_batch(data)? else {
         return Ok(Vec::new());
     };
 
-    batch
+    Ok(batch
         .messages
         .into_iter()
         .map(|message| {
@@ -1357,15 +1516,19 @@ fn decode_live_frame(url: &str, data: &[u8]) -> Result<Vec<DecodedLiveEvent>, Si
                 event,
             })
         })
-        .collect()
+        .collect())
 }
 
-fn decode_schema_frame(url: &str, data: &[u8]) -> Result<Vec<DecodedSchemaEvent>, SignError> {
+/// Decode one relayed frame against the bundled schema snapshot, per message.
+fn decode_schema_frame(
+    url: &str,
+    data: &[u8],
+) -> Result<Vec<Result<DecodedSchemaEvent, SignError>>, SignError> {
     let Some((frame_log_id, batch)) = decode_event_batch(data)? else {
         return Ok(Vec::new());
     };
 
-    batch
+    Ok(batch
         .messages
         .into_iter()
         .map(|message| {
@@ -1389,7 +1552,7 @@ fn decode_schema_frame(url: &str, data: &[u8]) -> Result<Vec<DecodedSchemaEvent>
                 event,
             })
         })
-        .collect()
+        .collect())
 }
 
 fn decode_event_batch(data: &[u8]) -> Result<Option<(u64, WebcastEventBatch)>, SignError> {
@@ -1477,18 +1640,48 @@ fn build_outcome(
     })
 }
 
-/// Query parameter value, decoded as needed.
+/// Query parameter value, percent-decoded.
 fn query_param(url: &str, name: &str) -> Option<String> {
     let query = url.split_once('?')?.1;
     query
         .split('&')
         .filter_map(|pair| pair.split_once('='))
         .find(|(k, _)| *k == name)
-        .map(|(_, v)| {
-            v.replace("%2B", "+")
-                .replace("%2F", "/")
-                .replace("%3D", "=")
-        })
+        .map(|(_, value)| percent_decode(value))
+}
+
+/// Decode `%XX` escapes.
+///
+/// `+` is deliberately **not** decoded to a space. These values are signatures and tokens
+/// whose bytes must survive verbatim; TikTok percent-encodes them (`%2B`), so a literal `+`
+/// here is part of the value, not an encoded space.
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' if index + 2 < bytes.len() => {
+                match u8::from_str_radix(&value[index + 1..index + 3], 16) {
+                    Ok(byte) => {
+                        out.push(byte);
+                        index += 3;
+                    }
+                    // Not a valid escape: keep the `%` as an ordinary character.
+                    Err(_) => {
+                        out.push(b'%');
+                        index += 1;
+                    }
+                }
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    // Escapes can encode arbitrary bytes; anything that is not UTF-8 is returned as-is.
+    String::from_utf8(out).unwrap_or_else(|_| value.to_string())
 }
 
 /// Percent-encode a query value. Signature values contain `/`, `+`, and `=`.
@@ -1554,6 +1747,19 @@ mod tests {
     }
 
     #[test]
+    fn every_percent_escape_is_decoded_not_only_signature_characters() {
+        // Previously only %2B, %2F and %3D were handled, so anything else survived encoded.
+        assert_eq!(percent_decode("a%20b%2Fc%3Fd%26e"), "a b/c?d&e");
+        assert_eq!(percent_decode("caf%C3%A9"), "café");
+        // `+` belongs to the value: these are signatures, not form fields.
+        assert_eq!(percent_decode("ab+cd"), "ab+cd");
+        // Malformed escapes are preserved rather than dropped.
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%zz"), "%zz");
+        assert_eq!(percent_decode("a%2"), "a%2");
+    }
+
+    #[test]
     fn non_200_is_a_rejection() {
         let outcome = build_outcome(403, "", vec![1], CookieJar::new(), "UA");
         assert!(matches!(
@@ -1598,19 +1804,56 @@ mod tests {
         assert!(signed.signed_url.contains("X-Gnarly"));
     }
 
+    fn binary_event(byte: u8) -> PageWebSocketEvent {
+        PageWebSocketEvent::Binary {
+            url: "wss://example.test/webcast/im/".into(),
+            data: vec![byte],
+        }
+    }
+
     #[test]
     fn page_websocket_events_are_published_to_subscribers() {
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(PAGE_WS_QUEUE_CAPACITY);
         let mut shared = Shared::default();
         shared.page_ws_subscribers.push(tx);
-        let event = PageWebSocketEvent::Binary {
-            url: "wss://example.test/webcast/im/".into(),
-            data: vec![1, 2, 3],
-        };
+        let event = binary_event(1);
 
         shared.publish_page_websocket(event.clone());
 
         assert_eq!(rx.try_recv().unwrap(), event);
+    }
+
+    /// A consumer that stops reading must not grow the process. It is dropped instead, so it
+    /// observes a closed channel rather than a stream that quietly skipped frames.
+    #[test]
+    fn a_stalled_subscriber_is_disconnected_rather_than_buffered_forever() {
+        let (tx, rx) = mpsc::channel(2);
+        let mut shared = Shared::default();
+        shared.page_ws_subscribers.push(tx);
+
+        shared.publish_page_websocket(binary_event(1));
+        shared.publish_page_websocket(binary_event(2));
+        assert_eq!(
+            shared.page_ws_subscribers.len(),
+            1,
+            "queue is only full now"
+        );
+
+        shared.publish_page_websocket(binary_event(3));
+        assert!(shared.page_ws_subscribers.is_empty());
+        drop(rx);
+    }
+
+    #[test]
+    fn subscribers_that_hung_up_are_forgotten() {
+        let (tx, rx) = mpsc::channel(PAGE_WS_QUEUE_CAPACITY);
+        let mut shared = Shared::default();
+        shared.page_ws_subscribers.push(tx);
+        drop(rx);
+
+        shared.publish_page_websocket(binary_event(1));
+
+        assert!(shared.page_ws_subscribers.is_empty());
     }
 
     #[test]
@@ -1644,13 +1887,84 @@ mod tests {
         let events = decode_live_frame("wss://example.test/webcast/im/", &frame.encode()).unwrap();
 
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].frame_log_id, 5);
-        assert_eq!(events[0].message_id, 11);
+        let event = events[0].as_ref().expect("message decodes");
+        assert_eq!(event.frame_log_id, 5);
+        assert_eq!(event.message_id, 11);
         assert!(matches!(
-            &events[0].event,
+            &event.event,
             LiveEvent::Chat { user, content }
                 if user.display_id == "grace_live" && content == "hello from live"
         ));
+    }
+
+    /// A batch mixes methods, and TikTok ships payloads this decoder has not seen. One
+    /// unreadable message must cost exactly that message.
+    #[test]
+    fn one_undecodable_message_does_not_discard_its_batch() {
+        const METHOD: u32 = 1;
+        const PAYLOAD: u32 = 2;
+        const MESSAGE_ID: u32 = 3;
+
+        let chat = Writer::new().str_field(3, "survived").clone().finish();
+        let good = Writer::new()
+            .str_field(METHOD, "WebcastChatMessage")
+            .bytes_field(PAYLOAD, &chat)
+            .u64_field(MESSAGE_ID, 1)
+            .clone()
+            .finish();
+        // Field 2, wire type 2, declaring 255 bytes that are not there.
+        let broken = Writer::new()
+            .str_field(METHOD, "WebcastChatMessage")
+            .bytes_field(PAYLOAD, &[0x12, 0xff])
+            .u64_field(MESSAGE_ID, 2)
+            .clone()
+            .finish();
+        let batch = Writer::new()
+            .bytes_field(1, &broken)
+            .bytes_field(1, &good)
+            .clone()
+            .finish();
+        let frame = PushFrame {
+            log_id: 9,
+            payload_encoding: "pb".into(),
+            payload_type: "msg".into(),
+            payload: batch,
+            ..Default::default()
+        };
+        let encoded = frame.encode();
+
+        for events in [
+            decode_live_frame("wss://example.test/webcast/im/", &encoded)
+                .expect("the frame itself is valid")
+                .len(),
+            decode_schema_frame("wss://example.test/webcast/im/", &encoded)
+                .expect("the frame itself is valid")
+                .len(),
+        ] {
+            assert_eq!(events, 2, "both messages are reported, good and bad");
+        }
+
+        let events = decode_live_frame("wss://example.test/webcast/im/", &encoded).unwrap();
+        assert!(events[0].is_err(), "the broken message is reported as such");
+        let survivor = events[1].as_ref().expect("the neighbour still decodes");
+        assert_eq!(survivor.message_id, 1);
+        assert!(matches!(
+            &survivor.event,
+            LiveEvent::Chat { content, .. } if content == "survived"
+        ));
+    }
+
+    /// A frame that is not decodable at all is still one error, not a silent empty batch.
+    #[test]
+    fn a_corrupt_frame_is_reported_as_a_frame_level_error() {
+        assert!(decode_live_frame("wss://example.test/webcast/im/", &[0xff, 0xff]).is_err());
+        // Transport frames carry no events and are not errors.
+        let heartbeat = PushFrame::heartbeat(7300, 1).encode();
+        assert!(
+            decode_live_frame("wss://example.test/webcast/im/", &heartbeat)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1689,10 +2003,11 @@ mod tests {
             .expect("schema event decoding");
 
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].frame_log_id, FRAME_LOG_ID);
-        assert_eq!(events[0].message_id, MESSAGE_ID);
+        let event = events[0].as_ref().expect("message decodes");
+        assert_eq!(event.frame_log_id, FRAME_LOG_ID);
+        assert_eq!(event.message_id, MESSAGE_ID);
         assert!(matches!(
-            &events[0].event,
+            &event.event,
             SchemaMessage { fields, .. }
                 if matches!(
                     fields.as_slice(),
