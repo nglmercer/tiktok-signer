@@ -20,6 +20,9 @@ pub enum FromPage {
         url: String,
         #[serde(default)]
         cookie: String,
+        /// Página desde la que se firmó: es el `Referer` que espera TikTok.
+        #[serde(default)]
+        page: String,
     },
     /// Respuesta de texto: el lookup `uniqueId` → `room_id`, o el DOM renderizado.
     /// No lleva cookies porque no interviene en ninguna firma.
@@ -90,6 +93,7 @@ mod tests {
                 request_id,
                 cookie,
                 url,
+                ..
             } => {
                 assert_eq!(request_id, 42);
                 assert_eq!(cookie, "msToken=abc");

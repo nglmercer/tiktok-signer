@@ -22,7 +22,9 @@ fn main() -> ! {
         eprintln!("uso: page-probe <usuario> [expresión JS]");
         std::process::exit(2);
     });
-    let custom_js = std::env::args().nth(2);
+    // Todo lo que venga después del usuario se evalúa en secuencia, con una pausa entre
+    // medias: hace falta para instalar un hook, dejar que la página trabaje y leer luego.
+    let scripts: Vec<String> = std::env::args().skip(2).collect();
 
     let config = EngineConfig {
         landing_url: live_page_url(&user),
@@ -34,11 +36,14 @@ fn main() -> ! {
         let rt = tokio::runtime::Runtime::new().expect("runtime de tokio");
         rt.block_on(async move {
             // El reproductor tarda en arrancar: se le da margen antes de mirar.
-            if let Some(js) = custom_js {
-                tokio::time::sleep(Duration::from_secs(8)).await;
-                match signer.eval(&js).await {
-                    Ok(value) => println!("{value}"),
-                    Err(e) => println!("ERROR {e}"),
+            if !scripts.is_empty() {
+                for (i, js) in scripts.iter().enumerate() {
+                    tokio::time::sleep(Duration::from_secs(if i == 0 { 6 } else { 12 })).await;
+                    println!("--- script {}", i + 1);
+                    match signer.eval(js).await {
+                        Ok(value) => println!("{value}"),
+                        Err(e) => println!("ERROR {e}"),
+                    }
                 }
                 signer.shutdown();
                 std::process::exit(0);

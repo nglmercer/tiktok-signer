@@ -93,9 +93,32 @@ de forma anónima, a cambio de:
 - el WS pasa a exigir la cookie `sessionid` en el header (si no, "illegal secret key"),
 - riesgo sobre la cuenta.
 
-**Estado:** pendiente. Mientras siga pendiente, el diseño asume **solo anónimo**, que es
-suficiente para leer el chat público. El cookie jar está tipado de forma que añadirlo
-después no obligue a rediseñar.
+**Estado: resuelta por los hechos el 2026-08-10.** Ya no es una decisión de diseño: el
+anónimo **no funciona**. Medido contra directos reales, con la misma ruta de firma para
+todos los endpoints:
+
+| Endpoint | Anónimo |
+|---|---|
+| `/webcast/room/info/` | 200, ~25–30 KB de JSON |
+| `/webcast/room/check_alive/` | 200, JSON correcto |
+| `/webcast/room/enter/` | 200, `{"message":"User doesn't login"}` |
+| `/webcast/im/fetch/` | 200, **0 bytes** |
+
+Que `room/info` responda por esa misma ruta descarta que el problema sea la firma, las
+cabeceras o el replay. El cuerpo vacío de `im/fetch` es el mismo "necesitas sesión" que
+`room/enter` dice con todas las letras.
+
+Reproducible con `cargo run -p ttl-sign-webview --example endpoint-probe -- <usuario>`.
+
+Consecuencias, que siguen siendo las de antes:
+
+- se expone la sesión de una cuenta real al componente que firma,
+- el WS pasa a exigir la cookie `sessionid` en el header (si no, "illegal secret key"),
+- riesgo sobre la cuenta.
+
+La diferencia es que ya no se puede elegir no pagarlas. Implementado como
+`EngineConfig::session_id` (`TTL_SESSION_ID` en el servidor), vacío por defecto: el
+componente no toca ninguna cuenta salvo que se le dé una explícitamente.
 
 ### ¿Proxy por sala?
 

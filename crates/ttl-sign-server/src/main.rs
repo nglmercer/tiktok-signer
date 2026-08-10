@@ -40,11 +40,25 @@ fn main() -> ! {
         landing_url: std::env::var("TTL_LANDING_URL")
             .unwrap_or_else(|_| "https://www.tiktok.com/live".into()),
         contact_us: std::env::var("TTL_CONTACT_US").unwrap_or_default(),
+        // Sin sesión, TikTok responde vacío hoy: ver EngineConfig::session_id.
+        session_id: std::env::var("TTL_SESSION_ID").unwrap_or_default(),
         sign_timeout: Duration::from_secs(15),
         ..EngineConfig::default()
     };
 
-    info!(%bind, max_concurrent, landing_url = %config.landing_url, "arrancando");
+    info!(
+        %bind,
+        max_concurrent,
+        landing_url = %config.landing_url,
+        autenticado = !config.session_id.is_empty(),
+        "arrancando"
+    );
+    if config.session_id.is_empty() {
+        tracing::warn!(
+            "sin TTL_SESSION_ID: hoy TikTok devuelve cuerpo vacío en /webcast/im/fetch/ \
+             para sesiones anónimas"
+        );
+    }
 
     // `run` se queda con el hilo principal; el servidor HTTP vive en el worker.
     run(config, move |signer| {

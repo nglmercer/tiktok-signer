@@ -32,3 +32,7 @@ path = "examples/live-check.rs"
 [[example]]
 name = "page-probe"
 path = "examples/page-probe.rs"
+
+[[example]]
+name = "endpoint-probe"
+path = "examples/endpoint-probe.rs"

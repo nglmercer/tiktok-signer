@@ -4,6 +4,21 @@ Fuente: documentación de Euler Stream y lectura del código de `isaackogan/TikT
 (rama `master`, agosto 2026). Todo lo afirmado aquí está contrastado contra el código
 del cliente, no contra suposiciones.
 
+> **Revisión del 2026-08-10 (F2).** Lo verificado contra directos reales cambia dos cosas
+> de este documento:
+>
+> 1. **El paso 2 exige sesión autenticada.** En anónimo, `/webcast/im/fetch/` devuelve 200
+>    con cuerpo vacío y `/webcast/room/enter/` devuelve `User doesn't login`. Ver
+>    [06 §Decisiones abiertas](06-risks-and-ops.md#decisiones-abiertas).
+> 2. **Hay una firma más que las de §2:** `X-Dynosaur` (~392 chars), que acompaña hoy a
+>    `X-Gnarly`. Como firma el SDK, no hay que implementarla, pero conviene no
+>    sorprenderse al verla.
+>
+> Además, el reproductor web actual **no llama a `/webcast/im/fetch/`**: usa
+> `/webcast/room/enter/`, `/webcast/room/check_alive/` y `/webcast/feed/`. Queda por
+> confirmar, ya con sesión, si `im/fetch` sigue siendo el camino al WebSocket o si hoy
+> sale de `room/enter`.
+
 ## 1. Flujo real de conexión
 
 ```

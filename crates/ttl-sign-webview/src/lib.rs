@@ -65,6 +65,20 @@ pub struct EngineConfig {
     pub sdk_ready_timeout: Duration,
     /// Email de contacto que pide la spec de Euler (`contact_us`). Opcional.
     pub contact_us: String,
+    /// Cookie `sessionid` de una cuenta real. Vacío = sesión anónima.
+    ///
+    /// Verificado el 2026-08-10 contra directos reales: **sin ella no hay flujo**.
+    /// `/webcast/room/enter/` responde literalmente `User doesn't login`, y
+    /// `/webcast/im/fetch/` responde 200 con cuerpo vacío, que es el mismo rechazo dicho
+    /// en voz baja. Los endpoints que no dependen de sesión (`room/info`,
+    /// `room/check_alive`) sí responden por esta misma ruta de firma, así que el problema
+    /// no está en cómo firmamos ni en cómo repetimos.
+    ///
+    /// Implica exponer la sesión de una cuenta al componente que firma
+    /// (`docs/06-risks-and-ops.md` §Decisiones abiertas). Con `sessionid`, el WebSocket
+    /// **exige** además que la cookie viaje en el handshake, o rechaza con
+    /// "illegal secret key".
+    pub session_id: String,
 }
 
 impl Default for EngineConfig {
@@ -82,6 +96,7 @@ impl Default for EngineConfig {
             sign_timeout: Duration::from_secs(15),
             sdk_ready_timeout: Duration::from_secs(30),
             contact_us: String::new(),
+            session_id: String::new(),
         }
     }
 }
@@ -100,7 +115,7 @@ fn default_device_preset() -> ttl_sign_core::DevicePreset {
 /// Trabajo inyectado en el event loop desde el runtime de tokio.
 enum UserEvent {
     Sign {
-        params: Box<FetchParams>,
+        url: String,
         reply: oneshot::Sender<Result<SignedRequest, SignError>>,
     },
     /// Paso 1 sin firma. `url: None` pide el DOM ya renderizado.
@@ -130,6 +145,8 @@ pub struct SignedRequest {
     pub url: String,
     pub cookies: CookieJar,
     pub user_agent: String,
+    /// Página desde la que se firmó. Va como `Referer` al repetir.
+    pub page_url: String,
 }
 
 /// Handle async del motor. Clonable y `Send`: es lo que ve el servidor HTTP.
@@ -154,91 +171,114 @@ impl Signer {
     /// Igual que [`Signer::fetch`], con control total sobre los parámetros (cursor,
     /// `internal_ext`, `device_id`).
     pub async fn fetch_with(&self, params: FetchParams) -> SignOutcome {
-        let (tx, rx) = oneshot::channel();
-        if self
-            .proxy
-            .send_event(UserEvent::Sign {
-                params: Box::new(params),
-                reply: tx,
-            })
-            .is_err()
-        {
-            return SignError::EngineGone("el event loop se ha cerrado".into()).into();
+        match self.sign_url(&params.url(&self.config.preset)).await {
+            Ok(signed) => self.replay(signed).await,
+            Err(e) => e.into(),
         }
-
-        let signed = match tokio::time::timeout(self.config.sign_timeout, rx).await {
-            Ok(Ok(Ok(signed))) => signed,
-            Ok(Ok(Err(e))) => return e.into(),
-            Ok(Err(_)) => {
-                return SignError::EngineGone("el motor descartó la petición".into()).into()
-            }
-            Err(_) => {
-                return SignError::Timeout(self.config.sign_timeout.as_millis() as u64).into()
-            }
-        };
-
-        self.replay(signed).await
     }
 
-    /// Solo firma: devuelve la URL firmada sin repetirla. Para diagnóstico.
-    pub async fn sign_only(&self, room_id: &str) -> Result<SignedRequest, SignError> {
-        let mut params = FetchParams::new(room_id);
-        params.contact_us = self.config.contact_us.clone();
+    /// Firma una URL de TikTok LIVE y la devuelve firmada, **sin ejecutarla**.
+    ///
+    /// Es el `GET /webcast/sign_url` que la spec de Euler marca como opcional, y la
+    /// herramienta con la que se compara un endpoint contra otro cuando uno deja de
+    /// responder.
+    pub async fn sign_url(&self, url: &str) -> Result<SignedRequest, SignError> {
         let (tx, rx) = oneshot::channel();
         self.proxy
             .send_event(UserEvent::Sign {
-                params: Box::new(params),
+                url: url.to_string(),
                 reply: tx,
             })
             .map_err(|_| SignError::EngineGone("el event loop se ha cerrado".into()))?;
+
         match tokio::time::timeout(self.config.sign_timeout, rx).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(SignError::EngineGone("descartada".into())),
+            Ok(Err(_)) => Err(SignError::EngineGone(
+                "el motor descartó la petición".into(),
+            )),
             Err(_) => Err(SignError::Timeout(
                 self.config.sign_timeout.as_millis() as u64
             )),
         }
     }
 
-    /// Repite la petición ya firmada desde Rust.
-    ///
-    /// Es el Plan B de `docs/01-architecture.md` §D2, y no es opcional: la respuesta de
-    /// `/webcast/im/fetch/` no lleva cabeceras CORS, así que la página **no puede** leer
-    /// el cuerpo. Fuera del navegador esa restricción no existe.
-    async fn replay(&self, signed: SignedRequest) -> SignOutcome {
-        let response = match self
+    /// Repite una petición firmada y devuelve status y bytes crudos, sin interpretarlos.
+    pub async fn replay_raw(&self, signed: &SignedRequest) -> Result<(u16, Vec<u8>), SignError> {
+        let mut signed = signed.clone();
+
+        // El `msToken` de la query y el de la cookie tienen que ser el mismo. Al firmar,
+        // la petición sale desde el navegador y TikTok responde con un `x-ms-token`
+        // nuevo, así que la cookie del webview ya ha rotado cuando la leemos: mandaríamos
+        // la cookie nueva con una query firmada con la vieja.
+        if let Some(query_token) = query_param(&signed.url, "msToken") {
+            signed.cookies.set("msToken", query_token);
+        }
+
+        // Cabeceras de navegador, no de cliente HTTP: se replican las del reproductor
+        // real, incluido `Accept: */*` (no `application/protobuf`), el `Referer` de la
+        // página del directo y unos client hints coherentes con el UA.
+        let referer = if signed.page_url.is_empty() {
+            "https://www.tiktok.com/".to_string()
+        } else {
+            signed.page_url.clone()
+        };
+
+        let response = self
             .http
             .get(&signed.url)
             .header("User-Agent", &signed.user_agent)
             .header("Cookie", signed.cookies.to_cookie_string())
-            .header("Accept", "application/protobuf")
-            .header("Referer", "https://www.tiktok.com/")
+            .header("Accept", "*/*")
+            .header(
+                "Accept-Language",
+                &self.config.preset.location.browser_language,
+            )
+            .header("Referer", &referer)
+            .header("Origin", "https://www.tiktok.com")
+            .header("Sec-Fetch-Site", "same-site")
+            .header("Sec-Fetch-Mode", "cors")
+            .header("Sec-Fetch-Dest", "empty")
+            .header(
+                "sec-ch-ua",
+                "\"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"",
+            )
+            .header("sec-ch-ua-mobile", "?0")
+            .header("sec-ch-ua-platform", platform_hint(&self.config.preset))
             .send()
             .await
-        {
-            Ok(response) => response,
-            Err(e) => return SignError::Transport(e.to_string()).into(),
-        };
+            .map_err(|e| SignError::Transport(e.to_string()))?;
 
+        let status = response.status().as_u16();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| SignError::Transport(e.to_string()))?
+            .to_vec();
+        Ok((status, bytes))
+    }
+
+    /// Repite la petición firmada e interpreta el resultado.
+    ///
+    /// Es el Plan B de `docs/01-architecture.md` §D2: la respuesta de
+    /// `/webcast/im/fetch/` no se puede leer desde la página, y fuera del navegador esa
+    /// restricción no existe.
+    async fn replay(&self, signed: SignedRequest) -> SignOutcome {
         debug!(
             // Sin la query: lleva msToken y X-Gnarly en claro.
             endpoint = %signed.url.split('?').next().unwrap_or_default(),
             cookies = ?signed.cookies.iter().map(|(k, _)| k).collect::<Vec<_>>(),
-            "URL firmada, repitiendo desde Rust"
+            "repitiendo la petición firmada desde Rust"
         );
-        let status = response.status().as_u16();
-        let protobuf = match response.bytes().await {
-            Ok(bytes) => bytes.to_vec(),
-            Err(e) => return SignError::Transport(e.to_string()).into(),
-        };
-
-        build_outcome(
-            status,
-            &signed.url,
-            protobuf,
-            signed.cookies,
-            &signed.user_agent,
-        )
+        match self.replay_raw(&signed).await {
+            Ok((status, body)) => build_outcome(
+                status,
+                &signed.url,
+                body,
+                signed.cookies,
+                &signed.user_agent,
+            ),
+            Err(e) => e.into(),
+        }
     }
 
     /// Lleva el webview a otra página y espera a que el puente vuelva a estar listo.
@@ -352,10 +392,7 @@ impl Signer {
 }
 
 /// Una firma esperando a que el SDK esté listo.
-type QueuedSign = (
-    Box<FetchParams>,
-    oneshot::Sender<Result<SignedRequest, SignError>>,
-);
+type QueuedSign = (String, oneshot::Sender<Result<SignedRequest, SignError>>);
 
 /// Una petición de texto esperando a que la página esté lista.
 type QueuedText = (Option<String>, oneshot::Sender<Result<String, SignError>>);
@@ -475,6 +512,14 @@ where
 
     let webview = build_webview(builder, &window).expect("no se pudo crear el webview");
 
+    if !config.session_id.is_empty() {
+        // Se inyecta antes de navegar: la página tiene que cargar ya autenticada.
+        match install_session_cookie(&webview, &config.session_id) {
+            Ok(()) => info!("sesión autenticada instalada"),
+            Err(e) => error!(error = %e, "no se pudo instalar la cookie de sesión"),
+        }
+    }
+
     let webview = Rc::new(webview);
     *webview_slot.borrow_mut() = Some(Rc::clone(&webview));
 
@@ -507,18 +552,18 @@ where
         }
 
         match event {
-            Event::UserEvent(UserEvent::Sign { params, reply }) => {
+            Event::UserEvent(UserEvent::Sign { url, reply }) => {
                 let mut state = shared.borrow_mut();
                 if !state.ready {
                     debug!("petición en cola: el SDK todavía no está listo");
-                    state.queued.push((params, reply));
+                    state.queued.push((url, reply));
                     return;
                 }
                 let id = state.next_id();
                 state.pending.insert(id, reply);
                 state.signs += 1;
                 drop(state);
-                dispatch(&webview, &shared, id, &params, &config.preset);
+                dispatch(&webview, &shared, id, url);
             }
             Event::UserEvent(UserEvent::Text { url, reply }) => {
                 let mut state = shared.borrow_mut();
@@ -557,24 +602,24 @@ where
 
         // El puente puede haber emitido `ready` desde el handler de IPC mientras había
         // peticiones en cola; es aquí donde se drenan.
-        let to_dispatch: Vec<(u64, Box<FetchParams>)> = {
+        let to_dispatch: Vec<(u64, String)> = {
             let mut state = shared.borrow_mut();
             if !state.ready || state.queued.is_empty() {
                 Vec::new()
             } else {
                 let queued: Vec<_> = state.queued.drain(..).collect();
                 let mut out = Vec::with_capacity(queued.len());
-                for (params, reply) in queued {
+                for (url, reply) in queued {
                     let id = state.next_id();
                     state.pending.insert(id, reply);
                     state.signs += 1;
-                    out.push((id, params));
+                    out.push((id, url));
                 }
                 out
             }
         };
-        for (id, params) in to_dispatch {
-            dispatch(&webview, &shared, id, &params, &config.preset);
+        for (id, url) in to_dispatch {
+            dispatch(&webview, &shared, id, url);
         }
 
         let text_to_dispatch: Vec<(u64, Option<String>)> = {
@@ -596,6 +641,16 @@ where
             dispatch_text(&webview, &shared, id, url);
         }
     })
+}
+
+/// Instala la cookie `sessionid` en el webview, para `.tiktok.com`.
+fn install_session_cookie(webview: &wry::WebView, session_id: &str) -> wry::Result<()> {
+    let mut cookie = wry::cookie::Cookie::new("sessionid", session_id.to_string());
+    cookie.set_domain(".tiktok.com");
+    cookie.set_path("/");
+    cookie.set_secure(true);
+    cookie.set_http_only(true);
+    webview.set_cookie(&cookie)
 }
 
 /// En Linux la ventana es invisible, así que GTK nunca la *realiza* y no hay window
@@ -624,17 +679,8 @@ fn build_webview(
 }
 
 /// Lanza una firma dentro de la página.
-fn dispatch(
-    webview: &wry::WebView,
-    shared: &Rc<RefCell<Shared>>,
-    request_id: u64,
-    params: &FetchParams,
-    preset: &Preset,
-) {
-    let msg = ToPage {
-        request_id,
-        url: params.url(preset),
-    };
+fn dispatch(webview: &wry::WebView, shared: &Rc<RefCell<Shared>>, request_id: u64, url: String) {
+    let msg = ToPage { request_id, url };
     debug!(request_id, "firma solicitada a la página");
     if let Err(e) = webview.evaluate_script(&msg.to_script()) {
         error!(request_id, error = %e, "no se pudo inyectar la firma");
@@ -730,6 +776,7 @@ fn handle_page_message(
             request_id,
             url,
             cookie,
+            page,
         } => {
             // Las del cookie manager mandan (ven las HttpOnly); `document.cookie` solo
             // rellena lo que falte.
@@ -739,6 +786,7 @@ fn handle_page_message(
                 url,
                 cookies,
                 user_agent: user_agent.to_string(),
+                page_url: page,
             };
             shared.borrow_mut().resolve(request_id, Ok(signed));
         }
@@ -780,6 +828,30 @@ fn build_outcome(
     })
 }
 
+/// Valor de un parámetro de la query, ya decodificado en lo que necesitamos.
+fn query_param(url: &str, name: &str) -> Option<String> {
+    let query = url.split_once('?')?.1;
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(k, _)| *k == name)
+        .map(|(_, v)| {
+            v.replace("%2B", "+")
+                .replace("%2F", "/")
+                .replace("%3D", "=")
+        })
+}
+
+/// `sec-ch-ua-platform` coherente con el preset. Si no cuadra con el UA, es una
+/// incoherencia más de las que TikTok mira.
+fn platform_hint(preset: &Preset) -> &'static str {
+    match preset.device.os.as_str() {
+        "windows" => "\"Windows\"",
+        "mac" => "\"macOS\"",
+        _ => "\"Linux\"",
+    }
+}
+
 /// Cliente HTTP para repetir la petición firmada.
 ///
 /// Sin redirecciones automáticas: un 3xx aquí sería TikTok mandándonos a otro sitio, y
@@ -807,6 +879,15 @@ mod tests {
                 "wss://webcast5-ws-web-useast1a.tiktok.com/webcast/im/ws/",
             );
         w.finish()
+    }
+
+    #[test]
+    fn query_param_is_extracted_and_decoded() {
+        let url = "https://x/?a=1&msToken=ab%2Bcd%3D&z=2";
+        assert_eq!(query_param(url, "msToken").as_deref(), Some("ab+cd="));
+        assert_eq!(query_param(url, "a").as_deref(), Some("1"));
+        assert_eq!(query_param(url, "falta"), None);
+        assert_eq!(query_param("https://x/sin-query", "a"), None);
     }
 
     #[test]

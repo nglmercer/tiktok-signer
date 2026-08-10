@@ -42,6 +42,11 @@
   // la repite con su propio cliente HTTP, donde no hay CORS que valga.
   window.__ttlSign = async function (req) {
     try {
+      // Se busca por el path de la URL pedida: el puente firma cualquier endpoint de
+      // TikTok LIVE, no solo /webcast/im/fetch/.
+      var needle = req.url;
+      try { needle = new URL(req.url).pathname; } catch (e) {}
+
       // Solo miramos las entradas nuevas: una firma anterior dejaría su URL caducada aquí.
       var offset = performance.getEntriesByType("resource").length;
 
@@ -60,7 +65,7 @@
       for (var i = 0; i < 30 && !signed; i++) {
         var entries = performance.getEntriesByType("resource");
         for (var j = entries.length - 1; j >= offset; j--) {
-          if (entries[j].name.indexOf("/webcast/im/fetch/") !== -1) {
+          if (entries[j].name.indexOf(needle) !== -1) {
             signed = entries[j].name;
             break;
           }
@@ -74,7 +79,7 @@
         post({
           type: "error",
           request_id: req.request_id,
-          message: "la petición no llegó a salir: sin entrada de im/fetch en el timeline",
+          message: "la petición no llegó a salir: sin entrada de " + needle + " en el timeline",
         });
         return;
       }
@@ -84,6 +89,7 @@
         request_id: req.request_id,
         url: signed,
         cookie: document.cookie,
+        page: location.href,
       });
     } catch (e) {
       post({ type: "error", request_id: req.request_id, message: String(e) });

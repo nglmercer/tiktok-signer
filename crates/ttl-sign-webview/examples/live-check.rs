@@ -37,10 +37,26 @@ fn main() -> ! {
         .init();
 
     let requested_user = std::env::args().nth(1);
+    // Hoy el flujo no funciona en anónimo: ver el paso 3.
+    let session_id = std::env::var("TTL_SESSION_ID").unwrap_or_default();
+    let autenticado = !session_id.is_empty();
+    println!(
+        "sesión: {}",
+        if autenticado {
+            "autenticada (TTL_SESSION_ID)"
+        } else {
+            "anónima"
+        }
+    );
 
-    run(EngineConfig::default(), move |signer| {
+    let config = EngineConfig {
+        session_id,
+        ..EngineConfig::default()
+    };
+
+    run(config, move |signer| {
         let rt = tokio::runtime::Runtime::new().expect("runtime de tokio");
-        let code = match rt.block_on(check(signer.clone(), requested_user)) {
+        let code = match rt.block_on(check(signer.clone(), requested_user, autenticado)) {
             Ok(()) => 0,
             Err(e) => {
                 eprintln!("\nFALLA: {e}");
@@ -52,7 +68,11 @@ fn main() -> ! {
     })
 }
 
-async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), String> {
+async fn check(
+    signer: Signer,
+    requested_user: Option<String>,
+    autenticado: bool,
+) -> Result<(), String> {
     // --- 1. ¿Quién está en directo? --------------------------------------------------
     let user = match requested_user {
         Some(user) => {
@@ -113,10 +133,23 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
     let signed_at = Instant::now();
     let signed = match signer.fetch(&lookup.room_id).await {
         SignOutcome::Ok(signed) => signed,
+        SignOutcome::Rejected(reason) if !autenticado => {
+            return Err(format!(
+                "TikTok rechazó la firma: {reason}.\n\n\
+                 La sesión es anónima, y eso hoy no basta: `/webcast/room/enter/` responde \
+                 \"User doesn\'t login\" y `/webcast/im/fetch/` responde 200 con cuerpo vacío, \
+                 que es el mismo rechazo dicho en voz baja. Por la misma ruta de firma, \
+                 `room/info` y `room/check_alive` sí responden, así que ni la firma ni la \
+                 repetición son el problema. Compruébalo con:\n\
+                 \n    cargo run -p ttl-sign-webview --example endpoint-probe -- <usuario>\n\
+                 \nPara probar autenticado, exporta la cookie `sessionid` de tu cuenta:\n\
+                 \n    TTL_SESSION_ID=<sessionid> cargo run -p ttl-sign-webview --example live-check\n"
+            ))
+        }
         SignOutcome::Rejected(reason) => {
             return Err(format!(
-                "TikTok rechazó la firma: {reason}. No es transitorio; revisa la coherencia \
-                 UA↔params y docs/06-risks-and-ops.md §1"
+                "TikTok rechazó la firma pese a la sesión autenticada: {reason}. No es \
+                 transitorio; revisa la coherencia UA↔params y docs/06-risks-and-ops.md §1"
             ))
         }
         SignOutcome::Transport(e) => return Err(format!("fallo de transporte: {e}")),

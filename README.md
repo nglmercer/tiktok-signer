@@ -18,7 +18,7 @@ una captura real no se puede validar nada de lo que sigue.
 | Crate | Estado |
 |---|---|
 | `ttl-sign-core` | Presets, queries, cookie jar, `SignOutcome` y lectura mínima de protobuf. Con tests, sin I/O. |
-| `ttl-sign-webview` | Motor `wry`: puente JS, readiness gate, navegación, descubrimiento de canales y firma. Verificado contra TikTok hasta la firma incluida. |
+| `ttl-sign-webview` | Motor `wry`: puente JS, readiness gate, navegación, descubrimiento de canales, firma de URLs arbitrarias y replay. Verificado contra TikTok: firma y replay funcionan (`room/info` responde 25 KB). |
 | `ttl-live-ws` | Cliente WS con heartbeat, `ack` y rechazo 200 tipado. **Sin verificar contra TikTok** (bloqueado por lo de abajo). |
 | `ttl-sign-server` | `GET /webcast/fetch` y `GET /healthz` según la spec de Euler. |
 
@@ -27,29 +27,39 @@ una captura real no se puede validar nada de lo que sigue.
 > documentados en un solo sitio (`crates/ttl-sign-core/src/proto.rs`) para que corregirlos
 > sea cambiar cuatro constantes.
 
-### Bloqueo actual: `/webcast/im/fetch/` responde 200 con cuerpo vacío
+### Bloqueo actual: hace falta sesión autenticada
 
-Verificado contra directos reales el 2026-08-10. Lo que **sí** funciona:
+Verificado contra directos reales el 2026-08-10, firmando cada endpoint por la **misma**
+ruta (SDK de la página → replay desde Rust):
 
-- descubrir quién está en directo y resolver `unique_id` → `room_id` (sin firma),
-- que webmssdk firme nuestra URL: sale con `X-Gnarly`, `X-Dynosaur`, `X-Bogus` y `msToken`,
-- repetir esa URL desde Rust con las cookies del webview (incluidas las `HttpOnly`).
+| Endpoint | Anónimo |
+|---|---|
+| `/webcast/room/info/` | 200, ~25 KB de JSON |
+| `/webcast/room/check_alive/` | 200, JSON correcto |
+| `/webcast/room/enter/` | 200, `{"message":"User doesn't login"}` |
+| `/webcast/im/fetch/` | 200, **0 bytes** |
 
-Lo que no: la respuesta llega **200 con 0 bytes**, que es el patrón de rechazo silencioso.
-Da igual el juego de parámetros (probado también el de la propia página), las cabeceras
-(`Referer`, `Origin`, `Sec-Fetch-*`) o quién repita la petición: el navegador tampoco
-puede leerla. Y el reproductor web actual **ya no llama a ese endpoint** — usa
-`/webcast/room/enter/`, `/webcast/room/check_alive/` y `/webcast/feed/`.
+Que los dos primeros respondan descarta que fallen la firma, las cabeceras o el replay.
+El cuerpo vacío de `im/fetch` es el mismo "necesitas sesión" que `room/enter` dice con
+todas las letras. Reproducible:
 
-Hipótesis pendientes, por orden:
+```sh
+cargo run -p ttl-sign-webview --example endpoint-probe -- <usuario en directo>
+```
 
-1. El endpoint exige sesión autenticada (`sessionid`) — es la decisión abierta de
-   [06](docs/06-risks-and-ops.md#decisiones-abiertas), ahora en el camino crítico.
-2. El flujo cambió y la URL del WebSocket sale hoy de `/webcast/room/enter/`, no de
-   `/webcast/im/fetch/`. Eso invalidaría [00 §1](docs/00-research.md#1-flujo-real-de-conexión).
+Por eso `sessionid` deja de ser la decisión abierta de
+[06](docs/06-risks-and-ops.md#decisiones-abiertas) y pasa a ser requisito. Está
+implementado y **vacío por defecto**: el signer no toca ninguna cuenta salvo que se le
+pase una.
 
-Para diagnosticar hay `cargo run -p ttl-sign-webview --example page-probe -- <usuario> "<js>"`,
-que evalúa JS en la página y enseña qué pide de verdad.
+```sh
+TTL_SESSION_ID=<cookie sessionid> cargo run -p ttl-sign-webview --example live-check
+TTL_SESSION_ID=<cookie sessionid> cargo run -p ttl-sign-server
+```
+
+Queda sin verificar el tramo final (protobuf → WebSocket → frames): necesita una cuenta.
+Con `sessionid`, el WS además **exige** esa cookie en el handshake o responde
+"illegal secret key".
 
 ## Uso
 
