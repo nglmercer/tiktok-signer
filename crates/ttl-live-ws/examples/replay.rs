@@ -1,16 +1,16 @@
-//! F1 — Validar el modelo de conexión **sin webview** (`docs/02-roadmap.md`).
+//! F1 — Validate the connection model **without a webview** (`docs/02-roadmap.md`).
 //!
-//! Reproduce a mano lo capturado en F0: repite la petición del fixture con `reqwest`,
-//! extrae `push_server` / `route_params` / `cursor` / `internal_ext`, construye la URI
-//! del WebSocket y conecta. Si llegan frames, el modelo de conexión es correcto y se
-//! puede pasar a F2; si no, el problema está en el modelo y no en la firma.
+//! Replays the F0 capture manually: repeats the fixture request with `reqwest`, extracts
+//! `push_server` / `route_params` / `cursor` / `internal_ext`, builds the WebSocket URI,
+//! and connects. Incoming frames validate the connection model; otherwise the problem is
+//! in the model rather than signing.
 //!
 //! ```sh
-//! # Repite la petición del fixture (los params firmados caducan en ~30 s:
-//! # hay que capturar y ejecutar seguido)
+//! # Repeat the fixture request (signed parameters expire after about 30 seconds;
+//! # capture and execute them back-to-back)
 //! cargo run -p ttl-live-ws --example replay -- fixtures/f0/im_fetch.curl
 //!
-//! # Sin repetir la petición: usa el cuerpo protobuf ya capturado
+//! # Without repeating the request: use the captured protobuf body
 //! cargo run -p ttl-live-ws --example replay -- fixtures/f0/im_fetch.curl \
 //!     --pb fixtures/f0/im_fetch.pb
 //! ```
@@ -21,7 +21,7 @@ use anyhow::{bail, Context, Result};
 use ttl_live_ws::{ConnectConfig, LiveConnection};
 use ttl_sign_core::{CookieJar, FetchResult, Preset, Query};
 
-/// Lo que se puede sacar de un `Copy as cURL`.
+/// Data extracted from `Copy as cURL`.
 #[derive(Debug, Default)]
 struct CurlFixture {
     url: String,
@@ -43,9 +43,9 @@ impl CurlFixture {
     }
 }
 
-/// Parser de `Copy as cURL` suficiente para el fixture: URL, `-H` y `-b`.
+/// Minimal `Copy as cURL` parser for the fixture: URL, `-H`, and `-b`.
 ///
-/// Chrome emite las cabeceras con comillas simples y continuaciones de línea con `\`.
+/// Chrome emits headers with single quotes and line continuations using `\`.
 fn parse_curl(raw: &str) -> Result<CurlFixture> {
     let tokens = tokenize(raw);
     let mut fixture = CurlFixture::default();
@@ -76,19 +76,19 @@ fn parse_curl(raw: &str) -> Result<CurlFixture> {
                 fixture.url = other.to_string();
                 i += 1;
             }
-            // Cualquier otra opción con valor (`--data-raw`, `-X`, …): saltar ambos.
+            // Any other option with a value (`--data-raw`, `-X`, …): skip both.
             other if other.starts_with('-') => i += 2,
             _ => i += 1,
         }
     }
 
     if fixture.url.is_empty() {
-        bail!("no se encontró la URL en el fixture cURL");
+        bail!("fixture cURL does not contain a URL");
     }
     Ok(fixture)
 }
 
-/// Trocea respetando comillas simples y dobles, e ignora las continuaciones `\<nl>`.
+/// Tokenize while respecting single and double quotes and ignoring `\<nl>` continuations.
 fn tokenize(raw: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
@@ -101,7 +101,7 @@ fn tokenize(raw: &str) -> Vec<String> {
             (Some(_), c) => current.push(c),
             (None, '\'') | (None, '"') => quote = Some(c),
             (None, '\\') => {
-                // Continuación de línea: se traga el salto.
+                // Line continuation: consume the newline.
                 if chars.peek() == Some(&'\n') {
                     chars.next();
                 }
@@ -147,25 +147,25 @@ async fn main() -> Result<()> {
 
     let room_id = fixture
         .room_id()
-        .context("la URL del fixture no trae room_id")?;
+        .context("fixture URL does not contain room_id")?;
     let user_agent = fixture
         .user_agent()
-        .context("el fixture no trae User-Agent; sin él el WS se rechaza")?
+        .context("fixture does not contain User-Agent; the WebSocket will be rejected")?
         .to_string();
 
     println!("room_id ......... {room_id}");
     println!("user-agent ...... {user_agent}");
-    println!("cookies ......... {}", fixture.cookies); // Display redacta los valores.
+    println!("cookies ......... {}", fixture.cookies); // Display redacts values.
 
-    // --- Paso 2: la petición firmada -------------------------------------------------
+    // --- Step 2: signed request -----------------------------------------------------
     let signed_at = Instant::now();
     let protobuf = match &pb_path {
         Some(path) => {
-            println!("\n[1/3] usando el protobuf capturado: {path}");
-            std::fs::read(path).with_context(|| format!("no se pudo leer {path}"))?
+            println!("\n[1/3] using captured protobuf: {path}");
+            std::fs::read(path).with_context(|| format!("could not read {path}"))?
         }
         None => {
-            println!("\n[1/3] repitiendo la petición del fixture…");
+            println!("\n[1/3] repeating fixture request…");
             let client = reqwest::Client::builder().user_agent(&user_agent).build()?;
             let mut request = client.get(&fixture.url);
             for (k, v) in &fixture.headers {
@@ -175,24 +175,24 @@ async fn main() -> Result<()> {
                 .header("Cookie", fixture.cookies.to_cookie_string())
                 .send()
                 .await
-                .context("la petición falló")?;
+                .context("request failed")?;
 
             let status = response.status();
             let body = response.bytes().await?.to_vec();
             println!("      HTTP {status}, {} bytes", body.len());
             if !status.is_success() {
-                bail!("TikTok respondió {status}: el fixture ya no vale, recaptura F0");
+                bail!("TikTok returned {status}: fixture is stale; recapture F0");
             }
             if body.is_empty() {
-                bail!("cuerpo vacío con {status}: rechazo silencioso, no es un fallo de red");
+                bail!("empty body with {status}: silent rejection, not a network failure");
             }
             body
         }
     };
 
-    // --- Paso 3: extraer los parámetros del WebSocket --------------------------------
-    println!("\n[2/3] decodificando ProtoMessageFetchResult…");
-    let result = FetchResult::decode(&protobuf).context("protobuf ilegible")?;
+    // --- Step 3: extract WebSocket parameters ---------------------------------------
+    println!("\n[2/3] decoding ProtoMessageFetchResult…");
+    let result = FetchResult::decode(&protobuf).context("unreadable protobuf")?;
     println!("      push_server ..... {}", short(&result.push_server));
     println!(
         "      route_params .... {} entradas",
@@ -203,13 +203,13 @@ async fn main() -> Result<()> {
 
     if let Some(reason) = result.rejection_reason() {
         bail!(
-            "la respuesta es un rechazo ({reason}). No es transitorio: no reintentar. \
-             Revisa docs/00-research.md §1 antes de seguir."
+            "response is rejected ({reason}). This is not transient; do not retry. \
+             Review docs/00-research.md §1 before continuing."
         );
     }
 
-    // --- Paso 4: abrir el WebSocket --------------------------------------------------
-    println!("\n[3/3] conectando el WebSocket…");
+    // --- Step 4: open the WebSocket -------------------------------------------------
+    println!("\n[3/3] connecting WebSocket…");
     let mut connection = LiveConnection::open_with(
         &result,
         &fixture.cookies,
@@ -219,7 +219,7 @@ async fn main() -> Result<()> {
         &ConnectConfig::default(),
     )
     .await
-    .context("no se pudo abrir el WebSocket")?;
+    .context("could not open WebSocket")?;
 
     println!(
         "      conectado en {:?} desde la firma",
@@ -232,7 +232,7 @@ async fn main() -> Result<()> {
         );
     }
     if signed_at.elapsed() > Duration::from_secs(30) {
-        println!("      aviso: más de 30 s desde la firma; si cierra ya, es caducidad");
+        println!("      warning: more than 30 s since signing; an immediate close may be expiry");
     }
 
     let deadline = tokio::time::sleep(Duration::from_secs(30));
@@ -250,7 +250,7 @@ async fn main() -> Result<()> {
                         break;
                     }
                 }
-                Some(Err(e)) => bail!("el WebSocket falló: {e}"),
+                Some(Err(e)) => bail!("WebSocket failed: {e}"),
                 None => break,
             }
         }
@@ -259,13 +259,13 @@ async fn main() -> Result<()> {
     connection.close().await;
 
     if received == 0 {
-        bail!("no llegó ningún frame `msg` en 30 s: F1 NO pasa");
+        bail!("no `msg` frame arrived in 30 s: F1 FAILED");
     }
-    println!("\nF1 PASA: {received} frames por el WebSocket con parámetros capturados a mano.");
+    println!("\nF1 PASSED: {received} WebSocket frames with manually captured parameters.");
     Ok(())
 }
 
-/// Recorta valores largos para que el log no sea ilegible ni filtre la cadena entera.
+/// Trim long values so logs stay readable and do not expose complete tokens.
 fn short(s: &str) -> String {
     if s.chars().count() <= 60 {
         return s.to_string();

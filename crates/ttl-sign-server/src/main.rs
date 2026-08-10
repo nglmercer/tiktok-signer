@@ -1,15 +1,13 @@
-//! Binario del sign server.
+//! Sign-server binary.
 //!
-//! El event loop del webview se queda con el hilo principal y no retorna, así que el
-//! runtime de tokio se construye a mano en un hilo aparte. `#[tokio::main]` aquí **no**
-//! sirve (`docs/01-architecture.md` §D3).
+//! The WebView event loop owns the main thread and does not return, so the Tokio runtime is
+//! built manually on a separate thread. `#[tokio::main]` **does not** work here.
 //!
 //! ```sh
 //! TTL_BIND=0.0.0.0:8080 cargo run -p ttl-sign-server
 //! ```
 //!
-//! Apuntar un cliente TikTokLive de Python a este servidor es el criterio de aceptación
-//! de F3:
+//! Pointing a TikTokLive Python client at this server is the F3 acceptance criterion:
 //!
 //! ```python
 //! WebDefaults.tiktok_sign_url = "http://localhost:8080"
@@ -41,7 +39,7 @@ fn main() -> ! {
             .unwrap_or_else(|_| "https://www.tiktok.com/live".into()),
         contact_us: std::env::var("TTL_CONTACT_US").unwrap_or_default(),
         sign_timeout: Duration::from_secs(15),
-        // Sin sesión, TikTok responde vacío hoy: ver EngineConfig::session.
+        // Without a session TikTok currently returns an empty body.
         session: load_session(),
         ..EngineConfig::default()
     };
@@ -50,28 +48,28 @@ fn main() -> ! {
         %bind,
         max_concurrent,
         landing_url = %config.landing_url,
-        autenticado = config.is_authenticated(),
-        "arrancando"
+        authenticated = config.is_authenticated(),
+        "starting"
     );
     if !config.is_authenticated() {
         tracing::warn!(
-            "sin sesión: hoy TikTok devuelve cuerpo vacío en /webcast/im/fetch/ para \
-             sesiones anónimas. Inicia sesión con: cargo run -p ttl-sign-webview --example login"
+            "no session: TikTok currently returns an empty /webcast/im/fetch/ body for \
+             anonymous sessions. Log in with: cargo run -p ttl-sign-webview --example login"
         );
     }
 
-    // `run` se queda con el hilo principal; el servidor HTTP vive en el worker.
+    // `run` owns the main thread; the HTTP server lives in the worker.
     run(config, move |signer| {
         let rt = tokio::runtime::Runtime::new().expect("no se pudo crear el runtime de tokio");
         if let Err(e) = rt.block_on(serve(signer, bind, max_concurrent)) {
-            tracing::error!(error = %e, "el servidor HTTP terminó con error");
+            tracing::error!(error = %e, "HTTP server failed");
             std::process::exit(1);
         }
         std::process::exit(0);
     })
 }
 
-/// Sesión: `TTL_SESSION_ID` manda; si no, la guardada por el ejemplo `login`.
+/// Session: `TTL_SESSION_ID` takes precedence; otherwise use the session saved by `login`.
 fn load_session() -> ttl_sign_core::CookieJar {
     if let Ok(id) = std::env::var("TTL_SESSION_ID") {
         if !id.is_empty() {
@@ -81,7 +79,7 @@ fn load_session() -> ttl_sign_core::CookieJar {
     match session::configured_path().map(|path| session::load(&path)) {
         Some(Ok(Some(jar))) => jar,
         Some(Err(e)) => {
-            tracing::warn!(error = %e, "no se pudo leer la sesión guardada");
+            tracing::warn!(error = %e, "could not read saved session");
             ttl_sign_core::CookieJar::new()
         }
         _ => ttl_sign_core::CookieJar::new(),
@@ -96,15 +94,15 @@ async fn serve(
     let state = AppState::new(signer.clone(), max_concurrent);
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
-        .with_context(|| format!("no se pudo escuchar en {bind}"))?;
-    info!(addr = %listener.local_addr()?, "escuchando");
+        .with_context(|| format!("could not listen on {bind}"))?;
+    info!(addr = %listener.local_addr()?, "listening");
 
     axum::serve(listener, router(state))
         .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;
-            info!("cierre solicitado");
+            info!("shutdown requested");
             signer.shutdown();
         })
         .await
-        .context("el servidor HTTP falló")
+        .context("HTTP server failed")
 }

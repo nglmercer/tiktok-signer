@@ -1,10 +1,7 @@
-//! Servidor HTTP compatible con la spec de sign server de Euler Stream
-//! (`docs/03-spec-sign-server.md`).
+//! HTTP server compatible with the Euler Stream sign-server specification.
 //!
-//! Capa fina a propósito: traduce HTTP ↔ llamadas al `Signer` y no tiene lógica propia.
-//! Existe sobre todo para poder validar la implementación contra clientes que no hemos
-//! escrito nosotros — un TikTokLive de Python apuntando aquí es la validación cruzada más
-//! barata que hay.
+//! Deliberately thin layer: translates HTTP ↔ `Signer` calls and has no signing logic of its
+//! own. It primarily enables validation with external clients such as TikTokLive for Python.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -24,14 +21,14 @@ use ttl_sign_webview::Signer;
 
 /// Cabecera que exige el cliente Python: sin ella aborta con `EMPTY_COOKIES`.
 const X_SET_TT_COOKIE: &str = "X-Set-TT-Cookie";
-/// Extensión propia: el UA realmente usado, para que el cliente lo replique en el WS.
+/// Custom extension: the actual User-Agent so clients can reuse it on the WebSocket.
 const X_SET_TT_USER_AGENT: &str = "X-Set-TT-User-Agent";
 const X_REQUEST_ID: &str = "X-Request-Id";
 
 pub struct AppState {
     signer: Signer,
-    /// Firmas simultáneas permitidas. Encolar hace caducar firmas ya emitidas
-    /// (~30 s de vida útil), así que por encima de esto se responde 429.
+    /// Allowed concurrent signatures. Queuing makes signatures expire, so requests above
+    /// this limit receive 429.
     slots: tokio::sync::Semaphore,
     max_concurrent: usize,
     started: Instant,
@@ -61,14 +58,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-/// Params que envían los clientes. Se ignora casi todo: los parámetros de navegador los
+/// Parameters sent by clients. Most are ignored: browser parameters are
 /// regenera el servidor desde su propio preset, y el UA usado se devuelve en
 /// `X-Set-TT-User-Agent` para que el cliente abra el WS con el mismo
 /// (`docs/03-spec-sign-server.md` §Regla).
 #[derive(Debug, Deserialize)]
 pub struct FetchQuery {
     room_id: Option<String>,
-    /// Solo para logs.
+    /// Used only for logs.
     client: Option<String>,
 }
 
@@ -83,7 +80,7 @@ async fn webcast_fetch(
         Some(id) => {
             return error_response(
                 StatusCode::BAD_REQUEST,
-                format!("room_id no numérico: {id}"),
+                format!("room_id is not numeric: {id}"),
                 request_id,
                 None,
             )
@@ -91,21 +88,21 @@ async fn webcast_fetch(
         None => {
             return error_response(
                 StatusCode::BAD_REQUEST,
-                "falta el parámetro room_id".into(),
+                "room_id parameter is missing".into(),
                 request_id,
                 None,
             )
         }
     };
 
-    // Rechazar antes que encolar: una firma que espera es una firma que caduca.
+    // Reject before queuing: a queued signature is an expired signature.
     let _slot = match state.slots.try_acquire() {
         Ok(slot) => slot,
         Err(_) => {
-            warn!(request_id, "límite de concurrencia alcanzado");
+            warn!(request_id, "concurrency limit reached");
             return error_response(
                 StatusCode::TOO_MANY_REQUESTS,
-                "límite de firmas simultáneas alcanzado".into(),
+                "concurrent signature limit reached".into(),
                 request_id,
                 Some("concurrent_signs"),
             );
@@ -125,7 +122,7 @@ async fn webcast_fetch(
                 client = query.client.as_deref().unwrap_or("-"),
                 latency_ms,
                 bytes = signed.protobuf.len(),
-                "firma emitida"
+                "signature issued"
             );
 
             let mut headers = HeaderMap::new();
@@ -133,7 +130,7 @@ async fn webcast_fetch(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static("application/protobuf"),
             );
-            // Sin esta cabecera el cliente Python aborta antes de intentar el WS.
+            // Without this header the Python client aborts before trying the WebSocket.
             if let Ok(v) = HeaderValue::from_str(&signed.cookies.to_cookie_string()) {
                 headers.insert(X_SET_TT_COOKIE, v);
             }
@@ -145,13 +142,13 @@ async fn webcast_fetch(
             (StatusCode::OK, headers, signed.protobuf).into_response()
         }
 
-        // Rechazo: TikTok nos ha detectado. 502, y el cliente no debe reintentar.
+        // Rejection: TikTok detected the request. Return 502; clients must not retry.
         SignOutcome::Rejected(reason) => {
             state.rejects.fetch_add(1, Ordering::Relaxed);
-            warn!(request_id, room_id, latency_ms, %reason, "firma rechazada");
+            warn!(request_id, room_id, latency_ms, %reason, "signature rejected");
             error_response(
                 StatusCode::BAD_GATEWAY,
-                format!("TikTok rechazó la petición: {reason}"),
+                format!("TikTok rejected the request: {reason}"),
                 request_id,
                 match reason {
                     RejectReason::HttpStatus(_) => Some("upstream_status"),
@@ -161,9 +158,9 @@ async fn webcast_fetch(
         }
 
         SignOutcome::Transport(err) => {
-            warn!(request_id, room_id, latency_ms, %err, "fallo de transporte");
+            warn!(request_id, room_id, latency_ms, %err, "transport failure");
             let status = match err {
-                // El pool todavía no está listo: es reintentable, y 503 lo dice.
+                // The pool is not ready yet: this is retryable, and 503 communicates that.
                 SignError::SdkNotReady
                 | SignError::NoInstanceAvailable
                 | SignError::LoginTimeout(_) => StatusCode::SERVICE_UNAVAILABLE,
@@ -189,8 +186,8 @@ async fn healthz(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> 
     }))
 }
 
-/// Cuerpo de error en JSON. **Nunca** un 200 con cuerpo vacío: el cliente lo
-/// interpretaría como "detectado" y el mensaje apuntaría al sitio equivocado.
+/// JSON error body. **Never** return a 200 with an empty body: clients would interpret it as
+/// detection and point diagnostics at the wrong component.
 fn error_response(
     status: StatusCode,
     message: String,
@@ -214,7 +211,7 @@ mod tests {
 
     #[test]
     fn room_id_validation_rejects_non_numeric() {
-        // Refleja la tabla de errores de docs/03: 400 solo por room_id ausente o no numérico.
+        // 400 is reserved for missing or non-numeric room_id.
         let valid = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
         assert!(valid("7300000000000000000"));
         assert!(!valid(""));
@@ -226,7 +223,7 @@ mod tests {
     fn error_body_carries_a_message() {
         let response = error_response(
             StatusCode::TOO_MANY_REQUESTS,
-            "límite alcanzado".into(),
+            "limit reached".into(),
             7,
             Some("concurrent_signs"),
         );

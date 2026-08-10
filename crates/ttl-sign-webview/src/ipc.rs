@@ -6,17 +6,17 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FromPage {
-    /// El SDK está cargado y el puente instalado. Sin esto no se acepta ninguna firma.
+    /// The SDK is loaded and the bridge is installed. No signature is accepted before this.
     Ready {
         #[serde(default)]
         sdk_version: Option<String>,
-        /// Cómo se ve el entorno desde dentro de la página. Los params de la query se
+        /// Environment visible from inside the page. Query parameters are
         /// alinean con esto en vez de adivinarlo desde Rust.
         #[serde(default)]
         env: Option<PageEnv>,
     },
-    /// El puente ya puso las cookies de sesión en **este** documento. El motor espera a
-    /// esto antes de navegar a la página de verdad.
+    /// The bridge installed session cookies in **this** document. The engine waits for this
+    /// before navigating to the real page.
     Session {
         #[serde(default)]
         installed: usize,
@@ -25,8 +25,8 @@ pub enum FromPage {
         #[serde(default)]
         cookie: String,
     },
-    /// La petición salió firmada por el SDK. **No trae cuerpo**: `/webcast/im/fetch/`
-    /// no devuelve cabeceras CORS, así que la página no puede leer la respuesta. Rust
+    /// The SDK sent a signed request. **It has no body**: `/webcast/im/fetch/` does not
+    /// return CORS headers, so the page cannot read the response. Rust
     /// repite esta URL con su propio cliente HTTP (Plan B).
     Signed {
         request_id: u64,
@@ -34,7 +34,7 @@ pub enum FromPage {
         url: String,
         #[serde(default)]
         cookie: String,
-        /// Página desde la que se firmó: es el `Referer` que espera TikTok.
+        /// Page that produced the signature: this is the `Referer` TikTok expects.
         #[serde(default)]
         page: String,
     },
@@ -45,12 +45,11 @@ pub enum FromPage {
         status: u16,
         body: String,
     },
-    /// Fallo dentro de la página. `request_id == 0` significa que no corresponde a
-    /// ninguna petición concreta (p. ej. `sdk_not_ready`).
+    /// Page failure. `request_id == 0` means it is not tied to a specific request.
     Error { request_id: u64, message: String },
 }
 
-/// Lo que la página dice de sí misma: idioma, zona horaria, pantalla y región de la
+/// What the page reports about itself: language, time zone, screen, and region of the
 /// cuenta. Sustituye a adivinarlo con un preset fijo.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PageEnv {
@@ -68,7 +67,7 @@ pub struct PageEnv {
     pub screen_height: u32,
 }
 
-/// Rust → JS. La query la construye Rust; el JS no compone parámetros.
+/// Rust → JS. Rust builds the query; JavaScript does not compose parameters.
 #[derive(Debug, Clone, Serialize)]
 pub struct ToPage {
     pub request_id: u64,

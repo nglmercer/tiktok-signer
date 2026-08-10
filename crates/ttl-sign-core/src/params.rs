@@ -1,21 +1,20 @@
-//! Construcción de query strings.
+//! Query-string construction.
 //!
 //! Dos consumidores:
 //!
-//! - [`FetchParams`] → la query de `https://webcast.tiktok.com/webcast/im/fetch/`
-//!   (`docs/00-research.md` §4). Es lo único que se firma.
-//! - [`WsParams`] → la query del WebSocket (`docs/05-spec-websocket-client.md`), que
-//!   **no** se firma: los `route_params` vienen ya firmados dentro del protobuf.
+//! - [`FetchParams`] → query for `https://webcast.tiktok.com/webcast/im/fetch/`; it is the
+//!   only signed part.
+//! - [`WsParams`] → WebSocket query; it is **not** signed because `route_params` are already
+//!   signed inside the protobuf.
 //!
-//! Se usa un `Vec<(String, String)>` y no un `HashMap` a propósito: el orden es estable
-//! (tests reproducibles) y la query del WS necesita repetir `version_code` con dos
-//! valores distintos, cosa que un mapa no puede representar.
+//! A `Vec<(String, String)>` is intentional instead of a `HashMap`: ordering is stable and
+//! the WebSocket query must repeat `version_code` with two different values.
 
 use rand::Rng;
 
 use crate::preset::Preset;
 
-/// Query string en construcción: pares ordenados, con duplicados permitidos.
+/// Query string under construction: ordered pairs with duplicates allowed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Query(Vec<(String, String)>);
 
@@ -24,8 +23,8 @@ impl Query {
         Self(Vec::new())
     }
 
-    /// Añade un par. Si la clave ya existía, **sobrescribe** el valor en su posición
-    /// original (así los `ws_client_params` pisan a los `route_params` sin reordenar).
+    /// Add a pair. If the key exists, **overwrite** its value in place so client parameters
+    /// override route parameters without reordering.
     pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
         let key = key.into();
         let value = value.into();
@@ -36,7 +35,7 @@ impl Query {
         self
     }
 
-    /// Añade un par **sin** deduplicar. Necesario para el `version_code` duplicado.
+    /// Add a pair **without** deduplication. Required for the duplicated `version_code`.
     pub fn push_raw(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
         self.0.push((key.into(), value.into()));
         self
@@ -89,8 +88,8 @@ impl Query {
     }
 }
 
-/// Percent-encoding para query strings: se conserva el conjunto no reservado más
-/// `.`, `-`, `_`, `~`, y se codifica todo lo demás. Es lo que hace `encodeURIComponent`.
+/// Percent-encoding for query strings: preserve unreserved characters plus `.`, `-`, `_`,
+/// and `~`, and encode everything else. This matches `encodeURIComponent`.
 fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
@@ -104,13 +103,13 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
-/// Genera un `device_id` de 19 dígitos, como el que emite el navegador real.
+/// Generate a 19-digit `device_id`, matching the real browser.
 pub fn random_device_id() -> String {
     let mut rng = rand::thread_rng();
     let mut s = String::with_capacity(19);
-    s.push(char::from_digit(rng.gen_range(1..=9), 10).expect("dígito válido"));
+    s.push(char::from_digit(rng.gen_range(1..=9), 10).expect("valid digit"));
     for _ in 0..18 {
-        s.push(char::from_digit(rng.gen_range(0..=9), 10).expect("dígito válido"));
+        s.push(char::from_digit(rng.gen_range(0..=9), 10).expect("valid digit"));
     }
     s
 }
@@ -122,7 +121,7 @@ pub fn random_last_rtt() -> u32 {
 
 /// Query de `/webcast/im/fetch/`.
 ///
-/// El `X-Bogus` / `X-Gnarly` / `msToken` **no** se añaden aquí: los pone `webmssdk.js`
+/// `X-Bogus` / `X-Gnarly` / `msToken` are **not** added here; `webmssdk.js` adds them.
 /// dentro del webview al interceptar el `fetch` (`docs/01-architecture.md` §D2).
 #[derive(Debug, Clone)]
 pub struct FetchParams {
@@ -130,12 +129,12 @@ pub struct FetchParams {
     pub device_id: String,
     pub cursor: String,
     pub internal_ext: String,
-    /// Email de contacto que pide la spec de Euler. Vacío = no se emite.
+    /// Contact email required by the Euler spec. Empty means it is omitted.
     pub contact_us: String,
-    /// `sup_ws_ds_opt`: le dice a TikTok qué tipo de WebSocket queremos.
+    /// `sup_ws_ds_opt`: tells TikTok which WebSocket type we want.
     ///
     /// Con `1` la respuesta trae un `push_server` de tipo
-    /// `ws_proxy/ws_reuse_supplement/`; el patrón que documenta
+    /// `ws_proxy/ws_reuse_supplement/`; the pattern documented by
     /// `docs/00-research.md` §1 es `webcast<N>-ws-web-<idc>`. Configurable para poder
     /// comparar los dos contra una sala real.
     pub sup_ws_ds_opt: u8,
@@ -206,7 +205,7 @@ impl FetchParams {
     }
 }
 
-/// Endpoint que hay que firmar. El único del camino crítico.
+/// Endpoint to sign. The only endpoint on the critical path.
 pub const FETCH_ENDPOINT: &str = "https://webcast.tiktok.com/webcast/im/fetch/";
 
 /// Query del WebSocket: `route_params` firmados + nuestros params + el `version_code`
@@ -214,14 +213,14 @@ pub const FETCH_ENDPOINT: &str = "https://webcast.tiktok.com/webcast/im/fetch/";
 #[derive(Debug, Clone)]
 pub struct WsParams {
     pub room_id: String,
-    /// `gzip`, o vacío para pedir sin compresión.
+    /// `gzip`, or empty to request no compression.
     pub compress: String,
     pub last_rtt: u32,
     /// Cursor de la respuesta de `/webcast/im/fetch/`.
     ///
     /// Va en la query del WebSocket, no en los `route_params`: comprobado contra una
     /// respuesta real, donde `route_params` solo trae `wrss` e `imprp`. Sin cursor el
-    /// handshake se acepta igual y luego **no llega ni un frame**, que es el fallo más
+    /// handshake is accepted but **no frames arrive**, the hardest failure
     /// desconcertante de todo el flujo.
     pub cursor: String,
     /// `internal_ext` de la misma respuesta. Mismo razonamiento.
@@ -284,10 +283,10 @@ impl WsParams {
 
     /// URI completa del WebSocket.
     ///
-    /// Tres reglas que hay que respetar tal cual (`docs/05` §Construcción de la URI):
+    /// Three rules must be preserved exactly (`docs/05` URI construction):
     ///
-    /// 1. Los `route_params` con valor vacío se descartan.
-    /// 2. Los params del cliente se aplican después: ganan ante colisión.
+    /// 1. Empty `route_params` values are discarded.
+    /// 2. Client parameters are applied afterward and win collisions.
     /// 3. `&version_code=270000` se concatena al final **aunque** ya haya un
     ///    `version_code=180800`. La query lo lleva dos veces, y es intencionado.
     pub fn build_uri(
@@ -403,7 +402,7 @@ mod tests {
             &[("wss_push_room_id".into(), "42".into())],
             &preset(),
         );
-        // `&` delante: si no, `update_version_code=` cuenta también.
+        // Include the leading `&`; otherwise `update_version_code=` is counted too.
         let occurrences = uri.matches("&version_code=").count();
         assert_eq!(
             occurrences, 2,

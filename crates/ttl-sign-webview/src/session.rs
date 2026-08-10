@@ -1,19 +1,18 @@
-//! Persistencia de la sesión de TikTok.
+//! TikTok session persistence.
 //!
-//! Guarda las cookies de una cuenta real para no tener que iniciar sesión en cada
-//! arranque. Es material sensible: `sessionid` **es** la cuenta, así que el fichero se
-//! escribe con permisos `0600` y nunca se loguea en claro
-//! (`docs/06-risks-and-ops.md` §Seguridad de los fixtures).
+//! Stores real-account cookies so login is not required at every startup. This is sensitive
+//! material: `sessionid` **is** the account, so the file uses `0600` permissions and is never
+//! logged in clear text.
 
 use std::io;
 use std::path::{Path, PathBuf};
 
 use ttl_sign_core::CookieJar;
 
-/// Cookies que merece la pena conservar entre arranques.
+/// Cookies worth preserving between starts.
 ///
-/// El resto (analítica, tema de la interfaz, banderas de experimentos) se descarta: no
-/// hace falta y guardar menos es guardar mejor.
+/// Discard analytics, UI theme, and experiment flags: they are unnecessary, and storing less
+/// is safer.
 const PERSISTED: &[&str] = &[
     "sessionid",
     "sessionid_ss",
@@ -26,11 +25,11 @@ const PERSISTED: &[&str] = &[
     "odin_tt",
 ];
 
-/// La cookie que decide si hay sesión o no.
+/// Cookie that determines whether a session exists.
 pub const SESSION_COOKIE: &str = "sessionid";
 
-/// Dónde se guarda por defecto: `$XDG_CONFIG_HOME/ttl-signer/session`, o
-/// `~/.config/ttl-signer/session`. Fuera del repositorio, a propósito.
+/// Default location: `$XDG_CONFIG_HOME/ttl-signer/session`, or
+/// `~/.config/ttl-signer/session`, deliberately outside the repository.
 pub fn default_path() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -38,17 +37,17 @@ pub fn default_path() -> Option<PathBuf> {
     Some(base.join("ttl-signer").join("session"))
 }
 
-/// Ruta efectiva: `TTL_SESSION_FILE` si está, si no la de por defecto.
+/// Effective path: `TTL_SESSION_FILE` when set, otherwise the default path.
 pub fn configured_path() -> Option<PathBuf> {
     std::env::var_os("TTL_SESSION_FILE")
         .map(PathBuf::from)
         .or_else(default_path)
 }
 
-/// Guarda las cookies con permisos `0600`.
+/// Save cookies with `0600` permissions.
 ///
-/// Los permisos se ponen **antes** de escribir nada: crear el fichero legible y
-/// restringirlo después deja una ventana en la que cualquiera puede leer la sesión.
+/// Set permissions **before** writing: creating a readable file and restricting it afterward
+/// leaves a window in which anyone can read the session.
 pub fn save(path: &Path, jar: &CookieJar) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -89,7 +88,7 @@ pub fn filter(jar: &CookieJar) -> CookieJar {
         .collect()
 }
 
-/// ¿Estas cookies son una sesión iniciada?
+/// Do these cookies represent a logged-in session?
 pub fn is_logged_in(jar: &CookieJar) -> bool {
     jar.get(SESSION_COOKIE).is_some_and(|v| !v.is_empty())
 }
@@ -108,7 +107,11 @@ mod tests {
         assert_eq!(filtered.get("ttwid"), Some("xyz"));
         assert_eq!(filtered.get("odin_tt"), Some("o"));
         assert_eq!(filtered.get("tiktok_webapp_theme"), None);
-        assert_eq!(filtered.get("vacia"), None, "una cookie vacía no es sesión");
+        assert_eq!(
+            filtered.get("vacia"),
+            None,
+            "an empty cookie is not a session"
+        );
     }
 
     #[test]
@@ -133,7 +136,11 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-            assert_eq!(mode & 0o777, 0o600, "la sesión no puede quedar legible");
+            assert_eq!(
+                mode & 0o777,
+                0o600,
+                "session file must not be readable by others"
+            );
         }
 
         std::fs::remove_dir_all(&dir).ok();

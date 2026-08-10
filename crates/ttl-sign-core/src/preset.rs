@@ -1,23 +1,23 @@
-//! Presets: única fuente de verdad para UA + parámetros de navegador.
+//! Presets: the single source of truth for User-Agent and browser parameters.
 //!
-//! La causa nº1 de rechazo es que el `User-Agent` no cuadre con `browser_name` /
-//! `browser_version` (ver `docs/00-research.md` §3). Por eso aquí **no existe** una API
-//! para fijar un UA suelto: el UA se *deriva* del preset y no se puede desincronizar.
+//! The leading rejection cause is a mismatch between `User-Agent`, `browser_name`, and
+//! `browser_version`. Therefore there is **no** API for setting a standalone UA: it is
+//! *derived* from the preset and cannot become unsynchronized.
 //!
-//! La relación es la que usan los clientes de referencia:
+//! The relationship matches reference clients:
 //!
 //! ```text
 //! user_agent == format!("{browser_name}/{browser_version}")
 //! ```
 //!
-//! es decir `browser_name = "Mozilla"` y `browser_version = "5.0 (Windows NT 10.0; ...)"`.
+//! In other words, `browser_name = "Mozilla"` and `browser_version = "5.0 (Windows NT 10.0; ...)"`.
 
 use std::fmt;
 
-/// Navegador + sistema operativo. Genera el UA y los params que lo describen.
+/// Browser + operating system. Generates the UA and its describing parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevicePreset {
-    /// `browser_name` de la query. En la práctica, siempre `Mozilla`.
+    /// `browser_name` query value. In practice this is always `Mozilla`.
     pub browser_name: String,
     /// `browser_version` de la query: el UA **sin** el prefijo `Mozilla/`.
     pub browser_version: String,
@@ -58,7 +58,7 @@ impl DevicePreset {
         }
     }
 
-    /// El `User-Agent` que corresponde a este preset. **La única forma de obtener un UA.**
+    /// The User-Agent corresponding to this preset. **The only way to obtain a UA.**
     pub fn user_agent(&self) -> String {
         format!("{}/{}", self.browser_name, self.browser_version)
     }
@@ -79,7 +79,7 @@ impl Default for DevicePreset {
     }
 }
 
-/// Idioma, zona horaria y región. Todos los campos han de ser coherentes entre sí.
+/// Language, time zone, and region. All fields must be mutually consistent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocationPreset {
     /// `app_language` / `webcast_language`, p. ej. `en`.
@@ -93,7 +93,7 @@ pub struct LocationPreset {
 }
 
 impl LocationPreset {
-    /// Costa este de EE. UU., inglés.
+    /// US east coast, English.
     pub fn us_east() -> Self {
         Self {
             language: "en".into(),
@@ -103,7 +103,7 @@ impl LocationPreset {
         }
     }
 
-    /// Europa occidental, español.
+    /// Western Europe, Spanish.
     pub fn es() -> Self {
         Self {
             language: "es".into(),
@@ -124,7 +124,7 @@ impl Default for LocationPreset {
     }
 }
 
-/// Resolución de pantalla declarada.
+/// Declared screen resolution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScreenPreset {
     pub width: u32,
@@ -148,7 +148,7 @@ impl Default for ScreenPreset {
     }
 }
 
-/// El trío completo. Es lo que se pasa a [`crate::FetchParams`] y [`crate::WsParams`];
+/// Complete preset passed to [`crate::FetchParams`] and [`crate::WsParams`];
 /// no existe camino para construir una query con un preset y firmar con otro.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Preset {

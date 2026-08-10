@@ -1,25 +1,24 @@
-//! Paso 1 del flujo: `unique_id` → `room_id`. **Sin firma**
-//! (`docs/00-research.md` §1).
+//! Flow step 1: `unique_id` → `room_id`. **Unsigned**.
 //!
-//! Dos caminos, porque TikTok sirve las dos cosas de forma distinta:
+//! Two paths are required because TikTok serves these differently:
 //!
-//! | Qué | Cómo | Firma |
+//! | What | How | Signed |
 //! |---|---|---|
-//! | `unique_id` → `room_id` + estado | `GET /api-live/user/room/?uniqueId=…`, JSON | no |
-//! | Quién está en directo ahora | DOM de `https://www.tiktok.com/live` **ya renderizado** | no |
+//! | `unique_id` → `room_id` + status | `GET /api-live/user/room/?uniqueId=…`, JSON | no |
+//! | Who is live now | **Rendered** DOM from `https://www.tiktok.com/live` | no |
 //!
-//! La página `/live` no trae los datos en el HTML: los pinta el cliente. Por eso
-//! [`extract_live_channels`] se aplica al DOM que devuelve el webview, no a un `GET`
-//! pelado, que solo devolvería el esqueleto.
+//! `/live` does not include the data in HTML; the client renders it. Therefore
+//! [`extract_live_channels`] operates on the WebView DOM, not a raw `GET` that returns only
+//! the shell.
 //!
-//! Aquí no hay I/O: todo son funciones puras sobre el texto que traiga quien sea.
+//! There is no I/O here: all functions are pure operations over caller-provided text.
 
 use std::collections::BTreeMap;
 
-/// Página de exploración de directos. Necesita JS para poblarse.
+/// Live exploration page. JavaScript is required to populate it.
 pub const LIVE_EXPLORE_URL: &str = "https://www.tiktok.com/live";
 
-/// URL del directo de un usuario.
+/// URL for a user's live page.
 pub fn live_page_url(unique_id: &str) -> String {
     format!(
         "https://www.tiktok.com/@{}/live",
@@ -27,7 +26,7 @@ pub fn live_page_url(unique_id: &str) -> String {
     )
 }
 
-/// Endpoint que resuelve `unique_id` → `room_id`. No requiere firma ni cookies.
+/// Endpoint resolving `unique_id` → `room_id`. It requires no signature or cookies.
 pub fn room_lookup_url(unique_id: &str) -> String {
     format!(
         "https://www.tiktok.com/api-live/user/room/?aid=1988&sourceType=54&uniqueId={}",
@@ -35,23 +34,23 @@ pub fn room_lookup_url(unique_id: &str) -> String {
     )
 }
 
-/// Estado de la sala de un usuario.
+/// A user's room status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoomLookup {
     pub unique_id: String,
     pub room_id: String,
     pub nickname: String,
-    /// Campo `status` tal cual. `4` = el directo ha terminado; `2` = en directo.
+    /// Raw `status` field. `4` means the live session ended; `2` means live.
     pub status: i64,
     pub title: String,
 }
 
 impl RoomLookup {
-    /// ¿Está emitiendo ahora?
+    /// Is the user live now?
     ///
-    /// TikTok marca con `4` las salas terminadas. El `room_id` sigue ahí, así que
-    /// comprobar solo que exista no vale: firmar contra una sala apagada da un protobuf
-    /// sin `push_server`, que es indistinguible de un rechazo.
+    /// TikTok marks ended rooms with `4`. The `room_id` remains present, so checking only
+    /// that it exists is insufficient: signing an offline room returns a protobuf without
+    /// `push_server`, indistinguishable from a rejection.
     pub fn is_live(&self) -> bool {
         self.status != 4 && !self.room_id.is_empty() && self.room_id != "0"
     }
@@ -66,7 +65,7 @@ impl RoomLookup {
             unique_id: string_at(user, "uniqueId"),
             room_id: string_at(user, "roomId"),
             nickname: string_at(user, "nickname"),
-            // El estado del usuario y el de la sala coinciden; si falta uno, vale el otro.
+            // User and room status match; use the other field when one is missing.
             status: user
                 .get("status")
                 .and_then(serde_json::Value::as_i64)
@@ -85,26 +84,24 @@ fn string_at(value: &serde_json::Value, key: &str) -> String {
         .to_string()
 }
 
-/// Un canal encontrado en la página de exploración.
+/// A channel found on the exploration page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveChannel {
     pub unique_id: String,
-    /// Vacío si la página solo traía el enlace: hay que resolverlo con [`room_lookup_url`].
+    /// Empty when the page contained only a link; resolve it with [`room_lookup_url`].
     pub room_id: String,
     pub nickname: String,
 }
 
-/// Extrae los canales de un DOM ya renderizado de `https://www.tiktok.com/live`.
+/// Extract channels from the rendered DOM of `https://www.tiktok.com/live`.
 ///
-/// Combina dos fuentes porque ninguna es fiable por sí sola:
+/// Combine two sources because neither is reliable alone:
 ///
-/// 1. Los enlaces `/@usuario/live` del DOM — sobreviven a cualquier cambio de esquema
-///    JSON, pero no traen `room_id`.
-/// 2. Cualquier objeto JSON embebido que tenga `uniqueId` **y** `roomId`, buscado
-///    recursivamente sin asumir dónde vive. TikTok mueve esas claves de sitio a menudo;
-///    lo que no cambia es que se llamen así.
+/// 1. DOM links `/@user/live` survive JSON schema changes but do not contain `room_id`.
+/// 2. Any embedded JSON object containing both `uniqueId` **and** `roomId`, found recursively
+///    without assuming its location. TikTok moves these keys often, but their names persist.
 pub fn extract_live_channels(dom: &str) -> Vec<LiveChannel> {
-    // BTreeMap: orden estable y deduplicado por unique_id.
+    // BTreeMap provides stable ordering and unique_id deduplication.
     let mut found: BTreeMap<String, LiveChannel> = BTreeMap::new();
 
     for unique_id in extract_live_links(dom) {
@@ -138,7 +135,7 @@ pub fn extract_live_channels(dom: &str) -> Vec<LiveChannel> {
     found.into_values().collect()
 }
 
-/// `href="/@usuario/live"` → `usuario`.
+/// `href="/@user/live"` → `user`.
 fn extract_live_links(dom: &str) -> Vec<String> {
     let mut out = Vec::new();
     for chunk in dom.split("/@").skip(1) {
@@ -160,8 +157,8 @@ fn is_username_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-'
 }
 
-/// Contenido de los `<script>` que declaran JSON, más el documento entero por si el
-/// DOM que nos pasan ya *es* JSON.
+/// JSON-declaring `<script>` contents, plus the full document when the provided DOM is
+/// already JSON.
 fn embedded_json_blobs(dom: &str) -> Vec<String> {
     let trimmed = dom.trim_start();
     if trimmed.starts_with('{') || trimmed.starts_with('[') {
@@ -184,7 +181,7 @@ fn embedded_json_blobs(dom: &str) -> Vec<String> {
     out
 }
 
-/// Recorre el árbol JSON buscando objetos que sean un canal.
+/// Walk the JSON tree looking for channel objects.
 fn collect_channels(value: &serde_json::Value, out: &mut Vec<LiveChannel>) {
     match value {
         serde_json::Value::Object(map) => {
@@ -225,7 +222,7 @@ fn collect_channels(value: &serde_json::Value, out: &mut Vec<LiveChannel>) {
 mod tests {
     use super::*;
 
-    /// Forma real de la respuesta de `/api-live/user/room/`, recortada.
+    /// Truncated real response shape for `/api-live/user/room/`.
     const ROOM_JSON: &str = r#"{
       "data": {
         "user": {
@@ -249,8 +246,7 @@ mod tests {
         assert_eq!(lookup.title, "Alex Warren LIVE");
     }
 
-    /// El `room_id` sigue presente cuando el directo ha terminado: por eso no basta con
-    /// comprobar que exista.
+    /// `room_id` remains after a live session ends, so checking only its presence is not enough.
     #[test]
     fn status_4_is_not_live_even_with_a_room_id() {
         let lookup = RoomLookup::from_json(ROOM_JSON).unwrap();
@@ -329,8 +325,8 @@ mod tests {
         assert!(channels.is_empty());
     }
 
-    /// La página `/live` sin renderizar no trae canales. Devolver una lista vacía es la
-    /// respuesta correcta, no un error: dice exactamente lo que pasa.
+    /// An unrendered `/live` page contains no channels. Returning an empty list is correct,
+    /// not an error: it describes exactly what happened.
     #[test]
     fn an_unrendered_page_yields_nothing() {
         let shell = r#"<html><head><script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"

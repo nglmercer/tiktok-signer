@@ -1,68 +1,90 @@
-// Puente JS↔Rust. Se inyecta con `with_initialization_script`, es decir **antes** de
-// que corra webmssdk.js, para que cuando el SDK parchee `fetch` nosotros ya estemos
-// instalados y no observemos un estado a medias.
+// JS↔Rust bridge. It is injected with `with_initialization_script`, so it runs **before**
+// webmssdk.js. When the SDK patches `fetch`, this bridge is already installed and never
+// observes an intermediate state.
 //
-// Contrato completo en docs/04-spec-webview-bridge.md.
+// Full contract: docs/04-spec-webview-bridge.md.
 (function () {
   if (window.__ttlBridge) return;
   window.__ttlBridge = true;
+
+  const TIKTOK_HOSTNAME = /(^|\.)tiktok\.com$/;
+  const SESSION_COOKIE_ATTRIBUTES = "; path=/; domain=.tiktok.com; secure";
+  const BASE64_CHUNK_BYTES = 0x8000;
+  const WEBSOCKET_STATES = Object.freeze({
+    CONNECTING: 0,
+    OPEN: 1,
+    CLOSING: 2,
+    CLOSED: 3,
+  });
+  const WEBSOCKET_CLOSE_CODES = Object.freeze({
+    NORMAL: 1000,
+    ABNORMAL: 1006,
+  });
+  const ASYNC_EVENT_DELAY_MS = 0;
+  const MAX_CAPTURES = 40;
+  const MAX_CAPTURE_BODY_BYTES = 400000;
+  const MAX_CAPTURE_TEXT_BYTES = 400;
+  const SIGNATURE_TIMELINE_ATTEMPTS = 30;
+  const SIGNATURE_TIMELINE_DELAY_MS = 100;
+  const SDK_READY_TIMEOUT_MS = 30000;
+  const SDK_READY_POLL_INTERVAL_MS = 100;
+  const DEFAULT_SCREEN_WIDTH = 1920;
+  const DEFAULT_SCREEN_HEIGHT = 1080;
+  const HTTP_OK = 200;
+  const JS_EVALUATION_PREFIX = "js:";
 
   var post = function (o) {
     try {
       window.ipc.postMessage(JSON.stringify(o));
     } catch (e) {
-      // Sin IPC no hay nada que hacer y no queremos romper la página.
+      // Without IPC there is nothing useful to do, and the page must keep running.
     }
   };
 
-  // --- Sesión ----------------------------------------------------------------------
+  // --- Session ---------------------------------------------------------------------
   //
-  // Las cookies se instalan **aquí dentro**, no con `WebView::set_cookie`.
+  // Cookies are installed **here**, not through `WebView::set_cookie`.
   //
-  // Medido el 2026-08-10 en WebKitGTK 2.52: `set_cookie` escribe en un almacén que la
-  // página no lee. Las cookies se leen de vuelta desde Rust —parecen instaladas— pero no
-  // aparecen en `document.cookie` ni viajan en las peticiones, así que TikTok renderiza
-  // la sesión como anónima y `/webcast/im/fetch/` responde 200 con cero bytes. Ese era el
-  // "rechazo silencioso": no había rechazo, había sesión que nunca llegó.
+  // Measured on 2026-08-10 with WebKitGTK 2.52: `set_cookie` writes to a store that the
+  // page does not read. Rust can read those cookies back, but they never appear in
+  // `document.cookie` or in requests. TikTok then renders an anonymous session and
+  // `/webcast/im/fetch/` returns HTTP 200 with zero bytes.
   //
-  // Este script corre en el origen correcto y antes que nada de la página.
-  // `document.cookie` no puede marcar `HttpOnly`, y da igual: al servidor solo le llega
-  // la cabecera `Cookie`, que es idéntica.
+  // This script runs at the correct origin before page code. `document.cookie` cannot
+  // set `HttpOnly`; that does not matter because the server receives the same `Cookie`
+  // header either way.
   var sessionInstalled = 0;
   try {
-    if (/(^|\.)tiktok\.com$/.test(location.hostname)) {
+    if (TIKTOK_HOSTNAME.test(location.hostname)) {
       var pairs = window.__ttlSession || [];
       for (var i = 0; i < pairs.length; i++) {
-        document.cookie =
-          pairs[i][0] + "=" + pairs[i][1] + "; path=/; domain=.tiktok.com; secure";
+        document.cookie = pairs[i][0] + "=" + pairs[i][1] + SESSION_COOKIE_ATTRIBUTES;
         sessionInstalled++;
       }
     }
   } catch (e) {}
 
-  // El spread sobre un Uint8Array grande desborda la pila: se trocea.
+  // Spreading a large Uint8Array overflows the stack, so encode in chunks.
   var b64 = function (buf) {
     var bytes = new Uint8Array(buf);
     var s = "";
-    var CHUNK = 0x8000;
-    for (var i = 0; i < bytes.length; i += CHUNK) {
-      s += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    for (var i = 0; i < bytes.length; i += BASE64_CHUNK_BYTES) {
+      s += String.fromCharCode.apply(null, bytes.subarray(i, i + BASE64_CHUNK_BYTES));
     }
     return btoa(s);
   };
 
-  // URLs de WebSocket que abre la propia página. Envolver el constructor es seguro:
-  // webmssdk parchea `fetch` y `XMLHttpRequest`, no esto. Sirve para comparar la URI que
-  // construimos nosotros con la que usa el reproductor real.
+  // WebSocket URLs opened by the page itself. Wrapping the constructor is safe:
+  // webmssdk patches `fetch` and `XMLHttpRequest`, not this. It lets us compare our URI
+  // with the real player URI.
   //
-  // `window.__ttlBlockWs = true` además impide que la página llegue a conectar: devuelve
-  // un socket inerte, sin hacer ninguna petición de red. Hace falta porque dos conexiones
-  // a la misma sala con la misma sesión se estorban — el servidor acepta la segunda y no
-  // le manda nada.
+  // `window.__ttlBlockWs = true` stops the page from connecting by returning an inert
+  // socket without making a network request. Two connections to the same room with the
+  // same session interfere: TikTok accepts the second one but sends it no events.
   window.__ttlWsUrls = [];
-  // El initialization script puede pedir que el socket del reproductor se bloquee. No lo
-  // reseteamos aquí: este archivo corre después de ese script y el valor debe sobrevivir
-  // hasta que el reproductor intente conectarse.
+  // The initialization script may request that player sockets are blocked. Do not reset
+  // it here: this file runs after that script and the value must survive until the player
+  // tries to connect.
   window.__ttlBlockWs = window.__ttlBlockWs === true;
   var NativeWebSocket = window.WebSocket;
   var blockedEvent = function (type, options) {
@@ -85,7 +107,7 @@
   var BlockedWebSocket = function (url) {
     this.url = String(url);
     this.protocol = "";
-    this.readyState = 0;
+    this.readyState = WEBSOCKET_STATES.CONNECTING;
     this.bufferedAmount = 0;
     this.extensions = "";
     this.binaryType = "blob";
@@ -97,16 +119,20 @@
 
     var self = this;
     // Let the page install its handlers before reporting the intentionally blocked
-    // connection. No WebKit network loader is created by this object.
+    // connection. This object creates no WebKit network loader.
     setTimeout(function () {
-      if (self.readyState !== 0) return;
-      self.readyState = 3;
+      if (self.readyState !== WEBSOCKET_STATES.CONNECTING) return;
+      self.readyState = WEBSOCKET_STATES.CLOSED;
       self.__ttlDispatch("error", blockedEvent("error"));
       self.__ttlDispatch(
         "close",
-        blockedEvent("close", { code: 1006, reason: "blocked", wasClean: false })
+        blockedEvent("close", {
+          code: WEBSOCKET_CLOSE_CODES.ABNORMAL,
+          reason: "blocked",
+          wasClean: false,
+        })
       );
-    }, 0);
+    }, ASYNC_EVENT_DELAY_MS);
   };
   BlockedWebSocket.prototype.__ttlDispatch = function (type, event) {
     event = event || blockedEvent(type);
@@ -142,41 +168,44 @@
     return true;
   };
   BlockedWebSocket.prototype.send = function () {
-    if (this.readyState !== 1) {
+    if (this.readyState !== WEBSOCKET_STATES.OPEN) {
       var error = new Error("WebSocket is not open");
       error.name = "InvalidStateError";
       throw error;
     }
   };
   BlockedWebSocket.prototype.close = function (code, reason) {
-    if (this.readyState === 2 || this.readyState === 3) return;
-    this.readyState = 2;
+    if (
+      this.readyState === WEBSOCKET_STATES.CLOSING ||
+      this.readyState === WEBSOCKET_STATES.CLOSED
+    ) return;
+    this.readyState = WEBSOCKET_STATES.CLOSING;
     var self = this;
     setTimeout(function () {
-      if (self.readyState === 3) return;
-      self.readyState = 3;
+      if (self.readyState === WEBSOCKET_STATES.CLOSED) return;
+      self.readyState = WEBSOCKET_STATES.CLOSED;
       self.__ttlDispatch(
         "close",
         blockedEvent("close", {
-          code: typeof code === "number" ? code : 1000,
+          code: typeof code === "number" ? code : WEBSOCKET_CLOSE_CODES.NORMAL,
           reason: reason == null ? "" : String(reason),
           wasClean: true,
         })
       );
-    }, 0);
+    }, ASYNC_EVENT_DELAY_MS);
   };
-  BlockedWebSocket.CONNECTING = 0;
-  BlockedWebSocket.OPEN = 1;
-  BlockedWebSocket.CLOSING = 2;
-  BlockedWebSocket.CLOSED = 3;
+  BlockedWebSocket.CONNECTING = WEBSOCKET_STATES.CONNECTING;
+  BlockedWebSocket.OPEN = WEBSOCKET_STATES.OPEN;
+  BlockedWebSocket.CLOSING = WEBSOCKET_STATES.CLOSING;
+  BlockedWebSocket.CLOSED = WEBSOCKET_STATES.CLOSED;
   var WrappedWebSocket = function (url, protocols) {
     try {
       window.__ttlWsUrls.push(String(url));
     } catch (e) {}
     if (window.__ttlBlockWs) {
-      // Interceptar es preferible a lanzar: una excepción aquí rompería el reproductor
-      // en un sitio que no espera fallos. El stub también evita errores del loader de
-      // WebKit que producía el antiguo socket deliberadamente inválido.
+      // Intercepting is preferable to throwing: an exception here would break the player
+      // where it does not expect failures. The stub also avoids WebKit loader errors from
+      // the deliberately invalid socket previously used here.
       return new BlockedWebSocket(url, protocols);
     }
     return protocols === undefined
@@ -189,18 +218,16 @@
   });
   window.WebSocket = WrappedWebSocket;
 
-  // --- Grabadora de respuestas -----------------------------------------------------
+  // --- Response recorder -----------------------------------------------------------
   //
-  // Este script corre **antes** que webmssdk, así que cuando el SDK envuelve
-  // `window.fetch` envuelve el nuestro. La cadena queda:
+  // This script runs **before** webmssdk, so when the SDK wraps `window.fetch` it wraps
+  // ours. The resulting chain is:
   //
-  //     página → wrapper del SDK (firma la URL) → wrapper nuestro → fetch nativo
+  //     page → SDK wrapper (signs the URL) → our wrapper → native fetch
   //
-  // Es decir: nuestra capa ve la URL **ya firmada** y la `Response` real. Eso permite
-  // dos cosas que antes no se podían: leer el cuerpo sin repetir la petición, y ver
-  // exactamente qué pide el reproductor de verdad cuando arranca solo.
+  // Our layer sees the **already signed** URL and the real `Response`. It can read the
+  // body without repeating the request and observe exactly what the real player requests.
   var WATCH = /\/webcast\//;
-  var MAX_CAPTURES = 40;
   window.__ttlCaptures = [];
 
   var record = function (entry) {
@@ -223,8 +250,8 @@
       var promise = nativeFetch(input, init);
       if (!WATCH.test(url)) return promise;
 
-      // El `.then` se registra antes de devolver la promesa, así que el clon se hace
-      // antes de que la página consuma el cuerpo.
+      // Register `.then` before returning the promise, so cloning happens before the page
+      // consumes the body.
       promise.then(
         function (res) {
           var meta = { url: res.url || url, status: res.status, kind: res.type, via: "fetch" };
@@ -232,20 +259,21 @@
           try {
             clone = res.clone();
           } catch (e) {
-            record(Object.assign(meta, { error: "no se pudo clonar: " + e }));
+            record(Object.assign(meta, { error: "could not clone response: " + e }));
             return;
           }
           clone.arrayBuffer().then(
             function (buf) {
-              // Solo se guarda el cuerpo de lo que sirve para abrir el WebSocket; del
-              // resto basta el tamaño, y guardarlo llenaría la cola de ruido.
-              var keep = /\/webcast\/im\/fetch\//.test(meta.url) && buf.byteLength < 400000;
+              // Keep bodies only for data required to open the WebSocket. For everything
+              // else the size is sufficient, and retaining it would fill the queue with noise.
+              var keep = /\/webcast\/im\/fetch\//.test(meta.url) &&
+                buf.byteLength < MAX_CAPTURE_BODY_BYTES;
               record(
                 Object.assign(meta, {
                   bytes: buf.byteLength,
                   body: keep ? b64(buf) : "",
                   text:
-                    !keep && buf.byteLength && buf.byteLength < 400
+                    !keep && buf.byteLength && buf.byteLength < MAX_CAPTURE_TEXT_BYTES
                       ? String.fromCharCode.apply(null, new Uint8Array(buf))
                       : "",
                 })
@@ -264,8 +292,8 @@
     };
   }
 
-  // Mismo razonamiento para XHR: webmssdk parchea los dos caminos y el reproductor usa
-  // uno u otro según la versión del bundle.
+  // The same reasoning applies to XHR: webmssdk patches both paths and the player chooses
+  // one or the other depending on the bundle version.
   var xhrProto = window.XMLHttpRequest && window.XMLHttpRequest.prototype;
   if (xhrProto && xhrProto.open && xhrProto.send) {
     var nativeOpen = xhrProto.open;
@@ -291,11 +319,11 @@
               if (body instanceof ArrayBuffer) {
                 record(Object.assign(meta, { bytes: body.byteLength, body: b64(body) }));
               } else {
-                // Con `responseType` de texto el cuerpo binario ya viene corrompido por
-                // la decodificación UTF-8: se anota que pasó, pero no se usa.
+                // A text `responseType` has already corrupted a binary body through UTF-8
+                // decoding. Record that fact, but never use the body.
                 record(
                   Object.assign(meta, {
-                    error: "responseType=" + (self.responseType || "text") + ", ilegible como binario",
+                    error: "responseType=" + (self.responseType || "text") + ", unreadable as binary",
                   })
                 );
               }
@@ -313,27 +341,27 @@
     return new Promise(function (r) { setTimeout(r, ms); });
   };
 
-  // Firma sin leer la respuesta (Plan B de docs/01-architecture.md §D2).
+  // Sign without reading the response (Plan B in docs/01-architecture.md §D2).
   //
-  // `webcast.tiktok.com/webcast/im/fetch/` **no** devuelve cabeceras CORS, así que desde
-  // la página el cuerpo es ilegible: `fetch` resuelve a `undefined` y un `fetch` pristino
-  // desde un iframe da "Load failed". Verificado en F2 contra un directo real.
+  // `webcast.tiktok.com/webcast/im/fetch/` does **not** return CORS headers, so the page
+  // cannot read the body: `fetch` resolves to `undefined` and a pristine iframe `fetch`
+  // reports "Load failed".
   //
-  // Lo que sí ocurre es que la petición *sale firmada*: webmssdk le añade X-Bogus,
-  // X-Gnarly, X-Dynosaur y msToken. Esa URL aparece en el Performance Timeline aunque la
-  // respuesta no se pueda leer, así que el puente devuelve la URL firmada y es Rust quien
-  // la repite con su propio cliente HTTP, donde no hay CORS que valga.
+  // The request still leaves **signed**: webmssdk adds X-Bogus, X-Gnarly, X-Dynosaur, and
+  // msToken. The signed URL appears in the Performance Timeline even when the response is
+  // unreadable. The bridge returns that URL and Rust repeats it through its HTTP client,
+  // where CORS does not apply.
   window.__ttlSign = async function (req) {
     try {
-      // Se busca por el path de la URL pedida: el puente firma cualquier endpoint de
-      // TikTok LIVE, no solo /webcast/im/fetch/.
+      // Match the requested URL path: the bridge signs every TikTok LIVE endpoint, not
+      // only /webcast/im/fetch/.
       var needle = req.url;
       try { needle = new URL(req.url).pathname; } catch (e) {}
 
-      // Solo miramos las entradas nuevas: una firma anterior dejaría su URL caducada aquí.
+      // Inspect only new entries; a previous signature could leave an expired URL here.
       var offset = performance.getEntriesByType("resource").length;
 
-      // `no-cors` evita el error de consola; la petición sale igual y se firma igual.
+      // `no-cors` avoids a console error; the request still leaves and is still signed.
       try {
         await fetch(req.url, {
           method: "GET",
@@ -341,11 +369,11 @@
           mode: "no-cors",
         });
       } catch (e) {
-        // Se espera que falle al leer: lo que importa es que haya salido.
+        // A read failure is expected; only the outgoing request matters.
       }
 
       var signed = null;
-      for (var i = 0; i < 30 && !signed; i++) {
+      for (var i = 0; i < SIGNATURE_TIMELINE_ATTEMPTS && !signed; i++) {
         var entries = performance.getEntriesByType("resource");
         for (var j = entries.length - 1; j >= offset; j--) {
           if (entries[j].name.indexOf(needle) !== -1) {
@@ -354,7 +382,7 @@
           }
         }
         if (!signed) {
-          await sleep(100);
+          await sleep(SIGNATURE_TIMELINE_DELAY_MS);
         }
       }
 
@@ -362,7 +390,7 @@
         post({
           type: "error",
           request_id: req.request_id,
-          message: "la petición no llegó a salir: sin entrada de " + needle + " en el timeline",
+          message: "request did not leave: no " + needle + " entry in the performance timeline",
         });
         return;
       }
@@ -379,26 +407,25 @@
     }
   };
 
-  // Paso 1 del flujo (docs/00-research.md §1): no lleva firma, pero se hace desde la
-  // página igualmente para reutilizar la sesión y el UA reales.
+  // Flow step 1 (docs/00-research.md §1): it is unsigned, but still runs from the page
+  // to reuse the real session and User-Agent.
   //
-  // - `req.url`  → GET de texto (el lookup uniqueId → roomId).
-  // - sin `url`  → el DOM ya renderizado, que es la única forma de ver quién está en
-  //   directo: la página /live no trae esos datos en el HTML, los pinta el cliente.
+  // - `req.url`  → text GET (the uniqueId → roomId lookup).
+  // - no `url`   → rendered DOM, the only way to see who is live: /live does not include
+  //   that data in HTML because the client renders it.
   window.__ttlText = async function (req) {
     try {
-      // `js:<expresión>` evalúa en la página y devuelve el resultado como texto. Es la
-      // vía de diagnóstico del puente (qué pide la página, qué símbolos hay); no
-      // interviene en ninguna firma.
-      if (req.url && req.url.indexOf("js:") === 0) {
-        var value = eval(req.url.slice(3));
+      // `js:<expression>` evaluates in the page and returns text. It is a diagnostic
+      // bridge path (page requests and available symbols); it never participates in signing.
+      if (req.url && req.url.indexOf(JS_EVALUATION_PREFIX) === 0) {
+        var value = eval(req.url.slice(JS_EVALUATION_PREFIX.length));
         if (value && typeof value.then === "function") {
           value = await value;
         }
         post({
           type: "text",
           request_id: req.request_id,
-          status: 200,
+          status: HTTP_OK,
           body: typeof value === "string" ? value : JSON.stringify(value),
         });
         return;
@@ -407,7 +434,7 @@
         post({
           type: "text",
           request_id: req.request_id,
-          status: 200,
+          status: HTTP_OK,
           body: document.documentElement.outerHTML,
         });
         return;
@@ -428,9 +455,9 @@
     }
   };
 
-  // Aviso de que este documento ya tiene la sesión puesta. El motor lo usa para saber
-  // cuándo puede salir de la página de arranque hacia la de verdad: navegar antes sería
-  // pedir la página como anónimo, que es justo lo que se quiere evitar.
+  // Notify Rust that this document has installed the session. The engine uses it to decide
+  // when it can navigate from the bootstrap document to the real page. Navigating first
+  // would request the page anonymously.
   post({
     type: "session",
     installed: sessionInstalled,
@@ -438,10 +465,10 @@
     cookie: document.cookie,
   });
 
-  // Cómo se ve el entorno desde dentro. Los params de la query tienen que decir esto
-  // mismo: si el UA dice una cosa y `browser_language` otra, es incoherencia detectable
-  // (`docs/06-risks-and-ops.md` §1). Se lee de la página en vez de adivinarlo.
-  var entorno = function () {
+  // The environment visible from inside the page. Query parameters must report the same
+  // values: a mismatch between the User-Agent and `browser_language` is detectable
+  // (`docs/06-risks-and-ops.md` §1). Read it from the page instead of guessing.
+  var environment = function () {
     var region = "";
     var language = "";
     try {
@@ -463,13 +490,13 @@
       browser_language: browserLanguage,
       tz_name: tz,
       region: region,
-      screen_width: screen.width || 1920,
-      screen_height: screen.height || 1080,
+      screen_width: screen.width || DEFAULT_SCREEN_WIDTH,
+      screen_height: screen.height || DEFAULT_SCREEN_HEIGHT,
     };
   };
 
-  // Readiness gate: sin `byted_acrawler` las firmas salen sin X-Gnarly y TikTok las
-  // rechaza, con un síntoma que apunta al sitio equivocado.
+  // Readiness gate: without `byted_acrawler`, signatures lack X-Gnarly and TikTok rejects
+  // them with a symptom that points to the wrong component.
   var t0 = Date.now();
   var poll = setInterval(function () {
     if (typeof window.byted_acrawler !== "undefined") {
@@ -478,10 +505,10 @@
       try {
         version = window.byted_acrawler.version || null;
       } catch (e) {}
-      post({ type: "ready", sdk_version: version, env: entorno() });
-    } else if (Date.now() - t0 > 30000) {
+      post({ type: "ready", sdk_version: version, env: environment() });
+    } else if (Date.now() - t0 > SDK_READY_TIMEOUT_MS) {
       clearInterval(poll);
       post({ type: "error", request_id: 0, message: "sdk_not_ready" });
     }
-  }, 100);
+  }, SDK_READY_POLL_INTERVAL_MS);
 })();

@@ -1,15 +1,15 @@
-//! Cliente WebSocket de TikTok LIVE.
+//! TikTok LIVE WebSocket client.
 //!
-//! Consume un `SignedFetch` y abre la conexión. **No firma nada**: los `route_params`
-//! vienen ya firmados por TikTok dentro del protobuf (`docs/05-spec-websocket-client.md`).
+//! Consumes a `SignedFetch` and opens the connection. **It does not sign anything**:
+//! `route_params` are already signed by TikTok inside the protobuf.
 //!
-//! Dos cosas que este crate deliberadamente **no** hace:
+//! Two things this crate deliberately **does not** do:
 //!
-//! - **No reconecta.** Los parámetros caducan en ~30 s, así que no existe "reconectar":
-//!   existe rehacer el flujo desde `/webcast/im/fetch/`. El cierre se expone con su causa
-//!   y decide el orquestador.
-//! - **No parsea eventos.** Devuelve el payload de los frames `msg` ya descomprimido; el
-//!   esquema de eventos es del consumidor.
+//! - **It does not reconnect.** Parameters expire after about 30 seconds, so reconnecting
+//!   means restarting the `/webcast/im/fetch/` flow. The orchestrator decides what to do
+//!   with the reported close reason.
+//! - **It does not parse events.** It returns decompressed `msg` payloads; event schemas
+//!   belong to the consumer.
 
 use std::time::Duration;
 
@@ -27,38 +27,42 @@ use tracing::{debug, error, warn};
 use ttl_sign_core::proto::PushFrame;
 use ttl_sign_core::{CookieJar, FetchResult, Preset, SignedFetch, WsParams};
 
-/// Fallos de la conexión. `Blocked200` está separado del resto a propósito: no es
-/// transitorio y reintentarlo es contraproducente.
+const DEFAULT_HEARTBEAT_SECONDS: u64 = 10;
+const INITIAL_HEARTBEAT_SEQUENCE: u64 = 1;
+const HTTP_OK: u16 = 200;
+
+/// Connection failures. `Blocked200` is intentionally separate: it is not transient and
+/// retrying is counterproductive.
 #[derive(Debug, thiserror::Error)]
 pub enum WsError {
-    /// El protobuf no traía `cursor`: la respuesta no es válida.
-    #[error("la respuesta no trae cursor inicial")]
+    /// The protobuf did not contain a `cursor`, so the response is invalid.
+    #[error("response does not contain an initial cursor")]
     InitialCursorMissing,
 
-    /// `push_server` o `route_params` vacíos: TikTok rechazó sin decirlo.
-    #[error("la respuesta no trae URL de WebSocket (rechazo silencioso)")]
+    /// Empty `push_server` or `route_params`: TikTok rejected the request silently.
+    #[error("response does not contain a WebSocket URL (silent rejection)")]
     WebsocketUrlMissing,
 
-    /// La URI no identifica la sala a la que hay que enviar `im_enter_room`.
-    #[error("la URI del WebSocket no trae un room_id válido")]
+    /// The URI does not identify the room for the `im_enter_room` message.
+    #[error("WebSocket URI does not contain a valid room_id")]
     RoomIdMissing,
 
-    /// El jar no trae las cookies que el WS necesita.
-    #[error("faltan cookies de sesión para abrir el WebSocket")]
+    /// The cookie jar lacks the cookies required by the WebSocket.
+    #[error("session cookies are missing for the WebSocket")]
     EmptyCookies,
 
-    /// Handshake con status 200: **detección**. No reintentar.
-    #[error("TikTok rechazó el handshake (HTTP 200){}", .0.as_ref().map(|m| format!(": {m}")).unwrap_or_default())]
+    /// A 200 handshake means **detection**. Do not retry.
+    #[error("TikTok rejected the handshake (HTTP {HTTP_OK}){}", .0.as_ref().map(|m| format!(": {m}")).unwrap_or_default())]
     Blocked200(Option<String>),
 
-    #[error("el protobuf no se pudo decodificar: {0}")]
+    #[error("could not decode protobuf: {0}")]
     Decode(String),
 
-    #[error("error de transporte: {0}")]
+    #[error("transport error: {0}")]
     Transport(String),
 
-    /// La conexión se cerró. Puede ser caducidad (>30 s desde la firma).
-    #[error("la conexión se cerró: {0}")]
+    /// The connection closed. This can be expiry after the signature becomes stale.
+    #[error("connection closed: {0}")]
     Closed(String),
 }
 
@@ -66,45 +70,45 @@ pub enum WsError {
 #[derive(Debug, Clone)]
 pub struct LiveMessage {
     pub log_id: u64,
-    /// Payload descomprimido. Contiene un `WebcastResponse`; parsearlo es del consumidor.
+    /// Decompressed payload. It contains a `WebcastResponse`; parsing belongs to the consumer.
     pub payload: Vec<u8>,
 }
 
-/// Opciones de la conexión.
+/// Connection options.
 #[derive(Debug, Clone)]
 pub struct ConnectConfig {
-    /// Coherente con `heartbeat_duration=10000` de la query.
+    /// Matches the `heartbeat_duration=10000` query parameter.
     pub heartbeat: Duration,
-    /// Pedir los frames comprimidos. Vacío = sin compresión.
+    /// Request compressed frames. Empty means no compression.
     pub compress: String,
 }
 
 impl Default for ConnectConfig {
     fn default() -> Self {
         Self {
-            heartbeat: Duration::from_secs(10),
+            heartbeat: Duration::from_secs(DEFAULT_HEARTBEAT_SECONDS),
             compress: "gzip".into(),
         }
     }
 }
 
-/// Conexión abierta. Se consume con [`LiveConnection::next_message`].
+/// An open connection, consumed with [`LiveConnection::next_message`].
 pub struct LiveConnection {
     stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
     internal_ext: String,
     room_id: u64,
     heartbeat_sequence: u64,
     heartbeat: tokio::time::Interval,
-    /// Opciones que devolvió el servidor en `Handshake-Options`, útiles en diagnóstico.
+    /// Options returned by the server in `Handshake-Options`, useful for diagnostics.
     handshake_options: Vec<(String, String)>,
     uri: String,
 }
 
 impl LiveConnection {
-    /// Abre la conexión a partir de una firma válida.
+    /// Open a connection from a valid signature.
     ///
-    /// Valida **antes** de tocar la red: un `push_server` vacío en un 200 significa que
-    /// TikTok rechazó la petición, y conectar no va a arreglarlo.
+    /// Validate **before** touching the network: an empty `push_server` in a 200 means
+    /// TikTok rejected the request, and connecting will not fix it.
     pub async fn open(
         signed: &SignedFetch,
         preset: &Preset,
@@ -124,11 +128,11 @@ impl LiveConnection {
         .await
     }
 
-    /// Abre una URI ya construida **y firmada** por el llamante.
+    /// Open a URI already built **and signed** by the caller.
     ///
-    /// Es el camino real: la URI del WebSocket lleva firma propia
-    /// (`byted_acrawler.frontierSign`), y quien sabe firmar es el motor de webview, no
-    /// este crate.
+    /// This is the real path: the WebSocket URI has its own signature
+    /// (`byted_acrawler.frontierSign`), and the webview engine—not this crate—knows how to
+    /// create it.
     pub async fn open_uri(
         uri: &str,
         cookies: &CookieJar,
@@ -151,8 +155,8 @@ impl LiveConnection {
         .await
     }
 
-    /// Igual que [`LiveConnection::open`] pero desde un [`FetchResult`] ya decodificado.
-    /// Es lo que usa el ejemplo `replay` de F1, que parte de un fixture y no de un firmante.
+    /// Like [`LiveConnection::open`], but from an already decoded [`FetchResult`]. The F1
+    /// `replay` example uses this path because it starts from a fixture.
     pub async fn open_with(
         result: &FetchResult,
         cookies: &CookieJar,
@@ -189,7 +193,7 @@ impl LiveConnection {
         .await
     }
 
-    /// El grueso de la conexión, común a las dos entradas.
+    /// Connection implementation shared by both entry points.
     async fn connect(
         uri: String,
         cookies: &CookieJar,
@@ -207,22 +211,21 @@ impl LiveConnection {
             headers.insert(
                 "Cookie",
                 HeaderValue::from_str(&cookies.to_cookie_string())
-                    .map_err(|e| WsError::Transport(format!("cookie inválida: {e}")))?,
+                    .map_err(|e| WsError::Transport(format!("invalid cookie: {e}")))?,
             );
             headers.insert(
                 "User-Agent",
                 HeaderValue::from_str(user_agent)
-                    .map_err(|e| WsError::Transport(format!("user-agent inválido: {e}")))?,
+                    .map_err(|e| WsError::Transport(format!("invalid User-Agent: {e}")))?,
             );
             // The browser sends this automatically for the page's WebSocket. TikTok can
             // accept a handshake without it, but the resulting connection may stay silent.
             headers.insert("Origin", HeaderValue::from_static("https://www.tiktok.com"));
         }
 
-        // Sin keepalive de protocolo: TikTok no responde a los `ping`, así que un
-        // ping_interval con su timeout cerraría la conexión sola
-        // (`docs/05-spec-websocket-client.md` §Opciones de conexión). `tungstenite` no
-        // envía pings por su cuenta; el keepalive real es el heartbeat de aplicación.
+        // No protocol keepalive: TikTok does not answer `ping`, so a ping interval with
+        // its timeout would close the connection. `tungstenite` does not send pings on its
+        // own; the application heartbeat is the real keepalive.
         let ws_config = WebSocketConfig::default();
 
         let (mut stream, response) =
@@ -256,35 +259,35 @@ impl LiveConnection {
             stream,
             internal_ext: internal_ext.to_string(),
             room_id,
-            heartbeat_sequence: 1,
+            heartbeat_sequence: INITIAL_HEARTBEAT_SEQUENCE,
             heartbeat,
             handshake_options,
             uri,
         })
     }
 
-    /// Opciones que anunció el servidor en el handshake.
+    /// Options announced by the server during the handshake.
     pub fn handshake_options(&self) -> &[(String, String)] {
         &self.handshake_options
     }
 
-    /// URI con la que se abrió la conexión. Contiene parámetros de sesión: no loguear en claro.
+    /// URI used to open the connection. It contains session parameters; never log it in full.
     pub fn uri(&self) -> &str {
         &self.uri
     }
 
-    /// Siguiente frame `msg`.
+    /// Read the next `msg` frame.
     ///
-    /// Los frames de transporte (`hb`, `ack`, `im_enter_room_resp`, …) se consumen aquí y
-    /// no se devuelven. El `ack` y el heartbeat se envían solos.
+    /// Transport frames (`hb`, `ack`, `im_enter_room_resp`, …) are consumed here and are not
+    /// returned. Acks and heartbeats are sent automatically.
     ///
-    /// Devuelve `None` cuando la conexión se cierra limpiamente.
+    /// Returns `None` when the connection closes cleanly.
     pub async fn next_message(&mut self) -> Option<Result<LiveMessage, WsError>> {
         loop {
             tokio::select! {
                 _ = self.heartbeat.tick() => {
                     if let Err(e) = self.send_heartbeat().await {
-                        // Si el heartbeat no sale, la conexión está muerta.
+                        // If the heartbeat cannot be sent, the connection is dead.
                         return Some(Err(e));
                     }
                 }
@@ -295,7 +298,7 @@ impl LiveConnection {
                         Some(Ok(WsMessage::Close(frame))) => {
                             let reason = frame
                                 .map(|f| format!("{} {}", f.code, f.reason))
-                                .unwrap_or_else(|| "sin motivo".into());
+                                .unwrap_or_else(|| "no reason provided".into());
                             return Some(Err(WsError::Closed(reason)));
                         }
                         Some(Ok(WsMessage::Binary(bytes))) => {
@@ -306,7 +309,7 @@ impl LiveConnection {
                             }
                         }
                         Some(Ok(other)) => {
-                            debug!(kind = ?std::mem::discriminant(&other), "frame no binario, se descarta");
+                            debug!(kind = ?std::mem::discriminant(&other), "non-binary frame discarded");
                             continue;
                         }
                     }
@@ -315,12 +318,12 @@ impl LiveConnection {
         }
     }
 
-    /// Procesa un frame. Devuelve `Some` solo si lleva eventos.
+    /// Process a frame. Returns `Some` only for event frames.
     async fn handle_frame(&mut self, bytes: &[u8]) -> Result<Option<LiveMessage>, WsError> {
         let frame = PushFrame::decode(bytes).map_err(|e| WsError::Decode(e.to_string()))?;
 
         if !frame.is_message() {
-            debug!(payload_type = %frame.payload_type, "frame de transporte, se descarta");
+            debug!(payload_type = %frame.payload_type, "transport frame discarded");
             return Ok(None);
         }
 
@@ -328,17 +331,17 @@ impl LiveConnection {
             None | Some("") | Some("none") => frame.payload.clone(),
             Some("gzip") => gunzip(&frame.payload)?,
             Some(other) => {
-                // Un valor nuevo aquí es un cambio de TikTok: se avisa alto y se intenta
-                // parsear en crudo, que es lo único que puede funcionar.
-                error!(compress_type = %other, "compresión desconocida; se intenta en crudo");
+                // A new value here means TikTok changed the protocol. Report it and try
+                // the raw payload, which is the only possible fallback.
+                error!(compress_type = %other, "unknown compression; trying raw payload");
                 frame.payload.clone()
             }
         };
 
-        // El ack va después de procesar, con el log_id del frame recibido.
+        // Send the ack after processing, using the received frame's log_id.
         let ack = frame.ack(&self.internal_ext);
         if let Err(e) = self.stream.send(WsMessage::Binary(ack.encode())).await {
-            warn!(error = %e, "no se pudo enviar el ack");
+            warn!(error = %e, "could not send ack");
         }
 
         Ok(Some(LiveMessage {
@@ -353,20 +356,20 @@ impl LiveConnection {
         self.stream
             .send(WsMessage::Binary(frame.encode()))
             .await
-            .map_err(|e| WsError::Closed(format!("heartbeat fallido: {e}")))
+            .map_err(|e| WsError::Closed(format!("heartbeat failed: {e}")))
     }
 
-    /// Cierre ordenado.
+    /// Close the connection cleanly.
     pub async fn close(mut self) {
         let _ = self.stream.close(None).await;
     }
 }
 
-/// Distingue el rechazo por detección (status 200) de un fallo de transporte.
+/// Distinguish detection rejection (HTTP 200) from a transport failure.
 fn map_handshake_error(err: tokio_tungstenite::tungstenite::Error) -> WsError {
     use tokio_tungstenite::tungstenite::Error;
     match err {
-        Error::Http(response) if response.status().as_u16() == 200 => {
+        Error::Http(response) if response.status().as_u16() == u16::from(HTTP_OK) => {
             let msg = response
                 .headers()
                 .get("Handshake-Msg")
@@ -442,7 +445,7 @@ mod tests {
         )
         .await
         .err()
-        .expect("debería fallar antes de conectar")
+        .expect("must fail before connecting")
     }
 
     #[tokio::test]

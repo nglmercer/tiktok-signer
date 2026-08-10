@@ -1,19 +1,16 @@
-//! Núcleo del signer: tipos y construcción de requests.
+//! Signer core: types and request construction.
 //!
-//! Sin red y sin GUI, para que sea testeable en CI sin display
-//! (ver `docs/01-architecture.md`).
+//! No network or GUI, so it can be tested in CI without a display.
 //!
-//! Piezas:
+//! Modules:
 //!
-//! - [`preset`] — `DevicePreset` / `LocationPreset` / `ScreenPreset`: única fuente de
-//!   verdad para User-Agent **y** parámetros de navegador.
-//! - [`params`] — construcción de la query de `/webcast/im/fetch/` y de la del WebSocket.
-//! - [`cookie`] — `CookieJar` mínimo, formato cookie-string (`X-Set-TT-Cookie`).
-//! - [`outcome`] — `SignOutcome`: rechazo y error de transporte **nunca** comparten variante.
-//! - [`room`] — paso 1 sin firma: `unique_id` → `room_id`, y descubrimiento de
-//!   canales en directo.
-//! - [`proto`] — lectura mínima de `ProtoMessageFetchResult` y (de)serialización de
-//!   `WebcastPushFrame`, lo justo para abrir el WebSocket y responder los `ack`.
+//! - [`preset`] — `DevicePreset` / `LocationPreset` / `ScreenPreset`: one source of truth
+//!   for User-Agent **and** browser parameters.
+//! - [`params`] — query construction for `/webcast/im/fetch/` and the WebSocket.
+//! - [`cookie`] — minimal `CookieJar` in `X-Set-TT-Cookie` format.
+//! - [`outcome`] — `SignOutcome`: rejection and transport errors never share a variant.
+//! - [`room`] — unsigned `unique_id` → `room_id` lookup and live-channel discovery.
+//! - [`proto`] — minimal `ProtoMessageFetchResult` and `WebcastPushFrame` encoding.
 
 pub mod cookie;
 pub mod outcome;

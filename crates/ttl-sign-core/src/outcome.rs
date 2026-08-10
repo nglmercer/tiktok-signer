@@ -1,96 +1,89 @@
-//! Resultado de una firma.
+//! Signing outcomes.
 //!
-//! Regla que viene de `docs/06-risks-and-ops.md` §2 y que ordena todo este módulo:
-//! **rechazo y error de transporte nunca comparten variante.** Un 200 con cuerpo vacío
-//! no es un fallo transitorio, es "TikTok te ha rechazado", y reintentarlo empeora las
-//! cosas. Si ambos casos cayesen en el mismo tipo, el primer `retry` genérico que
-//! alguien añada convertiría una detección en un bucle.
+//! **Rejection and transport errors never share a variant.** A 200 with an empty body is
+//! not transient; it means TikTok rejected the request, and retrying makes things worse.
 
 use crate::cookie::CookieJar;
 
-/// Firma completada con éxito: los bytes protobuf **tal cual** los devolvió TikTok, más
-/// el contexto necesario para abrir el WebSocket con la misma identidad.
+/// Successful signature: the protobuf bytes **as returned** by TikTok, plus the context
+/// required to open the WebSocket with the same identity.
 #[derive(Debug, Clone)]
 pub struct SignedFetch {
-    /// Cuerpo de la respuesta, sin envolver ni transformar.
+    /// Response body without wrapping or transformation.
     pub protobuf: Vec<u8>,
-    /// Cookies de la sesión que firmó. Van en `X-Set-TT-Cookie` y en el header `Cookie`.
+    /// Cookies from the signing session. Sent in `X-Set-TT-Cookie` and `Cookie` headers.
     pub cookies: CookieJar,
-    /// UA exacto usado al firmar. El WS tiene que usar este mismo.
+    /// Exact User-Agent used for signing. The WebSocket must use the same value.
     pub user_agent: String,
-    /// URL final de la petición, ya con `X-Bogus`/`X-Gnarly` añadidos por el SDK.
-    /// Es lo que habilita el Plan B (`docs/01-architecture.md` §D2); en Plan A es
-    /// puramente informativo.
+    /// Final request URL with `X-Bogus`/`X-Gnarly` added by the SDK.
     pub signed_url: String,
 }
 
-/// Por qué TikTok rechazó, en los términos en que se puede distinguir desde fuera.
+/// Why TikTok rejected the request, as observable externally.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RejectReason {
-    /// 200 con cuerpo vacío.
+    /// 200 with an empty body.
     EmptyBody,
-    /// 200 con protobuf válido pero `push_server` vacío: rechazo silencioso.
+    /// 200 with valid protobuf but empty `push_server`: silent rejection.
     EmptyPushServer,
-    /// Código HTTP distinto de 200.
+    /// HTTP status other than 200.
     HttpStatus(u16),
 }
 
 impl std::fmt::Display for RejectReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::EmptyBody => write!(f, "cuerpo vacío (rechazo silencioso)"),
-            Self::EmptyPushServer => write!(f, "push_server vacío (rechazo silencioso)"),
-            Self::HttpStatus(code) => write!(f, "TikTok respondió con HTTP {code}"),
+            Self::EmptyBody => write!(f, "empty body (silent rejection)"),
+            Self::EmptyPushServer => write!(f, "empty push_server (silent rejection)"),
+            Self::HttpStatus(code) => write!(f, "TikTok returned HTTP {code}"),
         }
     }
 }
 
-/// Fallos que **sí** pueden ser transitorios o de configuración, nunca detección.
+/// Failures that **can** be transient or configuration-related, never detection.
 #[derive(Debug, thiserror::Error)]
 pub enum SignError {
-    /// `window.byted_acrawler` no apareció dentro del plazo
-    /// (`docs/04-spec-webview-bridge.md` §Readiness gate).
-    #[error("el SDK de TikTok no estuvo listo a tiempo")]
+    /// `window.byted_acrawler` did not appear before the deadline.
+    #[error("TikTok SDK was not ready before the deadline")]
     SdkNotReady,
 
-    /// El pool no tiene ninguna instancia disponible.
-    #[error("no hay ninguna instancia de webview disponible")]
+    /// The pool has no available instance.
+    #[error("no WebView instance is available")]
     NoInstanceAvailable,
 
-    /// La página respondió con un error de JS.
-    #[error("fallo dentro de la página: {0}")]
+    /// The page returned a JavaScript error.
+    #[error("page error: {0}")]
     Bridge(String),
 
-    /// El motor de webview se cerró o dejó de responder.
-    #[error("el motor de webview no responde: {0}")]
+    /// The WebView engine closed or stopped responding.
+    #[error("WebView engine is unavailable: {0}")]
     EngineGone(String),
 
-    /// Nadie inició sesión dentro del plazo del flujo de login.
-    #[error("no se inició sesión en el plazo ({0} s)")]
+    /// Nobody signed in before the login deadline.
+    #[error("login deadline expired ({0} s)")]
     LoginTimeout(u64),
 
-    /// La firma tardó más de lo permitido. Es relevante porque el resultado caduca
-    /// a los ~30 s: llegar tarde equivale a no llegar.
-    #[error("la firma superó el tiempo máximo ({0} ms)")]
+    /// Signing exceeded the allowed time. The result expires after roughly 30 seconds.
+    #[error("signing exceeded the deadline ({0} ms)")]
     Timeout(u64),
 
-    /// Error de red al hablar con TikTok.
-    #[error("error de transporte: {0}")]
+    /// Network error while communicating with TikTok.
+    #[error("transport error: {0}")]
     Transport(String),
 
-    /// La respuesta no se pudo decodificar.
-    #[error("respuesta ilegible: {0}")]
+    /// The response could not be decoded.
+    #[error("could not decode response: {0}")]
     Decode(String),
 }
 
-/// Los tres finales posibles de una firma. No hay un cuarto.
+/// The three possible signing outcomes. There is no fourth.
 #[derive(Debug)]
 pub enum SignOutcome {
-    /// Firma válida.
+    /// Valid signature.
     Ok(SignedFetch),
-    /// TikTok nos rechazó. **No reintentar**: no es transitorio.
+    /// TikTok rejected the request. **Do not retry**: it is not transient.
     Rejected(RejectReason),
-    /// Algo se rompió por el camino. Puede tener sentido reintentar, con criterio.
+    /// Something failed in transit. A careful retry may make sense.
     Transport(SignError),
 }
 
@@ -99,13 +92,12 @@ impl SignOutcome {
         matches!(self, Self::Ok(_))
     }
 
-    /// ¿Es un rechazo? Lo usa el watchdog para contar rechazos consecutivos
-    /// (`docs/06-risks-and-ops.md` §Señales a instrumentar).
+    /// Is this a rejection? Used by the watchdog to count consecutive rejections.
     pub fn is_rejected(&self) -> bool {
         matches!(self, Self::Rejected(_))
     }
 
-    /// ¿Tiene sentido reintentar esto? `false` para todo rechazo, siempre.
+    /// Does retrying make sense? Always `false` for rejections.
     pub fn is_retryable(&self) -> bool {
         matches!(self, Self::Transport(_))
     }
@@ -139,7 +131,7 @@ mod tests {
             assert!(outcome.is_rejected());
             assert!(
                 !outcome.is_retryable(),
-                "un rechazo nunca se reintenta: es detección, no un transitorio"
+                "a rejection is never retried: it is detection, not a transient error"
             );
         }
     }

@@ -1,14 +1,12 @@
-//! Lectura mínima de protobuf.
+//! Minimal protobuf reader.
 //!
-//! El parseo de eventos está **fuera de alcance** (`README.md`): aquí solo se decodifica
-//! lo imprescindible para abrir el WebSocket y responder los `ack`, sin `prost` ni
-//! generación de código, para no arrastrar el esquema completo de TikTok.
+//! Event parsing is **out of scope** (`README.md`): this module decodes only what is needed
+//! to open the WebSocket and answer `ack` frames, without `prost` or generated code.
 //!
-//! Se decodifica sobre el formato de wire directamente, así que los campos que no
-//! conocemos se ignoran en vez de romper el parseo — que es justo lo que hace falta
-//! cuando TikTok añade campos sin avisar.
+//! Decoding operates directly on the wire format, so unknown fields are ignored instead of
+//! breaking parsing when TikTok adds fields without notice.
 //!
-//! Números de campo, según el esquema que usan los clientes de referencia:
+//! Field numbers from the schema used by reference clients:
 //!
 //! ```text
 //! ProtoMessageFetchResult          WebcastPushFrame
@@ -22,13 +20,13 @@
 //!                                    8  payload
 //! ```
 //!
-//! > **Pendiente de F1:** confirmar estos números contra `fixtures/f0/im_fetch.pb`.
-//! > `FetchResult::decode` no falla si no cuadran: devuelve campos vacíos, y la
-//! > validación de `docs/05` §Validación previa lo convierte en un error tipado.
+//! > **F1 pending:** confirm these numbers against `fixtures/f0/im_fetch.pb`.
+//! > `FetchResult::decode` does not fail when they differ: it returns empty fields, and
+//! > validation in `docs/05` turns this into a typed error.
 
 use std::fmt;
 
-// --- Números de campo -------------------------------------------------------------
+// --- Field numbers ----------------------------------------------------------------
 
 mod fetch_field {
     pub const CURSOR: u32 = 2;
@@ -60,9 +58,9 @@ mod map_entry_field {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ProtoError {
-    /// El buffer se acabó a mitad de un campo.
+    /// The buffer ended halfway through a field.
     Truncated,
-    /// Varint de más de 10 bytes.
+    /// Varint longer than 10 bytes.
     VarintOverflow,
     /// Wire type que este decodificador no conoce (3 y 4, grupos: obsoletos).
     UnsupportedWireType(u8),
@@ -223,7 +221,7 @@ impl Writer {
         self.u64_field(field, u64::from(value))
     }
 
-    /// Campo `bytes`/`string`/submensaje. Se omite si está vacío.
+    /// `bytes`/`string`/submessage field. Omitted when empty.
     pub fn bytes_field(&mut self, field: u32, value: &[u8]) -> &mut Self {
         if !value.is_empty() {
             self.tag(field, 2);
@@ -266,10 +264,9 @@ fn decode_map_entry(buf: &[u8]) -> Option<(String, String)> {
     key.map(|k| (k, value))
 }
 
-/// Estructura de un mensaje sin interpretarlo: `(campo, tipo, tamaño)`.
+/// Structure of an uninterpreted message: `(field, type, size)`.
 ///
-/// Es la herramienta para confirmar los números de campo contra una respuesta real, que
-/// es exactamente lo que hay que hacer antes de fiarse de este módulo.
+/// Use this to confirm field numbers against a real response before relying on this module.
 pub fn describe(buf: &[u8]) -> Result<Vec<(u32, &'static str, usize)>, ProtoError> {
     let mut out = Vec::new();
     let mut reader = Reader::new(buf);
@@ -291,11 +288,11 @@ pub fn describe(buf: &[u8]) -> Result<Vec<(u32, &'static str, usize)>, ProtoErro
 /// Lo que hace falta de `ProtoMessageFetchResult` para abrir el WebSocket.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FetchResult {
-    /// Base de la URI del WS. Vacío en un 200 = rechazo silencioso.
+    /// WebSocket URI base. Empty in a 200 response means silent rejection.
     pub push_server: String,
     /// Params **ya firmados por TikTok**. Se usan tal cual.
     pub route_params: Vec<(String, String)>,
-    /// Obligatorio: si falta, la respuesta no es válida.
+    /// Required; without it the response is invalid.
     pub cursor: String,
     /// Payload de los `ack`.
     pub internal_ext: String,
@@ -306,7 +303,7 @@ pub struct FetchResult {
 impl FetchResult {
     /// Decodifica los campos conocidos e ignora el resto.
     ///
-    /// No valida: un `push_server` vacío se devuelve como tal y es
+    /// No validation: an empty `push_server` is returned as-is and is
     /// [`FetchResult::rejection_reason`] quien lo interpreta.
     pub fn decode(buf: &[u8]) -> Result<Self, ProtoError> {
         let mut out = Self::default();
@@ -338,7 +335,7 @@ impl FetchResult {
 
     /// Motivo por el que esta respuesta es un rechazo, si lo es.
     ///
-    /// Un 200 con `push_server` vacío significa que TikTok rechazó sin decirlo
+    /// A 200 with empty `push_server` means TikTok rejected silently
     /// (`docs/00-research.md` §1).
     pub fn rejection_reason(&self) -> Option<crate::RejectReason> {
         if self.push_server.is_empty() || self.route_params.is_empty() {
@@ -409,7 +406,7 @@ impl PushFrame {
         w.finish()
     }
 
-    /// ¿Lleva eventos? Solo `msg`; el resto es transporte y se descarta.
+    /// Does it contain events? Only `msg`; all others are transport and discarded.
     pub fn is_message(&self) -> bool {
         self.payload_type == "msg"
     }
@@ -424,7 +421,7 @@ impl PushFrame {
 
     /// El `ack` que corresponde a este frame (`docs/05` §Ack).
     ///
-    /// El payload es `internal_ext`, o `-` si está vacío.
+    /// Payload is `internal_ext`, or `-` when empty.
     pub fn ack(&self, internal_ext: &str) -> Self {
         let payload = if internal_ext.is_empty() {
             "-"
@@ -440,7 +437,7 @@ impl PushFrame {
         }
     }
 
-    /// Frame que el cliente envía justo después del handshake para entrar en la sala.
+    /// Frame sent immediately after the handshake to enter the room.
     ///
     /// El `room_id` no va en el sobre: va dentro de `WebcastImEnterRoomMessage`, que es
     /// el payload de `im_enter_room`. Sin este frame TikTok puede aceptar el 101 y dejar
@@ -461,7 +458,7 @@ impl PushFrame {
         }
     }
 
-    /// Heartbeat de aplicación. El payload es `HeartbeatMessage`:
+    /// Application heartbeat. The payload is `HeartbeatMessage`:
     /// `room_id=1` y `send_packet_seq_id=2`.
     pub fn heartbeat(room_id: u64, sequence_id: u64) -> Self {
         let mut writer = Writer::new();
@@ -480,7 +477,7 @@ impl PushFrame {
 mod tests {
     use super::*;
 
-    /// Construye un `ProtoMessageFetchResult` sintético con el esquema documentado.
+    /// Build a synthetic `ProtoMessageFetchResult` using the documented schema.
     fn sample_fetch_result() -> Vec<u8> {
         let mut w = Writer::new();
         w.bytes_field(1, b"\x0a\x03msg") // messages[0], se ignora
@@ -582,7 +579,7 @@ mod tests {
         assert_eq!(ack.payload_encoding, "pb");
         assert_eq!(ack.payload, b"internal_src:dim");
 
-        // Sin internal_ext, el payload es "-", no vacío.
+        // Without internal_ext, the payload is "-", not empty.
         assert_eq!(received.ack("").payload, b"-");
     }
 
