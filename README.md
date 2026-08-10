@@ -84,6 +84,38 @@ Detection is by observable effect — a captcha container that is actually laid 
 guessed status codes, so an ordinary error is not reported as a challenge. Measured as
 `present: false` on a healthy page.
 
+### Rotating a throttled identity
+
+`ttwid` and `msToken` identify the *device*, not a person, so a guest that TikTok has
+started refusing can simply become a different guest:
+
+```rust
+if error.is_refusal() {
+    signer.rotate_guest_identity().await?;   // new device, then reload
+}
+```
+
+Verified: `ttwid` and `msToken` both change and the engine keeps working. This is the
+concrete payoff of staying a guest — an account cannot be rotated. Rotation discards warmed
+browsing state, so use it in response to a refusal, not on a timer. A deliberately
+configured session survives, because the bridge reinstalls those cookies on every document.
+
+### Gift streaks
+
+A held send button produces a run of `WebcastGiftMessage`s with a rising `repeat_count`;
+only the last one carries the real total. Counting each message reports 15 roses where 9
+were sent. `GiftStreaks` collapses the burst into one gift:
+
+```rust
+let mut streaks = GiftStreaks::new();
+if let Some(gift) = streaks.observe(user_id, gift_id, repeat_count, repeat_end, streakable) {
+    println!("{} × {} = {} diamonds", gift.gift_id, gift.count, gift.diamonds(price));
+}
+```
+
+`streakable` comes from `Gift::is_streakable()` in the gift table. A gift missing from the
+table completes immediately — reporting it once beats never reporting it.
+
 ### Recovery
 
 `subscribe_live_events` and `subscribe_schema_events` survive the page losing its transport.

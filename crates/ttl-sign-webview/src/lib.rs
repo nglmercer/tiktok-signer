@@ -209,6 +209,10 @@ enum UserEvent {
         visible: bool,
         reply: oneshot::Sender<()>,
     },
+    /// Discard the browsing data that identifies this guest device.
+    ClearBrowsingData {
+        reply: oneshot::Sender<Result<(), SignError>>,
+    },
     /// Wake the event loop from the IPC handler.
     ///
     /// The handler runs outside the event-loop closure. When it marks the instance ready,
@@ -989,6 +993,29 @@ impl Signer {
         Ok(rx)
     }
 
+    /// Become a different guest, then reload.
+    ///
+    /// This is the remedy for a throttled or challenged identity, and the reason listening
+    /// as a guest is worth defending: `ttwid` and `msToken` identify the *device*, not a
+    /// person, so discarding them and reloading produces a device TikTok has never seen. An
+    /// account cannot be rotated this way — which is the argument for not attaching one.
+    ///
+    /// Rotating is not free: it discards the warmed-up browsing state, and the new identity
+    /// starts from nothing. Use it in response to a refusal, not on a timer.
+    ///
+    /// A configured [`EngineConfig::session`] survives, because the bridge reinstalls those
+    /// cookies on every document. Rotation therefore replaces the device identity while
+    /// keeping the account, when one was deliberately configured.
+    pub async fn rotate_guest_identity(&self) -> Result<(), SignError> {
+        let (tx, rx) = oneshot::channel();
+        self.proxy
+            .send_event(UserEvent::ClearBrowsingData { reply: tx })
+            .map_err(|_| SignError::EngineGone("event loop has closed".into()))?;
+        rx.await
+            .map_err(|_| SignError::EngineGone("engine discarded the request".into()))??;
+        self.reload().await
+    }
+
     /// Reload the page the engine is currently on.
     ///
     /// Recovery path when TikTok's page loses its transport and does not restore it: a fresh
@@ -1279,6 +1306,19 @@ where
                 window.set_visible(visible);
                 info!(visible, "engine window visibility changed");
                 let _ = reply.send(());
+            }
+            Event::UserEvent(UserEvent::ClearBrowsingData { reply }) => {
+                // Cookies read from the previous identity must not be merged into the next
+                // one, or the old `ttwid`/`msToken` would be handed straight back.
+                shared.borrow_mut().page_cookies = CookieJar::new();
+                let result = webview
+                    .clear_all_browsing_data()
+                    .map_err(|e| SignError::EngineGone(e.to_string()));
+                match &result {
+                    Ok(()) => info!("browsing data cleared; next navigation is a new guest"),
+                    Err(error) => error!(%error, "could not clear browsing data"),
+                }
+                let _ = reply.send(result);
             }
             // Only used to reach the queue-draining logic below.
             Event::UserEvent(UserEvent::Wake) => {}

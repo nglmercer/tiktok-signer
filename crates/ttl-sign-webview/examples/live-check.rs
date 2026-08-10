@@ -27,7 +27,9 @@ use std::time::{Duration, Instant};
 
 use flate2::read::GzDecoder;
 use ttl_sign_core::proto::{LiveEvent, PushFrame, WebcastEventBatch};
-use ttl_sign_core::{decode_webcast_message, Gift, RoomInfo, SchemaMessage, SchemaValue};
+use ttl_sign_core::{
+    decode_webcast_message, Gift, GiftStreaks, RoomInfo, SchemaMessage, SchemaValue,
+};
 use ttl_sign_webview::{is_webcast_socket, run, session, EngineConfig, PageWebSocketEvent, Signer};
 
 const PAGE_TRANSPORT_TIMEOUT: Duration = Duration::from_secs(45);
@@ -219,6 +221,8 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
     let mut decode_errors = 0usize;
     let mut schema_event_count = 0usize;
     let mut schema_decode_errors = 0usize;
+    // Collapses gift bursts so a held send button is one gift, not a dozen.
+    let mut streaks = GiftStreaks::new();
 
     loop {
         tokio::select! {
@@ -260,7 +264,7 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
                                                 match message.decode_event() {
                                                     Ok(event) => {
                                                         decoded_events += 1;
-                                                        print_event(message.message_id, &event, &gifts);
+                                                        print_event(message.message_id, &event, &gifts, &mut streaks);
                                                     }
                                                     Err(error) => {
                                                         decode_errors += 1;
@@ -419,7 +423,7 @@ fn print_room_info(info: &RoomInfo) {
     println!("      started_at={} (unix)", info.create_time);
 }
 
-fn print_event(message_id: u64, event: &LiveEvent, gifts: &[Gift]) {
+fn print_event(message_id: u64, event: &LiveEvent, gifts: &[Gift], streaks: &mut GiftStreaks) {
     match event {
         LiveEvent::Chat { user, content } => println!(
             "        [chat] id={message_id} @{}: {}",
@@ -433,21 +437,29 @@ fn print_event(message_id: u64, event: &LiveEvent, gifts: &[Gift]) {
             repeat_end,
         } => {
             // A gift event carries only an id; the gift table turns it into a name and a
-            // diamond value.
+            // diamond value. A streakable gift is reported once, when TikTok ends the
+            // streak, so a held send button is one gift rather than a dozen.
             let gift = gifts.iter().find(|gift| gift.id == *gift_id);
+            let streakable = gift.is_some_and(Gift::is_streakable);
+            let Some(completed) = streaks.observe(
+                user.id,
+                *gift_id,
+                *repeat_count,
+                *repeat_end,
+                streakable,
+            ) else {
+                return;
+            };
             let named = match gift {
                 Some(gift) => format!(
-                    "{} ({} diamonds ×{repeat_count} = {})",
+                    "{} ×{} = {} diamonds",
                     gift.name,
-                    gift.diamond_count,
-                    gift.diamond_count.saturating_mul(*repeat_count)
+                    completed.count,
+                    completed.diamonds(gift.diamond_count)
                 ),
-                None => format!("gift_id={gift_id} ×{repeat_count}"),
+                None => format!("gift_id={gift_id} ×{}", completed.count),
             };
-            println!(
-                "        [gift] id={message_id} @{} {named} end={repeat_end}",
-                user.label()
-            );
+            println!("        [gift] id={message_id} @{} {named}", user.label());
         }
         LiveEvent::Like { user, count, total } => println!(
             "        [like] id={message_id} @{} count={count} total={total}",

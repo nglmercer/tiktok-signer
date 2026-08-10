@@ -310,7 +310,20 @@ pub struct Gift {
     pub diamond_count: u64,
     /// `true` when repeated sends are combined into one streak.
     pub combo: bool,
+    /// TikTok's gift `type`. `1` is the streakable kind.
+    pub gift_type: u64,
     pub icon_url: String,
+}
+
+impl Gift {
+    /// Can this gift be sent repeatedly as one streak?
+    ///
+    /// Streakable gifts arrive as a burst of `WebcastGiftMessage`s with a rising
+    /// `repeat_count`, and only the last one is the real total. Counting every message
+    /// multiplies the value the sender actually spent.
+    pub fn is_streakable(&self) -> bool {
+        self.combo
+    }
 }
 
 /// Parse the response from [`gift_list_url`].
@@ -335,6 +348,7 @@ pub fn parse_gift_list(raw: &str) -> Option<Vec<Gift>> {
                     .get("combo")
                     .and_then(serde_json::Value::as_bool)
                     .unwrap_or_default(),
+                gift_type: number_at(gift, "type"),
                 icon_url: gift.get("icon").map(first_url).unwrap_or_default(),
             })
             .collect(),
