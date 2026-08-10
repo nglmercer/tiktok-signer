@@ -54,6 +54,15 @@ mod map_entry_field {
     pub const VALUE: u32 = 2;
 }
 
+const ENTER_ROOM_FIELD_ROOM_ID: u32 = 1;
+const ENTER_ROOM_FIELD_ROOM_TYPE: u32 = 4;
+const ENTER_ROOM_ROOM_TYPE_AUDIENCE: u64 = 12;
+const ENTER_ROOM_FIELD_USER_TYPE: u32 = 5;
+const ENTER_ROOM_FIELD_FILTER_WELCOME: u32 = 9;
+const ENTER_ROOM_FILTER_WELCOME_DISABLED: &str = "0";
+const HEARTBEAT_FIELD_ROOM_ID: u32 = 1;
+const HEARTBEAT_FIELD_SEQUENCE_ID: u32 = 2;
+
 // --- Errores ----------------------------------------------------------------------
 
 #[derive(Debug, PartialEq, Eq)]
@@ -69,9 +78,9 @@ pub enum ProtoError {
 impl fmt::Display for ProtoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Truncated => write!(f, "buffer truncado"),
-            Self::VarintOverflow => write!(f, "varint demasiado largo"),
-            Self::UnsupportedWireType(w) => write!(f, "wire type no soportado: {w}"),
+            Self::Truncated => write!(f, "truncated buffer"),
+            Self::VarintOverflow => write!(f, "varint is too long"),
+            Self::UnsupportedWireType(w) => write!(f, "unsupported wire type: {w}"),
         }
     }
 }
@@ -440,15 +449,18 @@ impl PushFrame {
     /// Frame sent immediately after the handshake to enter the room.
     ///
     /// `room_id` is not in the envelope: it is inside `WebcastImEnterRoomMessage`, the
-    /// el payload de `im_enter_room`. Sin este frame TikTok puede aceptar el 101 y dejar
-    /// el socket completamente silencioso.
+    /// the payload of `im_enter_room`. Without this frame TikTok may accept 101 and leave
+    /// the socket completely silent.
     pub fn enter_room(room_id: u64) -> Self {
         let mut writer = Writer::new();
         writer
-            .u64_field(1, room_id)
-            .u64_field(4, 12)
-            .str_field(5, "audience")
-            .str_field(9, "0");
+            .u64_field(ENTER_ROOM_FIELD_ROOM_ID, room_id)
+            .u64_field(ENTER_ROOM_FIELD_ROOM_TYPE, ENTER_ROOM_ROOM_TYPE_AUDIENCE)
+            .str_field(ENTER_ROOM_FIELD_USER_TYPE, "audience")
+            .str_field(
+                ENTER_ROOM_FIELD_FILTER_WELCOME,
+                ENTER_ROOM_FILTER_WELCOME_DISABLED,
+            );
 
         Self {
             payload_encoding: "pb".into(),
@@ -459,10 +471,12 @@ impl PushFrame {
     }
 
     /// Application heartbeat. The payload is `HeartbeatMessage`:
-    /// `room_id=1` y `send_packet_seq_id=2`.
+    /// `room_id=1` and `send_packet_seq_id=2`.
     pub fn heartbeat(room_id: u64, sequence_id: u64) -> Self {
         let mut writer = Writer::new();
-        writer.u64_field(1, room_id).u64_field(2, sequence_id);
+        writer
+            .u64_field(HEARTBEAT_FIELD_ROOM_ID, room_id)
+            .u64_field(HEARTBEAT_FIELD_SEQUENCE_ID, sequence_id);
 
         Self {
             payload_encoding: "pb".into(),
@@ -519,7 +533,7 @@ mod tests {
     fn unknown_fields_are_skipped_not_fatal() {
         let mut w = Writer::new();
         w.u64_field(999, 7)
-            .bytes_field(998, b"lo que sea")
+            .bytes_field(998, b"anything")
             .str_field(fetch_field::CURSOR, "c");
         let r = FetchResult::decode(&w.finish()).unwrap();
         assert_eq!(r.cursor, "c");

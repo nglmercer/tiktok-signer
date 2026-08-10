@@ -30,6 +30,8 @@ use ttl_sign_core::{CookieJar, FetchResult, Preset, SignedFetch, WsParams};
 const DEFAULT_HEARTBEAT_SECONDS: u64 = 10;
 const INITIAL_HEARTBEAT_SEQUENCE: u64 = 1;
 const HTTP_OK: u16 = 200;
+#[cfg(test)]
+const HEARTBEAT_DURATION_MILLISECONDS: u64 = 10_000;
 
 /// Connection failures. `Blocked200` is intentionally separate: it is not transient and
 /// retrying is counterproductive.
@@ -429,7 +431,7 @@ mod tests {
             route_params: vec![("wss_push_room_id".into(), "1".into())],
             cursor: cursor.into(),
             internal_ext: "ext".into(),
-            heartbeat_duration: 10000,
+            heartbeat_duration: HEARTBEAT_DURATION_MILLISECONDS,
             need_ack: true,
         }
     }
@@ -482,7 +484,7 @@ mod tests {
         encoder.write_all(b"hola").unwrap();
         let compressed = encoder.finish().unwrap();
         assert_eq!(gunzip(&compressed).unwrap(), b"hola");
-        assert!(gunzip(b"no es gzip").is_err());
+        assert!(gunzip(b"not gzip").is_err());
     }
 
     #[test]

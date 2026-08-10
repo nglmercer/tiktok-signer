@@ -20,6 +20,8 @@ use tracing::info;
 use ttl_sign_server::{router, AppState};
 use ttl_sign_webview::{run, session, EngineConfig};
 
+const DEFAULT_SIGN_TIMEOUT_SECONDS: u64 = 15;
+
 fn main() -> ! {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -38,7 +40,7 @@ fn main() -> ! {
         landing_url: std::env::var("TTL_LANDING_URL")
             .unwrap_or_else(|_| "https://www.tiktok.com/live".into()),
         contact_us: std::env::var("TTL_CONTACT_US").unwrap_or_default(),
-        sign_timeout: Duration::from_secs(15),
+        sign_timeout: Duration::from_secs(DEFAULT_SIGN_TIMEOUT_SECONDS),
         // Without a session TikTok currently returns an empty body.
         session: load_session(),
         ..EngineConfig::default()

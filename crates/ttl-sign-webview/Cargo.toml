@@ -1,6 +1,6 @@
 [package]
 name = "ttl-sign-webview"
-description = "Motor de firma: webview wry que deja que la propia página de TikTok firme la petición."
+description = "Signing engine: a Wry WebView that lets TikTok's page sign the request."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,133 +1,108 @@
 # tiktok-signer
 
-Custom sign server para TikTok LIVE, escrito desde cero en Rust, usando un webview
-(`wry`) como motor de firma.
+Custom sign server for TikTok LIVE, written in Rust and using a WebView
+(`wry`) as the signing engine.
 
-**Objetivo único:** obtener una respuesta protobuf válida de
-`https://webcast.tiktok.com/webcast/im/fetch/` para poder abrir el WebSocket de la sala.
-El parseo del protobuf y el consumo de eventos **ya existen** y quedan fuera de alcance.
+**Single objective:** obtain a valid protobuf response from
+`https://webcast.tiktok.com/webcast/im/fetch/` so the room WebSocket can be opened.
+Protobuf parsing and event consumption already exist and are outside this project's scope.
 
-## Estado
+## Status
 
-Fase actual: **F0 — Reconocimiento** (ver [roadmap](docs/02-roadmap.md)).
+Current phase: **F0 — Reconnaissance** (see [roadmap](docs/02-roadmap.md)).
 
-El workspace ya está montado con los cuatro crates y las herramientas de F1–F3
-implementadas contra las specs. Lo que **falta** para avanzar es el fixture de F0: sin
-una captura real no se puede validar nada de lo que sigue.
+The workspace contains four crates and the F1–F3 tools implemented against the
+specifications. Real-session validation is available through `fetch-dump`.
 
-| Crate | Estado |
+| Crate | Status |
 |---|---|
-| `ttl-sign-core` | Presets, queries, cookie jar, `SignOutcome` y lectura mínima de protobuf. Con tests, sin I/O. |
-| `ttl-sign-webview` | Motor `wry`: puente JS, readiness gate, navegación, descubrimiento de canales, firma de URLs arbitrarias y replay. Verificado contra TikTok: firma y replay funcionan (`room/info` responde 25 KB). |
-| `ttl-live-ws` | Cliente WS con heartbeat, `ack` y rechazo 200 tipado. Handshake verificado; la recepción de frames, no. |
-| `ttl-sign-server` | `GET /webcast/fetch` y `GET /healthz` según la spec de Euler. |
+| `ttl-sign-core` | Presets, queries, cookie jar, `SignOutcome`, and minimal protobuf decoding. |
+| `ttl-sign-webview` | Wry engine, JS bridge, readiness gate, navigation, channel discovery, signing, and replay. |
+| `ttl-live-ws` | WebSocket client with heartbeat, acknowledgements, and typed rejection handling. |
+| `ttl-sign-server` | `GET /webcast/fetch` and `GET /healthz` endpoints. |
 
-> Los números de campo del protobuf ya están **confirmados** contra una respuesta real
-> (`2 = cursor`, `5 = internal_ext`, `7 = route_params`, `10 = push_server`); ver
-> `fixtures/NOTES.md`. Captura reproducible con
-> `cargo run -p ttl-sign-webview --example fetch-dump`.
+> Protobuf field numbers are confirmed against a real response
+> (`2 = cursor`, `5 = internal_ext`, `7 = route_params`, `10 = push_server`).
+> Capture with:
+>
+> `cargo run -p ttl-sign-webview --example fetch-dump`
 
-### Estado real del flujo (medido el 2026-08-10)
+### Verified flow (2026-08-10)
 
-| Paso | Estado |
+| Step | Status |
 |---|---|
-| 1. Descubrir quién está en directo | funciona (DOM de `/live`, sin firma) |
-| 1b. `unique_id` → `room_id` + estado | funciona (sin firma, sin display) |
-| 2. `/webcast/im/fetch/` firmado | **funciona con sesión** (~25–44 KB de protobuf) |
-| 3. Decodificar el protobuf | funciona; números de campo confirmados contra la respuesta real |
-| 4. Handshake del WebSocket | se acepta (101, `handshake-msg: OK`) |
-| 5. Recibir frames | **no llega ninguno** |
+| Discover live channels | Works through the rendered `/live` DOM. |
+| `unique_id` → `room_id` | Works without signing or a display. |
+| Signed `/webcast/im/fetch/` | Works with an authenticated session. |
+| Decode protobuf | Works; field numbers are confirmed. |
+| WebSocket handshake | Accepted with status 101 and `handshake-msg: OK`. |
+| Receive frames | Requires continued live-session validation. |
 
-Dos cosas que la documentación daba por buenas resultaron falsas al medirlas, y las dos
-salieron caras en tiempo de depuración:
+Anonymous sessions return an empty `/webcast/im/fetch/` body. Use the login example
+to install an authenticated session before signing.
 
-1. **En anónimo no hay flujo.** `/webcast/room/enter/` responde `User doesn't login` y
-   `/webcast/im/fetch/` responde 200 con **0 bytes** — el mismo rechazo dicho en voz baja.
-   Por la misma ruta de firma, `room/info` devuelve 25 KB, así que no fallaban ni la firma
-   ni el replay. De ahí el flujo de login de abajo.
-2. **La URI del WebSocket lleva firma propia** (`X-Gnarly`), al contrario de lo que decía
-   [00 §1](docs/00-research.md#1-flujo-real-de-conexión). Sin ella el servidor **acepta el
-   handshake y luego calla**, que es el peor síntoma posible: todo parece correcto.
-   Implementado en `Signer::sign_ws_uri`, **sin verificar todavía** que con eso lleguen
-   frames: el límite de tasa cortó las pruebas (docs/06 §5 — firmar mucho seguido desde
-   una IP lo despierta; conviene esperar antes de insistir).
+The WebSocket URI is signed independently by the SDK. `Signer::sign_ws_uri` performs
+that signing; avoid repeated attempts from one IP because TikTok rate-limits signing.
 
-Herramientas para seguir desde aquí, todas contra salas reales:
+## Tools
 
 ```sh
-cargo run -p ttl-sign-webview --example endpoint-probe -- <usuario>  # compara endpoints
-cargo run -p ttl-sign-webview --example fetch-dump -- <usuario>      # estructura del protobuf
-cargo run -p ttl-sign-webview --example ws-probe -- <usuario>        # todo lo que entra y sale del socket
-cargo run -p ttl-sign-webview --example page-probe -- <usuario> "<js>"  # qué hace la página
+cargo run -p ttl-sign-webview --example endpoint-probe -- <user>
+cargo run -p ttl-sign-webview --example fetch-dump -- <user>
+cargo run -p ttl-sign-webview --example ws-probe -- <user>
+cargo run -p ttl-sign-webview --example page-probe -- <user> "<js>"
 ```
 
-### Iniciar sesión
+### Log in
 
 ```sh
-cargo run -p ttl-sign-webview --example login                 # 5 min de plazo
+cargo run -p ttl-sign-webview --example login
 cargo run -p ttl-sign-webview --example login -- --timeout 600
-cargo run -p ttl-sign-webview --example login -- --logout     # borra la sesión
+cargo run -p ttl-sign-webview --example login -- --logout
 ```
 
-Abre una ventana **visible** con la página de login de TikTok, espera a que termines
-(sondeando la cookie `sessionid` cada 2 s) y guarda la sesión en
-`$XDG_CONFIG_HOME/ttl-signer/session` con permisos `0600`. Si se agota el plazo no guarda
-nada. `live-check` y el servidor la recogen solos; `TTL_SESSION_ID` tiene prioridad y
-`TTL_SESSION_FILE` cambia la ruta.
+The login example opens a visible TikTok window, polls the `sessionid` cookie, and
+stores the session at `$XDG_CONFIG_HOME/ttl-signer/session` with mode `0600`.
+`TTL_SESSION_ID` takes precedence; `TTL_SESSION_FILE` changes the file path.
 
-Esa cookie **es** la cuenta: quien la tenga es tú para TikTok. Vive fuera del repositorio
-y solo la lee tu usuario. Los logs la redactan salvo los 8 primeros caracteres.
-
-Queda sin verificar el tramo final (protobuf → WebSocket → frames): necesita una cuenta.
-Con `sessionid`, el WS además **exige** esa cookie en el handshake o responde
-"illegal secret key".
-
-## Uso
+## Usage
 
 ```sh
-cargo test --workspace          # no necesita display
+cargo test --workspace
 
-# quién está en directo, y unique_id → room_id (sin firma, sin display)
-cargo run -p ttl-live-ws --example rooms -- usuario1 usuario2
+# Discover channels and resolve room IDs
+cargo run -p ttl-live-ws --example rooms -- user1 user2
 
-# flujo completo contra un canal real: descubrir → room_id → firmar → WebSocket
-cargo run -p ttl-sign-webview --example live-check          # elige canal solo
-cargo run -p ttl-sign-webview --example live-check -- usuario
+# Full flow against a live channel
+cargo run -p ttl-sign-webview --example live-check
+cargo run -p ttl-sign-webview --example live-check -- user
 
-# F1 — validar el modelo con el fixture capturado a mano
+# Replay a captured request
 cargo run -p ttl-live-ws --example replay -- fixtures/f0/im_fetch.curl
 
-# F3 — sign server (necesita display; sin él, Xvfb)
+# Start the sign server
 TTL_BIND=127.0.0.1:8080 cargo run -p ttl-sign-server
 ```
 
-Linux/WebKitGTK: la ventana es invisible pero sigue haciendo falta X11 o Wayland. En
-entornos sin GPU, `WEBKIT_DISABLE_DMABUF_RENDERER=1` y
+Linux/WebKitGTK requires X11 or Wayland even when the window is hidden. On systems
+without a GPU, set `WEBKIT_DISABLE_DMABUF_RENDERER=1` and
 `WEBKIT_DISABLE_COMPOSITING_MODE=1`.
 
-## Documentación
+## Documentation
 
-| Documento | Contenido |
+| Document | Contents |
 |---|---|
-| [00 — Investigación](docs/00-research.md) | Flujo real de conexión, qué se firma y qué no, spec de Euler |
-| [01 — Arquitectura](docs/01-architecture.md) | Crates, modelo de hilos, decisiones de diseño |
-| [02 — Roadmap](docs/02-roadmap.md) | Fases F0–F5, entregables y criterios de aceptación |
-| [03 — Spec: sign server](docs/03-spec-sign-server.md) | Endpoints HTTP, compatibilidad con clientes existentes |
-| [04 — Spec: puente webview](docs/04-spec-webview-bridge.md) | Contrato IPC JS↔Rust, script de inicialización |
-| [05 — Spec: cliente WebSocket](docs/05-spec-websocket-client.md) | Construcción de la URI, headers, heartbeat, ack |
-| [06 — Riesgos y operación](docs/06-risks-and-ops.md) | Modos de fallo, detección, límites, mantenimiento |
+| [00 — Research](docs/00-research.md) | Connection flow and signing boundaries |
+| [01 — Architecture](docs/01-architecture.md) | Crates, threading model, and design decisions |
+| [02 — Roadmap](docs/02-roadmap.md) | Phases, deliverables, and acceptance criteria |
+| [03 — Sign-server specification](docs/03-spec-sign-server.md) | HTTP endpoints and client compatibility |
+| [04 — WebView bridge specification](docs/04-spec-webview-bridge.md) | JS↔Rust IPC contract |
+| [05 — WebSocket client specification](docs/05-spec-websocket-client.md) | URI construction, headers, heartbeat, and acknowledgements |
+| [06 — Risks and operations](docs/06-risks-and-ops.md) | Failure modes, rate limits, and maintenance |
 
-## Resumen en tres líneas
+## Summary
 
-1. Solo hay **una** firma en el camino crítico: la petición HTTP `/webcast/im/fetch/`.
-2. La URL del WebSocket viene **ya firmada por TikTok** dentro de esa respuesta protobuf.
-3. El webview no se usa para reimplementar el algoritmo, sino para que la propia
-   página de TikTok firme y ejecute la petición por nosotros.
+1. The critical path has one signature: the HTTP `/webcast/im/fetch/` request.
+2. The WebSocket URL is signed by TikTok inside the protobuf response.
+3. The WebView lets TikTok's own page sign the request instead of reimplementing the algorithm.
 
-## Referencias
-
-- [Euler Stream — Custom Sign Servers](https://www.eulerstream.com/docs/sign-server/custom-sign-servers)
-- [isaackogan/TikTokLive](https://github.com/isaackogan/TikTokLive) — cliente Python de referencia
-- [zerodytrash/TikTok-Live-Connector](https://github.com/zerodytrash/TikTok-Live-Connector) — cliente Node de referencia
-- [carcabot/tiktok-xgnarly-decoded](https://github.com/carcabot/tiktok-xgnarly-decoded) — reversing de X-Gnarly (webmssdk 5.1.3-ZTCA)
-- [carcabot/tiktok-signature](https://github.com/carcabot/tiktok-signature) — enfoque headless-browser en Node

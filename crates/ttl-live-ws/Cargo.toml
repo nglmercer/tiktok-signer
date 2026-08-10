@@ -1,6 +1,6 @@
 [package]
 name = "ttl-live-ws"
-description = "Cliente WebSocket de TikTok LIVE sobre un SignedFetch ya firmado."
+description = "TikTok LIVE WebSocket client built on a signed SignedFetch."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

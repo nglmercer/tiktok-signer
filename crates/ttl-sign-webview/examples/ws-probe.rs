@@ -64,7 +64,7 @@ fn main() -> ! {
             params.internal_ext = result.internal_ext.clone();
             let preset = signer.preset();
             let uri = params.build_uri(&result.push_server, &result.route_params, &preset);
-            let uri = signer.sign_ws_uri(&uri).await.expect("firma del WebSocket");
+            let uri = signer.sign_ws_uri(&uri).await.expect("WebSocket signing");
             println!("host: {}", uri.split('?').next().unwrap_or_default());
 
             let mut request = uri.as_str().into_client_request().expect("uri");
@@ -126,9 +126,9 @@ fn main() -> ! {
                             _ => {}
                         }
                     }
-                    entrada = ws.next() => {
+                    incoming = ws.next() => {
                         let t = t0.elapsed().as_secs_f32();
-                        match entrada {
+                        match incoming {
                             None => { println!("[{t:>5.1}s] socket closed by peer"); break; }
                             Some(Err(e)) => { println!("[{t:>5.1}s] error: {e}"); break; }
                             Some(Ok(Message::Binary(bytes))) => {

@@ -60,7 +60,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 /// Parameters sent by clients. Most are ignored: browser parameters are
 /// regenerates the server-side preset, and the UA used is returned in
-/// `X-Set-TT-User-Agent` para que el cliente abra el WS con el mismo
+/// `X-Set-TT-User-Agent` so the client opens the WebSocket with the same
 /// (`docs/03-spec-sign-server.md` §Regla).
 #[derive(Debug, Deserialize)]
 pub struct FetchQuery {
@@ -216,7 +216,7 @@ mod tests {
         assert!(valid("7300000000000000000"));
         assert!(!valid(""));
         assert!(!valid("7300abc"));
-        assert!(!valid("@usuario"));
+        assert!(!valid("@user"));
     }
 
     #[test]

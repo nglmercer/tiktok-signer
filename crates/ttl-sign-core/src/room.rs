@@ -15,8 +15,13 @@
 
 use std::collections::BTreeMap;
 
+const ROOM_STATUS_ENDED: i64 = 4;
+const EMPTY_ROOM_ID: &str = "0";
+
 /// Live exploration page. JavaScript is required to populate it.
 pub const LIVE_EXPLORE_URL: &str = "https://www.tiktok.com/live";
+const ROOM_LOOKUP_APP_ID: &str = "1988";
+const ROOM_LOOKUP_SOURCE_TYPE: &str = "54";
 
 /// URL for a user's live page.
 pub fn live_page_url(unique_id: &str) -> String {
@@ -29,7 +34,7 @@ pub fn live_page_url(unique_id: &str) -> String {
 /// Endpoint resolving `unique_id` → `room_id`. It requires no signature or cookies.
 pub fn room_lookup_url(unique_id: &str) -> String {
     format!(
-        "https://www.tiktok.com/api-live/user/room/?aid=1988&sourceType=54&uniqueId={}",
+        "https://www.tiktok.com/api-live/user/room/?aid={ROOM_LOOKUP_APP_ID}&sourceType={ROOM_LOOKUP_SOURCE_TYPE}&uniqueId={}",
         unique_id.trim_start_matches('@')
     )
 }
@@ -52,7 +57,9 @@ impl RoomLookup {
     /// that it exists is insufficient: signing an offline room returns a protobuf without
     /// `push_server`, indistinguishable from a rejection.
     pub fn is_live(&self) -> bool {
-        self.status != 4 && !self.room_id.is_empty() && self.room_id != "0"
+        self.status != ROOM_STATUS_ENDED
+            && !self.room_id.is_empty()
+            && self.room_id != EMPTY_ROOM_ID
     }
 
     /// Parse the response from [`room_lookup_url`].
@@ -290,7 +297,7 @@ mod tests {
         let dom = r#"<div>
             <a href="/@alice/live"><span>Alice</span></a>
             <a href="/@bob.b_1/live?lang=en">Bob</a>
-            <a href="/@carol">no es un directo</a>
+            <a href="/@carol">not a live stream</a>
             <a href="/@dave/video/123">tampoco</a>
         </div>"#;
         let ids: Vec<_> = extract_live_channels(dom)

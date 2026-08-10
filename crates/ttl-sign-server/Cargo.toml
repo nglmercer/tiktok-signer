@@ -1,6 +1,6 @@
 [package]
 name = "ttl-sign-server"
-description = "Servidor HTTP compatible con la spec de sign server de Euler Stream."
+description = "HTTP server compatible with the Euler Stream sign-server specification."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

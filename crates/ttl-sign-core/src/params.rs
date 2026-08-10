@@ -14,6 +14,20 @@ use rand::Rng;
 
 use crate::preset::Preset;
 
+const DEVICE_ID_DIGITS: usize = 19;
+const DEVICE_ID_FIRST_DIGIT_MIN: u32 = 1;
+const DEVICE_ID_FIRST_DIGIT_MAX: u32 = 9;
+const DEVICE_ID_DIGIT_MIN: u32 = 0;
+const DEVICE_ID_DIGIT_MAX: u32 = 9;
+const LAST_RTT_MIN: u32 = 100;
+const LAST_RTT_MAX: u32 = 200;
+const APP_ID: &str = "1988";
+const LIVE_ID: &str = "12";
+const FETCH_RULE: &str = "1";
+const FETCH_VERSION_CODE: &str = "270000";
+const WS_VERSION_CODE: &str = "180800";
+const HEARTBEAT_DURATION_MS: &str = "10000";
+
 /// Query string under construction: ordered pairs with duplicates allowed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Query(Vec<(String, String)>);
@@ -106,17 +120,26 @@ fn percent_encode(s: &str) -> String {
 /// Generate a 19-digit `device_id`, matching the real browser.
 pub fn random_device_id() -> String {
     let mut rng = rand::thread_rng();
-    let mut s = String::with_capacity(19);
-    s.push(char::from_digit(rng.gen_range(1..=9), 10).expect("valid digit"));
-    for _ in 0..18 {
-        s.push(char::from_digit(rng.gen_range(0..=9), 10).expect("valid digit"));
+    let mut s = String::with_capacity(DEVICE_ID_DIGITS);
+    s.push(
+        char::from_digit(
+            rng.gen_range(DEVICE_ID_FIRST_DIGIT_MIN..=DEVICE_ID_FIRST_DIGIT_MAX),
+            10,
+        )
+        .expect("valid digit"),
+    );
+    for _ in 1..DEVICE_ID_DIGITS {
+        s.push(
+            char::from_digit(rng.gen_range(DEVICE_ID_DIGIT_MIN..=DEVICE_ID_DIGIT_MAX), 10)
+                .expect("valid digit"),
+        );
     }
     s
 }
 
 /// Keep `last_rtt` plausible, within the range used by the reference client.
 pub fn random_last_rtt() -> u32 {
-    rand::thread_rng().gen_range(100..=200)
+    rand::thread_rng().gen_range(LAST_RTT_MIN..=LAST_RTT_MAX)
 }
 
 /// Query for `/webcast/im/fetch/`.
@@ -135,7 +158,7 @@ pub struct FetchParams {
     ///
     /// With `1`, the response includes a `push_server` of the type
     /// `ws_proxy/ws_reuse_supplement/`; the pattern documented by
-    /// `docs/00-research.md` §1 es `webcast<N>-ws-web-<idc>`. Configurable para poder
+    /// `docs/00-research.md` §1 describes `webcast<N>-ws-web-<idc>`. Configurable so both
     /// so both variants can be compared against a real room.
     pub sup_ws_ds_opt: u8,
 }
@@ -159,7 +182,7 @@ impl FetchParams {
         let s = &preset.screen;
 
         let mut q = Query::new();
-        q.set("aid", "1988")
+        q.set("aid", APP_ID)
             .set("app_language", &l.language)
             .set("app_name", "tiktok_web")
             .set("browser_language", &l.browser_language)
@@ -173,13 +196,13 @@ impl FetchParams {
             .set("device_id", &self.device_id)
             .set("device_platform", "web")
             .set("did_rule", "3")
-            .set("fetch_rule", "1")
+            .set("fetch_rule", FETCH_RULE)
             .set("history_comment_count", "6")
             .set("history_comment_cursor", "")
             .set("identity", "audience")
             .set("internal_ext", &self.internal_ext)
             .set("last_rtt", "0")
-            .set("live_id", "12")
+            .set("live_id", LIVE_ID)
             .set("os", &d.os)
             .set("priority_region", &l.region)
             .set("region", &l.region)
@@ -189,7 +212,7 @@ impl FetchParams {
             .set("screen_width", s.width.to_string())
             .set("sup_ws_ds_opt", self.sup_ws_ds_opt.to_string())
             .set("tz_name", &l.tz_name)
-            .set("version_code", "270000")
+            .set("version_code", FETCH_VERSION_CODE)
             .set("webcast_language", &l.language)
             .set("notice", "CUSTOM_SIGN_SERVER");
 
@@ -209,7 +232,7 @@ impl FetchParams {
 pub const FETCH_ENDPOINT: &str = "https://webcast.tiktok.com/webcast/im/fetch/";
 
 /// WebSocket query: signed `route_params` + our parameters + the trailing `version_code`
-/// duplicado del final (`docs/05-spec-websocket-client.md`).
+/// duplicated at the end (`docs/05-spec-websocket-client.md`).
 #[derive(Debug, Clone)]
 pub struct WsParams {
     pub room_id: String,
@@ -248,7 +271,7 @@ impl WsParams {
         let s = &preset.screen;
 
         let mut q = Query::new();
-        q.set("aid", "1988")
+        q.set("aid", APP_ID)
             .set("app_language", &l.language)
             .set("app_name", "tiktok_web")
             .set("browser_language", &l.browser_language)
@@ -262,12 +285,12 @@ impl WsParams {
             .set("cursor", &self.cursor)
             .set("device_platform", "web")
             .set("did_rule", "3")
-            .set("heartbeat_duration", "10000")
+            .set("heartbeat_duration", HEARTBEAT_DURATION_MS)
             .set("internal_ext", &self.internal_ext)
             .set("history_comment_count", "6")
             .set("identity", "audience")
             .set("last_rtt", self.last_rtt.to_string())
-            .set("live_id", "12")
+            .set("live_id", LIVE_ID)
             .set("resp_content_type", "protobuf")
             .set("room_id", &self.room_id)
             .set("screen_height", s.height.to_string())
@@ -275,20 +298,20 @@ impl WsParams {
             .set("sup_ws_ds_opt", "1")
             .set("tz_name", &l.tz_name)
             .set("update_version_code", "2.0.0")
-            .set("version_code", "180800")
+            .set("version_code", WS_VERSION_CODE)
             .set("webcast_language", &l.language)
             .set("ws_direct", "1");
         q
     }
 
-    /// URI completa del WebSocket.
+    /// Complete WebSocket URI.
     ///
     /// Three rules must be preserved exactly (`docs/05` URI construction):
     ///
     /// 1. Empty `route_params` values are discarded.
     /// 2. Client parameters are applied afterward and win collisions.
-    /// 3. `&version_code=270000` se concatena al final **aunque** ya haya un
-    ///    `version_code=180800`. La query lo lleva dos veces, y es intencionado.
+    /// 3. `&version_code=270000` is appended at the end **even when**
+    ///    `version_code=180800` is already present. The duplicate is intentional.
     pub fn build_uri(
         &self,
         push_server: &str,
@@ -305,7 +328,7 @@ impl WsParams {
         for (k, v) in self.client_params(preset).iter() {
             q.set(k, v);
         }
-        q.push_raw("version_code", "270000");
+        q.push_raw("version_code", FETCH_VERSION_CODE);
 
         let sep = if push_server.contains('?') { '&' } else { '?' };
         format!("{push_server}{sep}{}", q.encode())
@@ -382,7 +405,7 @@ mod tests {
         }
     }
 
-    /// `cursor` e `internal_ext` viajan en la query del WS, no en los `route_params`.
+    /// `cursor` and `internal_ext` travel in the WebSocket query, not in `route_params`.
     #[test]
     fn ws_uri_carries_cursor_and_internal_ext() {
         let mut params = WsParams::new("42");

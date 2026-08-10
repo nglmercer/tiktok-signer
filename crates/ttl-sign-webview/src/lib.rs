@@ -1252,7 +1252,7 @@ mod tests {
         assert_eq!(query_param(url, "msToken").as_deref(), Some("ab+cd="));
         assert_eq!(query_param(url, "a").as_deref(), Some("1"));
         assert_eq!(query_param(url, "falta"), None);
-        assert_eq!(query_param("https://x/sin-query", "a"), None);
+        assert_eq!(query_param("https://x/no-query", "a"), None);
     }
 
     #[test]

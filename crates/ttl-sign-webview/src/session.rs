@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn a_missing_file_is_not_an_error() {
-        let path = std::env::temp_dir().join("ttl-session-que-no-existe");
+        let path = std::env::temp_dir().join("ttl-session-that-does-not-exist");
         std::fs::remove_file(&path).ok();
         assert!(load(&path).unwrap().is_none());
     }

@@ -1,6 +1,6 @@
 [package]
 name = "ttl-sign-core"
-description = "Tipos y construcción de requests para el signer de TikTok LIVE. Sin I/O, sin webview."
+description = "Types and request construction for the TikTok LIVE signer. No I/O, no WebView."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

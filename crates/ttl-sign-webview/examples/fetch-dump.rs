@@ -83,7 +83,7 @@ fn main() -> ! {
                 println!("guardado en {path}\n");
             }
 
-            // --- Estructura cruda: campo por campo, sin interpretar ---
+            // --- Raw structure: field by field, without interpretation ---
             println!("top-level fields:");
             let mut messages = Vec::new();
             for (number, kind, size) in describe(&signed.protobuf).expect("protobuf ilegible") {
@@ -102,7 +102,7 @@ fn main() -> ! {
             }
             println!("  → {} entradas en el campo 1", messages.len());
 
-            // --- Lo que sacamos hoy ---
+            // --- What we extract today ---
             let result = FetchResult::decode(&signed.protobuf).expect("decode");
             println!("\nFetchResult:");
             println!("  push_server ......... {}", result.push_server);
@@ -118,7 +118,7 @@ fn main() -> ! {
                 println!("      {k} = {}", recorta(v));
             }
 
-            // --- Los mensajes que ya vienen en esta respuesta ---
+            // --- Messages already present in this response ---
             println!("\nmessages embedded in the response:");
             let mut reader = Reader::new(&signed.protobuf);
             let mut vistos = 0usize;
