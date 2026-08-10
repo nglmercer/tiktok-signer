@@ -28,7 +28,7 @@ async fn main() -> Result<()> {
         .user_agent(preset.user_agent())
         .build()?;
 
-    println!("{:<24} {:<22} {:<8} {}", "USUARIO", "ROOM_ID", "ESTADO", "TÍTULO");
+    println!("{:<24} {:<22} {:<8} TÍTULO", "USUARIO", "ROOM_ID", "ESTADO");
 
     let mut live = 0usize;
     for user in &users {

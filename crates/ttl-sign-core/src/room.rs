@@ -21,7 +21,10 @@ pub const LIVE_EXPLORE_URL: &str = "https://www.tiktok.com/live";
 
 /// URL del directo de un usuario.
 pub fn live_page_url(unique_id: &str) -> String {
-    format!("https://www.tiktok.com/@{}/live", unique_id.trim_start_matches('@'))
+    format!(
+        "https://www.tiktok.com/@{}/live",
+        unique_id.trim_start_matches('@')
+    )
 }
 
 /// Endpoint que resuelve `unique_id` → `room_id`. No requiere firma ni cookies.
@@ -167,7 +170,9 @@ fn embedded_json_blobs(dom: &str) -> Vec<String> {
 
     let mut out = Vec::new();
     for chunk in dom.split("<script").skip(1) {
-        let Some(open) = chunk.find('>') else { continue };
+        let Some(open) = chunk.find('>') else {
+            continue;
+        };
         let (attrs, rest) = chunk.split_at(open);
         if !attrs.contains("application/json") {
             continue;
@@ -184,9 +189,11 @@ fn collect_channels(value: &serde_json::Value, out: &mut Vec<LiveChannel>) {
     match value {
         serde_json::Value::Object(map) => {
             let unique_id = map.get("uniqueId").and_then(serde_json::Value::as_str);
-            let room_id = map
-                .get("roomId")
-                .and_then(|v| v.as_str().map(str::to_owned).or_else(|| v.as_u64().map(|n| n.to_string())));
+            let room_id = map.get("roomId").and_then(|v| {
+                v.as_str()
+                    .map(str::to_owned)
+                    .or_else(|| v.as_u64().map(|n| n.to_string()))
+            });
 
             if let (Some(unique_id), Some(room_id)) = (unique_id, room_id) {
                 if !unique_id.is_empty() && !room_id.is_empty() && room_id != "0" {

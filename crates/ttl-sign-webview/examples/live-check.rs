@@ -30,8 +30,9 @@ use ttl_sign_webview::{run, EngineConfig, Signer};
 fn main() -> ! {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "live_check=info,ttl_sign_webview=info,ttl_live_ws=debug".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "live_check=info,ttl_sign_webview=info,ttl_live_ws=debug".into()
+            }),
         )
         .init();
 
@@ -144,7 +145,10 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
     .await
     .map_err(|e| format!("no se pudo abrir el WebSocket: {e}"))?;
 
-    println!("      conectado {:?} después de firmar", signed_at.elapsed());
+    println!(
+        "      conectado {:?} después de firmar",
+        signed_at.elapsed()
+    );
 
     let deadline = tokio::time::sleep(Duration::from_secs(30));
     tokio::pin!(deadline);
@@ -176,9 +180,7 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
 }
 
 /// La página tarda en pintar los canales: se sondea el DOM en vez de leerlo una vez.
-async fn poll_channels(
-    signer: &Signer,
-) -> Result<Vec<ttl_sign_core::LiveChannel>, String> {
+async fn poll_channels(signer: &Signer) -> Result<Vec<ttl_sign_core::LiveChannel>, String> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         match signer.live_channels().await {

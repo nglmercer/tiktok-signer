@@ -11,13 +11,13 @@ pub enum FromPage {
         #[serde(default)]
         sdk_version: Option<String>,
     },
-    /// Petición completada (con cualquier status HTTP).
-    Result {
+    /// La petición salió firmada por el SDK. **No trae cuerpo**: `/webcast/im/fetch/`
+    /// no devuelve cabeceras CORS, así que la página no puede leer la respuesta. Rust
+    /// repite esta URL con su propio cliente HTTP (Plan B).
+    Signed {
         request_id: u64,
-        status: u16,
-        #[serde(default)]
+        /// URL ya firmada: incluye X-Bogus, X-Gnarly, X-Dynosaur y msToken.
         url: String,
-        body_b64: String,
         #[serde(default)]
         cookie: String,
     },
@@ -81,21 +81,17 @@ mod tests {
     }
 
     #[test]
-    fn parses_result() {
-        let raw = r#"{"type":"result","request_id":42,"status":200,
+    fn parses_signed() {
+        let raw = r#"{"type":"signed","request_id":42,
                       "url":"https://webcast.tiktok.com/webcast/im/fetch/?X-Gnarly=K",
-                      "body_b64":"CgoK","cookie":"msToken=abc"}"#;
+                      "cookie":"msToken=abc"}"#;
         match serde_json::from_str(raw).unwrap() {
-            FromPage::Result {
+            FromPage::Signed {
                 request_id,
-                status,
-                body_b64,
                 cookie,
                 url,
             } => {
                 assert_eq!(request_id, 42);
-                assert_eq!(status, 200);
-                assert_eq!(body_b64, "CgoK");
                 assert_eq!(cookie, "msToken=abc");
                 assert!(url.contains("X-Gnarly"));
             }

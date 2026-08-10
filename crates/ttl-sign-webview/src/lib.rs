@@ -33,7 +33,6 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use base64::Engine as _;
 use tao::event::Event;
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::window::WindowBuilder;
@@ -71,7 +70,14 @@ pub struct EngineConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
-            preset: Preset::default(),
+            // En Linux el webview reporta `navigator.platform = "Linux x86_64"`, y
+            // `with_user_agent` no lo cambia: un preset de Windows deja `browser_platform`
+            // y el UA contando historias distintas, que es la causa nº1 de rechazo
+            // (`docs/06-risks-and-ops.md` §1). Observado en F2.
+            preset: Preset {
+                device: default_device_preset(),
+                ..Preset::default()
+            },
             landing_url: "https://www.tiktok.com/live".into(),
             sign_timeout: Duration::from_secs(15),
             sdk_ready_timeout: Duration::from_secs(30),
@@ -80,11 +86,22 @@ impl Default for EngineConfig {
     }
 }
 
+/// El preset que casa con el motor de webview de esta plataforma.
+fn default_device_preset() -> ttl_sign_core::DevicePreset {
+    if cfg!(target_os = "linux") {
+        ttl_sign_core::DevicePreset::chrome_linux()
+    } else if cfg!(target_os = "macos") {
+        ttl_sign_core::DevicePreset::chrome_macos()
+    } else {
+        ttl_sign_core::DevicePreset::chrome_windows()
+    }
+}
+
 /// Trabajo inyectado en el event loop desde el runtime de tokio.
 enum UserEvent {
     Sign {
         params: Box<FetchParams>,
-        reply: oneshot::Sender<SignOutcome>,
+        reply: oneshot::Sender<Result<SignedRequest, SignError>>,
     },
     /// Paso 1 sin firma. `url: None` pide el DOM ya renderizado.
     Text {
@@ -105,11 +122,22 @@ enum UserEvent {
     Shutdown,
 }
 
+/// Lo que devuelve la página: una URL ya firmada y las cookies con las que se firmó.
+/// El cuerpo lo trae Rust después, repitiendo esta petición.
+#[derive(Debug, Clone)]
+pub struct SignedRequest {
+    /// URL con X-Bogus, X-Gnarly, X-Dynosaur y msToken puestos por webmssdk.
+    pub url: String,
+    pub cookies: CookieJar,
+    pub user_agent: String,
+}
+
 /// Handle async del motor. Clonable y `Send`: es lo que ve el servidor HTTP.
 #[derive(Clone)]
 pub struct Signer {
     proxy: EventLoopProxy<UserEvent>,
     config: EngineConfig,
+    http: reqwest::Client,
 }
 
 impl Signer {
@@ -138,11 +166,79 @@ impl Signer {
             return SignError::EngineGone("el event loop se ha cerrado".into()).into();
         }
 
+        let signed = match tokio::time::timeout(self.config.sign_timeout, rx).await {
+            Ok(Ok(Ok(signed))) => signed,
+            Ok(Ok(Err(e))) => return e.into(),
+            Ok(Err(_)) => {
+                return SignError::EngineGone("el motor descartó la petición".into()).into()
+            }
+            Err(_) => {
+                return SignError::Timeout(self.config.sign_timeout.as_millis() as u64).into()
+            }
+        };
+
+        self.replay(signed).await
+    }
+
+    /// Solo firma: devuelve la URL firmada sin repetirla. Para diagnóstico.
+    pub async fn sign_only(&self, room_id: &str) -> Result<SignedRequest, SignError> {
+        let mut params = FetchParams::new(room_id);
+        params.contact_us = self.config.contact_us.clone();
+        let (tx, rx) = oneshot::channel();
+        self.proxy
+            .send_event(UserEvent::Sign {
+                params: Box::new(params),
+                reply: tx,
+            })
+            .map_err(|_| SignError::EngineGone("el event loop se ha cerrado".into()))?;
         match tokio::time::timeout(self.config.sign_timeout, rx).await {
-            Ok(Ok(outcome)) => outcome,
-            Ok(Err(_)) => SignError::EngineGone("el motor descartó la petición".into()).into(),
-            Err(_) => SignError::Timeout(self.config.sign_timeout.as_millis() as u64).into(),
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(SignError::EngineGone("descartada".into())),
+            Err(_) => Err(SignError::Timeout(
+                self.config.sign_timeout.as_millis() as u64
+            )),
         }
+    }
+
+    /// Repite la petición ya firmada desde Rust.
+    ///
+    /// Es el Plan B de `docs/01-architecture.md` §D2, y no es opcional: la respuesta de
+    /// `/webcast/im/fetch/` no lleva cabeceras CORS, así que la página **no puede** leer
+    /// el cuerpo. Fuera del navegador esa restricción no existe.
+    async fn replay(&self, signed: SignedRequest) -> SignOutcome {
+        let response = match self
+            .http
+            .get(&signed.url)
+            .header("User-Agent", &signed.user_agent)
+            .header("Cookie", signed.cookies.to_cookie_string())
+            .header("Accept", "application/protobuf")
+            .header("Referer", "https://www.tiktok.com/")
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(e) => return SignError::Transport(e.to_string()).into(),
+        };
+
+        debug!(
+            // Sin la query: lleva msToken y X-Gnarly en claro.
+            endpoint = %signed.url.split('?').next().unwrap_or_default(),
+            cookies = ?signed.cookies.iter().map(|(k, _)| k).collect::<Vec<_>>(),
+            "URL firmada, repitiendo desde Rust"
+        );
+        let status = response.status().as_u16();
+        let protobuf = match response.bytes().await {
+            Ok(bytes) => bytes.to_vec(),
+            Err(e) => return SignError::Transport(e.to_string()).into(),
+        };
+
+        build_outcome(
+            status,
+            &signed.url,
+            protobuf,
+            signed.cookies,
+            &signed.user_agent,
+        )
     }
 
     /// Lleva el webview a otra página y espera a que el puente vuelva a estar listo.
@@ -166,8 +262,16 @@ impl Signer {
         }
         match tokio::time::timeout(self.config.sdk_ready_timeout, rx).await {
             Ok(Ok(result)) => result?,
-            Ok(Err(_)) => return Err(SignError::EngineGone("el motor descartó la navegación".into())),
-            Err(_) => return Err(SignError::Timeout(self.config.sdk_ready_timeout.as_millis() as u64)),
+            Ok(Err(_)) => {
+                return Err(SignError::EngineGone(
+                    "el motor descartó la navegación".into(),
+                ))
+            }
+            Err(_) => {
+                return Err(SignError::Timeout(
+                    self.config.sdk_ready_timeout.as_millis() as u64,
+                ))
+            }
         }
         // Cualquier petición espera al gate: pedir el DOM equivale a esperar a `ready`.
         self.dom().await.map(|_| ())
@@ -227,7 +331,9 @@ impl Signer {
         }
         match tokio::time::timeout(self.config.sign_timeout, rx).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(SignError::EngineGone("el motor descartó la petición".into())),
+            Ok(Err(_)) => Err(SignError::EngineGone(
+                "el motor descartó la petición".into(),
+            )),
             Err(_) => Err(SignError::Timeout(
                 self.config.sign_timeout.as_millis() as u64
             )),
@@ -245,26 +351,34 @@ impl Signer {
     }
 }
 
+/// Una firma esperando a que el SDK esté listo.
+type QueuedSign = (
+    Box<FetchParams>,
+    oneshot::Sender<Result<SignedRequest, SignError>>,
+);
+
+/// Una petición de texto esperando a que la página esté lista.
+type QueuedText = (Option<String>, oneshot::Sender<Result<String, SignError>>);
+
 /// Estado compartido entre el event loop y el handler de IPC. Ambos corren en el hilo
 /// principal, así que `Rc<RefCell<_>>` es suficiente y evita locks.
 #[derive(Default)]
 struct Shared {
     next_id: u64,
     /// Peticiones en vuelo, por `request_id`.
-    pending: HashMap<u64, oneshot::Sender<SignOutcome>>,
+    pending: HashMap<u64, oneshot::Sender<Result<SignedRequest, SignError>>>,
     /// Peticiones de texto en vuelo (paso 1, sin firma).
     pending_text: HashMap<u64, oneshot::Sender<Result<String, SignError>>>,
     /// Peticiones recibidas antes de que el SDK estuviese listo.
-    queued: Vec<(Box<FetchParams>, oneshot::Sender<SignOutcome>)>,
+    queued: Vec<QueuedSign>,
     /// Igual, para las de texto: `ready` implica además que el documento ya cargó, que
     /// es lo que hace falta para que el DOM tenga algo que leer.
-    queued_text: Vec<(Option<String>, oneshot::Sender<Result<String, SignError>>)>,
+    queued_text: Vec<QueuedText>,
     ready: bool,
     /// Cuándo empezó a contar el gate de readiness. Se reinicia en cada navegación.
     gate_started: Option<Instant>,
     sdk_version: Option<String>,
     signs: u64,
-    rejects: u64,
 }
 
 impl Shared {
@@ -273,13 +387,10 @@ impl Shared {
         self.next_id
     }
 
-    fn resolve(&mut self, request_id: u64, outcome: SignOutcome) {
-        if outcome.is_rejected() {
-            self.rejects += 1;
-        }
+    fn resolve(&mut self, request_id: u64, result: Result<SignedRequest, SignError>) {
         match self.pending.remove(&request_id) {
             Some(tx) => {
-                let _ = tx.send(outcome);
+                let _ = tx.send(result);
             }
             None => debug!(request_id, "resultado sin petición en vuelo, se descarta"),
         }
@@ -297,10 +408,10 @@ impl Shared {
     /// Falla todo lo que estuviera esperando. Se usa cuando el SDK no arranca.
     fn fail_all(&mut self, make_error: impl Fn() -> SignError) {
         for (_, tx) in self.pending.drain() {
-            let _ = tx.send(make_error().into());
+            let _ = tx.send(Err(make_error()));
         }
         for (_, tx) in self.queued.drain(..) {
-            let _ = tx.send(make_error().into());
+            let _ = tx.send(Err(make_error()));
         }
         for (_, tx) in self.pending_text.drain() {
             let _ = tx.send(Err(make_error()));
@@ -371,6 +482,7 @@ where
         let signer = Signer {
             proxy,
             config: config.clone(),
+            http: http_client(&user_agent),
         };
         move || worker(signer)
     });
@@ -523,11 +635,12 @@ fn dispatch(
         request_id,
         url: params.url(preset),
     };
+    debug!(request_id, "firma solicitada a la página");
     if let Err(e) = webview.evaluate_script(&msg.to_script()) {
         error!(request_id, error = %e, "no se pudo inyectar la firma");
         shared
             .borrow_mut()
-            .resolve(request_id, SignError::EngineGone(e.to_string()).into());
+            .resolve(request_id, Err(SignError::EngineGone(e.to_string())));
     }
 }
 
@@ -609,49 +722,43 @@ fn handle_page_message(
                 if state.pending_text.contains_key(&request_id) {
                     state.resolve_text(request_id, Err(SignError::Bridge(message)));
                 } else {
-                    state.resolve(request_id, SignError::Bridge(message).into());
+                    state.resolve(request_id, Err(SignError::Bridge(message)));
                 }
             }
         }
-        FromPage::Result {
+        FromPage::Signed {
             request_id,
-            status,
             url,
-            body_b64,
             cookie,
         } => {
-            let outcome = build_outcome(
-                status,
-                &url,
-                &body_b64,
-                &cookie,
-                user_agent,
-                jar_from_webview,
-            );
-            shared.borrow_mut().resolve(request_id, outcome);
+            // Las del cookie manager mandan (ven las HttpOnly); `document.cookie` solo
+            // rellena lo que falte.
+            let mut cookies = CookieJar::parse(&cookie);
+            cookies.merge(&jar_from_webview);
+            let signed = SignedRequest {
+                url,
+                cookies,
+                user_agent: user_agent.to_string(),
+            };
+            shared.borrow_mut().resolve(request_id, Ok(signed));
         }
     }
 }
 
-/// Clasifica la respuesta. El punto delicado: un 200 con cuerpo vacío o con
-/// `push_server` vacío es **rechazo**, no un error transitorio
-/// (`docs/06-risks-and-ops.md` §2).
+/// Clasifica la respuesta ya repetida desde Rust.
+///
+/// El punto delicado: un 200 con cuerpo vacío o con `push_server` vacío es **rechazo**,
+/// no un error transitorio (`docs/06-risks-and-ops.md` §2).
 fn build_outcome(
     status: u16,
     url: &str,
-    body_b64: &str,
-    document_cookie: &str,
+    protobuf: Vec<u8>,
+    cookies: CookieJar,
     user_agent: &str,
-    mut cookies: CookieJar,
 ) -> SignOutcome {
     if status != 200 {
         return SignOutcome::Rejected(RejectReason::HttpStatus(status));
     }
-
-    let protobuf = match base64::engine::general_purpose::STANDARD.decode(body_b64) {
-        Ok(bytes) => bytes,
-        Err(e) => return SignError::Decode(format!("base64 inválido: {e}")).into(),
-    };
     if protobuf.is_empty() {
         return SignOutcome::Rejected(RejectReason::EmptyBody);
     }
@@ -665,12 +772,6 @@ fn build_outcome(
         Err(e) => return SignError::Decode(e.to_string()).into(),
     }
 
-    // Las del cookie manager mandan; `document.cookie` solo añade lo que falte.
-    let from_document = CookieJar::parse(document_cookie);
-    let mut merged = from_document;
-    merged.merge(&cookies);
-    std::mem::swap(&mut cookies, &mut merged);
-
     SignOutcome::Ok(SignedFetch {
         protobuf,
         cookies,
@@ -679,12 +780,25 @@ fn build_outcome(
     })
 }
 
+/// Cliente HTTP para repetir la petición firmada.
+///
+/// Sin redirecciones automáticas: un 3xx aquí sería TikTok mandándonos a otro sitio, y
+/// seguirlo enmascararía el rechazo.
+fn http_client(user_agent: &str) -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent(user_agent.to_string())
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(15))
+        .build()
+        .expect("cliente HTTP")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ttl_sign_core::proto::Writer;
 
-    fn valid_protobuf() -> String {
+    fn valid_protobuf() -> Vec<u8> {
         let mut w = Writer::new();
         w.str_field(2, "cursor")
             .map_entry(7, "wss_push_room_id", "1")
@@ -692,12 +806,12 @@ mod tests {
                 10,
                 "wss://webcast5-ws-web-useast1a.tiktok.com/webcast/im/ws/",
             );
-        base64::engine::general_purpose::STANDARD.encode(w.finish())
+        w.finish()
     }
 
     #[test]
     fn non_200_is_a_rejection() {
-        let outcome = build_outcome(403, "", "", "", "UA", CookieJar::new());
+        let outcome = build_outcome(403, "", vec![1], CookieJar::new(), "UA");
         assert!(matches!(
             outcome,
             SignOutcome::Rejected(RejectReason::HttpStatus(403))
@@ -706,7 +820,7 @@ mod tests {
 
     #[test]
     fn empty_body_on_200_is_a_rejection_not_a_transport_error() {
-        let outcome = build_outcome(200, "", "", "", "UA", CookieJar::new());
+        let outcome = build_outcome(200, "", Vec::new(), CookieJar::new(), "UA");
         assert!(matches!(
             outcome,
             SignOutcome::Rejected(RejectReason::EmptyBody)
@@ -716,9 +830,8 @@ mod tests {
 
     #[test]
     fn empty_push_server_on_200_is_a_rejection() {
-        let body = base64::engine::general_purpose::STANDARD
-            .encode(Writer::new().str_field(2, "cursor").clone().finish());
-        let outcome = build_outcome(200, "", &body, "", "UA", CookieJar::new());
+        let body = Writer::new().str_field(2, "cursor").clone().finish();
+        let outcome = build_outcome(200, "", body, CookieJar::new(), "UA");
         assert!(matches!(
             outcome,
             SignOutcome::Rejected(RejectReason::EmptyPushServer)
@@ -726,27 +839,17 @@ mod tests {
     }
 
     #[test]
-    fn bad_base64_is_transport_not_rejection() {
-        let outcome = build_outcome(200, "", "no-es-base64!!", "", "UA", CookieJar::new());
-        assert!(outcome.is_retryable());
-        assert!(!outcome.is_rejected());
-    }
-
-    #[test]
-    fn webview_cookies_win_over_document_cookie() {
-        let jar = CookieJar::parse("msToken=del-manager; ttwid=solo-httponly");
+    fn a_valid_response_carries_context_for_the_websocket() {
         let outcome = build_outcome(
             200,
             "https://webcast.tiktok.com/webcast/im/fetch/?X-Gnarly=K",
-            &valid_protobuf(),
-            "msToken=del-documento; otra=1",
+            valid_protobuf(),
+            CookieJar::parse("msToken=abc; ttwid=xyz"),
             "UA-de-prueba",
-            jar,
         );
         let signed = outcome.ok().expect("debería ser una firma válida");
-        assert_eq!(signed.cookies.get("msToken"), Some("del-manager"));
-        assert_eq!(signed.cookies.get("ttwid"), Some("solo-httponly"));
-        assert_eq!(signed.cookies.get("otra"), Some("1"));
+        // El WS necesita exactamente estas cookies y este UA, no otros.
+        assert_eq!(signed.cookies.get("ttwid"), Some("xyz"));
         assert_eq!(signed.user_agent, "UA-de-prueba");
         assert!(signed.signed_url.contains("X-Gnarly"));
     }

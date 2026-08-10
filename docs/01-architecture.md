@@ -73,12 +73,23 @@ Tres opciones evaluadas:
 | B | Interceptar el `fetch` parcheado, capturar la URL ya firmada, reproducirla con `reqwest` | Permite proxy/IP por conexión y control total del cliente HTTP | Hay que replicar el cookie jar a mano; ventana de caducidad más ajustada |
 | C | Llamar a `window.byted_acrawler.frontierSign(...)` directamente | Más rápido, sin round-trip de red en el webview | Los símbolos cambian en cada build del SDK |
 
-Se implementa **A**. **B** se deja como camino de salida documentado para cuando haga
-falta proxy por sala. **C** se descarta.
+**Implementado B**, no A. La nota sobre CORS que había aquí resultó ser falsa al
+contrastarla contra un directo real en F2 (2026-08-10):
 
-*Nota sobre CORS:* la página vive en `www.tiktok.com` y `webcast.tiktok.com` es un
-origen distinto, pero es exactamente la petición que hace el reproductor web real, así
-que las cabeceras CORS están puestas. Si esto dejara de cumplirse, se cae a Plan B.
+- La página **ya no** pide `/webcast/im/fetch/`. El reproductor web actual usa
+  `/webcast/room/enter/`, `/webcast/room/check_alive/` y `/webcast/feed/`.
+- Un `fetch` de `/webcast/im/fetch/` desde la página resuelve a `undefined` con el
+  `fetch` parcheado por webmssdk, y a `TypeError: Load failed` con un `fetch` pristino
+  sacado de un iframe. El cuerpo no se puede leer desde el navegador.
+- Lo que **sí** funciona es que la petición *sale firmada*: webmssdk le pone `X-Bogus`,
+  `X-Gnarly` (332 chars), `X-Dynosaur` (392 chars) y `msToken`, y la URL resultante
+  aparece en el Performance Timeline aunque la respuesta sea ilegible.
+
+De ahí el diseño actual: la página **firma** y Rust **repite** la petición con su propio
+cliente HTTP, donde no hay CORS. `X-Dynosaur` es un parámetro de firma que no estaba en
+[00](00-research.md) §2 y que aparece hoy junto a `X-Gnarly`.
+
+**C** sigue descartado.
 
 ### D3 — El event loop del webview manda en el hilo principal
 

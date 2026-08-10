@@ -136,11 +136,34 @@ y `X-Gnarly`.
 })();
 ```
 
-Sobre `res.url`: puede no reflejar los parámetros añadidos por el SDK según cómo
-parchee. Se emite igualmente porque es lo que habilita el **Plan B** (capturar la URL
-firmada y reproducirla con `reqwest`); si resulta que llega sin `X-Gnarly`, hay que
-interceptar `window.fetch` en el puente y registrar el argumento real. Verificar esto
-en F2 y anotar el resultado aquí.
+### Resultado de F2 (2026-08-10): el puente no devuelve cuerpo
+
+Verificado contra directos reales: el cuerpo de `/webcast/im/fetch/` **no se puede leer
+desde la página** (ver [01 §D2](01-architecture.md#d2--la-petición-se-hace-dentro-del-webview-plan-a)).
+El mensaje `result` con `body_b64` se sustituye por `signed`, que devuelve solo la URL ya
+firmada y las cookies:
+
+```jsonc
+{ "type": "signed", "request_id": 42,
+  "url": "https://webcast.tiktok.com/webcast/im/fetch/?…&X-Gnarly=…&X-Dynosaur=…&msToken=…",
+  "cookie": "msToken=…; ttwid=…" }
+```
+
+Cómo se obtiene esa URL: se lanza la petición con `mode: "no-cors"` (sale firmada, la
+respuesta se descarta) y se lee la entrada correspondiente del **Performance Timeline**,
+mirando solo las entradas posteriores al momento de lanzarla para no coger una firma
+anterior ya caducada.
+
+**No** se parchea `window.fetch` desde el script de inicialización: envolverlo rompe la
+cadena que webmssdk instala encima y la llamada acaba resolviendo a `undefined`.
+
+### Mensajes añadidos
+
+- `text` — paso 1 sin firma: lookup `uniqueId` → `room_id`, DOM renderizado (para
+  descubrir quién está en directo) y evaluación de JS para diagnóstico.
+- Navegación: el motor puede llevar la página a otra URL y reabrir el gate de readiness.
+  Hace falta porque firmar desde la portada `/live` no funciona; hay que estar en
+  `https://www.tiktok.com/@usuario/live`.
 
 ---
 
@@ -176,6 +199,10 @@ principal y `run()` no retorna.
 resulta ser `HttpOnly` (candidata: `ttwid`), hay que leerla del cookie manager de
 WebKitGTK en lugar de por IPC. **Verificar en F2** comparando las cookies obtenidas por
 IPC contra las del fixture de F0, y documentar aquí el resultado.
+
+*Resultado de F2:* el cookie manager devuelve `ttwid`, `tt_csrf_token`, `tt_chain_token`,
+`odin_tt`, `csrfToken` y `msToken`; `document.cookie` solo ve un subconjunto. `tt-target-idc`
+**no** aparece en ninguna de las dos.
 
 *Implementación:* el motor no espera a esa verificación — lee **las dos** fuentes y las
 fusiona, con las del cookie manager (`WebView::cookies()`, que sí ve las `HttpOnly`)

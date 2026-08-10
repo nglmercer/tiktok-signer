@@ -26,82 +26,63 @@
     return btoa(s);
   };
 
-  // URL final de la petición, ya con X-Bogus / X-Gnarly puestos por el SDK. Es lo que
-  // mantiene abierta la puerta al Plan B (docs/01-architecture.md §D2).
+  var sleep = function (ms) {
+    return new Promise(function (r) { setTimeout(r, ms); });
+  };
+
+  // Firma sin leer la respuesta (Plan B de docs/01-architecture.md §D2).
   //
-  // Se lee del Performance Timeline y **no** parcheando `window.fetch`: envolver `fetch`
-  // desde el script de inicialización rompe la cadena que instala webmssdk encima, y la
-  // llamada acaba resolviendo a `undefined` en vez de a una `Response`. Verificado en F2.
-  var signedUrlFor = function (needle) {
-    try {
-      var entries = performance.getEntriesByType("resource");
-      for (var i = entries.length - 1; i >= 0; i--) {
-        if (entries[i].name.indexOf(needle) !== -1) {
-          return entries[i].name;
-        }
-      }
-    } catch (e) {}
-    return null;
-  };
-
-  // `XMLHttpRequest.prototype` también lo parchea webmssdk (docs/00-research.md §2), y a
-  // diferencia de `fetch` devuelve algo utilizable en esta página: el `fetch` de
-  // `www.tiktok.com/live` resuelve a `undefined` para esta petición. Verificado en F2.
-  var xhrArrayBuffer = function (url) {
-    return new Promise(function (resolve, reject) {
-      var xhr = new XMLHttpRequest();
-      xhr.open("GET", url, true);
-      xhr.responseType = "arraybuffer";
-      xhr.withCredentials = true;
-      xhr.setRequestHeader("Accept", "application/protobuf");
-      xhr.onload = function () {
-        resolve({
-          status: xhr.status,
-          url: xhr.responseURL || url,
-          buffer: xhr.response,
-        });
-      };
-      xhr.onerror = function () {
-        reject(new Error("XHR error status=" + xhr.status));
-      };
-      xhr.send();
-    });
-  };
-
+  // `webcast.tiktok.com/webcast/im/fetch/` **no** devuelve cabeceras CORS, así que desde
+  // la página el cuerpo es ilegible: `fetch` resuelve a `undefined` y un `fetch` pristino
+  // desde un iframe da "Load failed". Verificado en F2 contra un directo real.
+  //
+  // Lo que sí ocurre es que la petición *sale firmada*: webmssdk le añade X-Bogus,
+  // X-Gnarly, X-Dynosaur y msToken. Esa URL aparece en el Performance Timeline aunque la
+  // respuesta no se pueda leer, así que el puente devuelve la URL firmada y es Rust quien
+  // la repite con su propio cliente HTTP, donde no hay CORS que valga.
   window.__ttlSign = async function (req) {
     try {
-      // El `fetch` de la página está parcheado por webmssdk y añade X-Bogus / X-Gnarly.
-      // Si no devuelve una `Response` utilizable, se cae a XHR, que el SDK parchea
-      // igual: lo que no se puede hacer es componer la firma por nuestra cuenta.
-      var res = null;
+      // Solo miramos las entradas nuevas: una firma anterior dejaría su URL caducada aquí.
+      var offset = performance.getEntriesByType("resource").length;
+
+      // `no-cors` evita el error de consola; la petición sale igual y se firma igual.
       try {
-        res = await fetch(req.url, {
+        await fetch(req.url, {
           method: "GET",
           credentials: "include",
-          headers: { Accept: "application/protobuf" },
+          mode: "no-cors",
         });
       } catch (e) {
-        res = null;
+        // Se espera que falle al leer: lo que importa es que haya salido.
       }
 
-      var status, buffer, finalUrl;
-      if (res && typeof res.arrayBuffer === "function") {
-        status = res.status;
-        buffer = await res.arrayBuffer();
-        finalUrl = res.url;
-      } else {
-        var out = await xhrArrayBuffer(req.url);
-        status = out.status;
-        buffer = out.buffer;
-        finalUrl = out.url;
+      var signed = null;
+      for (var i = 0; i < 30 && !signed; i++) {
+        var entries = performance.getEntriesByType("resource");
+        for (var j = entries.length - 1; j >= offset; j--) {
+          if (entries[j].name.indexOf("/webcast/im/fetch/") !== -1) {
+            signed = entries[j].name;
+            break;
+          }
+        }
+        if (!signed) {
+          await sleep(100);
+        }
+      }
+
+      if (!signed) {
+        post({
+          type: "error",
+          request_id: req.request_id,
+          message: "la petición no llegó a salir: sin entrada de im/fetch en el timeline",
+        });
+        return;
       }
 
       post({
-        type: "result",
+        type: "signed",
         request_id: req.request_id,
-        status: status,
-        url: signedUrlFor("/webcast/im/fetch/") || finalUrl,
-        body_b64: b64(buffer),
+        url: signed,
         cookie: document.cookie,
       });
     } catch (e) {
