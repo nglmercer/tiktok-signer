@@ -1,0 +1,12 @@
+[package]
+name = "ttl-sign-core"
+description = "Tipos y construcción de requests para el signer de TikTok LIVE. Sin I/O, sin webview."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rand = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

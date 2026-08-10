@@ -1,0 +1,27 @@
+[package]
+name = "ttl-live-ws"
+description = "Cliente WebSocket de TikTok LIVE sobre un SignedFetch ya firmado."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+ttl-sign-core = { workspace = true }
+
+flate2 = { workspace = true }
+futures-util = "0.3"
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tokio = { workspace = true, features = ["full"] }
+tracing-subscriber = { workspace = true }
+
+[[example]]
+name = "replay"
+path = "examples/replay.rs"

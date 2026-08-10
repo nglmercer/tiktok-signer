@@ -1,0 +1,6 @@
+/target
+Cargo.lock
+
+# Los fixtures de F0 contienen cookies de sesión reales. Solo se versiona NOTES.md.
+/fixtures/*
+!/fixtures/NOTES.md

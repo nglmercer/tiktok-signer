@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ttl-sign-core",
+    "crates/ttl-sign-webview",
+    "crates/ttl-sign-server",
+    "crates/ttl-live-ws",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+repository = "https://github.com/nglmercer/tiktok-signer"
+
+[workspace.dependencies]
+ttl-sign-core = { path = "crates/ttl-sign-core" }
+ttl-sign-webview = { path = "crates/ttl-sign-webview" }
+ttl-live-ws = { path = "crates/ttl-live-ws" }
+
+anyhow = "1"
+base64 = "0.22"
+bytes = "1"
+flate2 = "1"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
