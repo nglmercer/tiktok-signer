@@ -191,10 +191,34 @@ fn render_registry(messages: &[MessageInfo], webcast_messages: &[String]) -> Str
     source.push_str("    SCHEMAS.iter().find(|schema| schema.name == name)\n");
     source.push_str("}\n\n");
     source.push_str("/// Find the schema associated with a TikTok WebSocket method.\n");
+    source.push_str("///\n");
+    source.push_str(
+        "/// `TikTok.Messages` holds most page messages, but the snapshot also declares\n",
+    );
+    source
+        .push_str("/// message types under sibling namespaces such as `TikTok.UnknownObjects`.\n");
+    source.push_str(
+        "/// Searching only `Messages` reported those as unknown even though a descriptor\n",
+    );
+    source.push_str(
+        "/// existed, so `Messages` is preferred and the other namespaces are a fallback.\n",
+    );
     source.push_str("pub fn schema_for_method(method: &str) -> Option<&'static MessageSchema> {\n");
     source.push_str("    let short_name = method.strip_prefix(\"Webcast\")?;\n");
-    source.push_str("    SCHEMAS.iter().find(|schema| {\n");
+    source.push_str("    if let Some(schema) = SCHEMAS.iter().find(|schema| {\n");
     source.push_str("        schema.name.strip_prefix(\"TikTok.Messages.\") == Some(short_name)\n");
+    source.push_str("    }) {\n");
+    source.push_str("        return Some(schema);\n");
+    source.push_str("    }\n");
+    source
+        .push_str("    // Only top-level `TikTok.<namespace>.<Name>` types, never a nested type\n");
+    source.push_str("    // that happens to share the name.\n");
+    source.push_str("    SCHEMAS.iter().find(|schema| {\n");
+    source.push_str("        let mut segments = schema.name.split('.');\n");
+    source.push_str("        segments.next() == Some(\"TikTok\")\n");
+    source.push_str("            && segments.next().is_some()\n");
+    source.push_str("            && segments.next() == Some(short_name)\n");
+    source.push_str("            && segments.next().is_none()\n");
     source.push_str("    })\n");
     source.push_str("}\n");
     source

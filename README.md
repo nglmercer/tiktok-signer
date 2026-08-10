@@ -128,6 +128,40 @@ Subscriber queues are bounded. A consumer that stops reading is disconnected ins
 being served a stream with silently missing frames — a closed channel is diagnosable, a gap
 in a protobuf event stream is not.
 
+### Handling every event
+
+Nothing is ever dropped, but two different labels say "unknown", and they mean different
+things:
+
+| Label | Meaning | Fix |
+|---|---|---|
+| `[other] method=…` | Outside the six-method `LiveEvent` enum | Use the schema layer below |
+| `type=Unknown` | Method not in the bundled proto snapshot | Refresh the snapshot |
+
+`LiveEvent` is a deliberately small, stable subset (chat, gift, like, member, social, room
+user). Everything else lands in `LiveEvent::Unknown` — that is the enum's boundary, not a
+decoding failure.
+
+The schema layer covers all of it. Read any of the snapshot's methods by field name, without
+a hand-written struct per message type:
+
+```rust
+let event = decode_webcast_message(&method, &payload)?;
+if let Some(text) = event.text("content") { … }
+if let Some(user) = event.message("user") {
+    let nickname = user.text("nickname");
+    let id = user.number("id");
+}
+```
+
+Accessors exist on both events and nested messages, so walking `user.badge.name` meets the
+same API at each level. Asking for the wrong shape returns `None` rather than panicking.
+
+When `is_known()` is `false`, TikTok shipped a message type newer than the snapshot. The
+event is still decoded — fields keep their wire numbers and values, only the names are
+missing, which `live-check` shows as `#1=<60 bytes>`. To name them, refresh
+`proto/tiktok_schema.proto`; `build.rs` regenerates the registry from it.
+
 ### Schema coverage
 
 `ttl-sign-core` builds the bundled MIT-licensed TikTokLiveSharp snapshot into 477 generated

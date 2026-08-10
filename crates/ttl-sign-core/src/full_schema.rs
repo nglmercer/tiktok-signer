@@ -77,13 +77,94 @@ impl SchemaMessage {
         self.schema.map_or("Unknown", |schema| schema.name)
     }
 
+    /// Was this method found in the bundled snapshot?
+    ///
+    /// `false` means TikTok shipped a message type newer than the snapshot. The event is
+    /// still decoded: its fields are in [`SchemaMessage::fields`] with wire numbers and
+    /// values, only without names.
+    pub fn is_known(&self) -> bool {
+        self.schema.is_some()
+    }
+
     /// First top-level field whose schema name matches `name`, ignoring ASCII case.
     pub fn field_named(&self, name: &str) -> Option<&SchemaField> {
-        self.fields.iter().find(|field| {
-            field
-                .name
-                .is_some_and(|field_name| field_name.eq_ignore_ascii_case(name))
-        })
+        find_field(&self.fields, name)
+    }
+
+    /// Text value of a named field, if it is text.
+    pub fn text(&self, name: &str) -> Option<&str> {
+        field_text(&self.fields, name)
+    }
+
+    /// Numeric value of a named field, whatever integer width it arrived as.
+    pub fn number(&self, name: &str) -> Option<u64> {
+        field_number(&self.fields, name)
+    }
+
+    /// Boolean value of a named field. Protobuf sends these as varints.
+    pub fn boolean(&self, name: &str) -> Option<bool> {
+        field_number(&self.fields, name).map(|value| value != 0)
+    }
+
+    /// Nested message under a named field, for reaching into `user`, `gift`, and similar.
+    pub fn message(&self, name: &str) -> Option<&SchemaObject> {
+        field_message(&self.fields, name)
+    }
+}
+
+impl SchemaObject {
+    /// First field whose schema name matches `name`, ignoring ASCII case.
+    pub fn field_named(&self, name: &str) -> Option<&SchemaField> {
+        find_field(&self.fields, name)
+    }
+
+    pub fn text(&self, name: &str) -> Option<&str> {
+        field_text(&self.fields, name)
+    }
+
+    pub fn number(&self, name: &str) -> Option<u64> {
+        field_number(&self.fields, name)
+    }
+
+    pub fn boolean(&self, name: &str) -> Option<bool> {
+        field_number(&self.fields, name).map(|value| value != 0)
+    }
+
+    pub fn message(&self, name: &str) -> Option<&SchemaObject> {
+        field_message(&self.fields, name)
+    }
+}
+
+// Field lookup is shared: an event and a nested object are the same shape, and a caller
+// walking `user.badge.name` should not meet a different API at each level.
+
+fn find_field<'a>(fields: &'a [SchemaField], name: &str) -> Option<&'a SchemaField> {
+    fields.iter().find(|field| {
+        field
+            .name
+            .is_some_and(|field_name| field_name.eq_ignore_ascii_case(name))
+    })
+}
+
+fn field_text<'a>(fields: &'a [SchemaField], name: &str) -> Option<&'a str> {
+    match &find_field(fields, name)?.value {
+        SchemaValue::Text(text) => Some(text),
+        _ => None,
+    }
+}
+
+fn field_number(fields: &[SchemaField], name: &str) -> Option<u64> {
+    match find_field(fields, name)?.value {
+        SchemaValue::Varint(value) | SchemaValue::Fixed64(value) => Some(value),
+        SchemaValue::Fixed32(value) => Some(u64::from(value)),
+        _ => None,
+    }
+}
+
+fn field_message<'a>(fields: &'a [SchemaField], name: &str) -> Option<&'a SchemaObject> {
+    match &find_field(fields, name)?.value {
+        SchemaValue::Message(object) => Some(object),
+        _ => None,
     }
 }
 
@@ -251,6 +332,44 @@ mod tests {
         assert!(schema_for_method("WebcastLinkMicFanTicketMethod").is_some());
     }
 
+    /// Message types live in sibling namespaces too. Searching only `TikTok.Messages`
+    /// reported these as unknown while their descriptor sat in the snapshot unused.
+    #[test]
+    fn methods_defined_outside_the_messages_namespace_resolve() {
+        for method in [
+            "WebcastRoomNotifyMessage",
+            "WebcastHourlyRankMessage",
+            "WebcastSystemMessage",
+            "WebcastRoomPinMessage",
+            "WebcastQuestionNewMessage",
+            "WebcastGiftBroadcastMessage",
+        ] {
+            let schema = schema_for_method(method)
+                .unwrap_or_else(|| panic!("{method} has a descriptor in the snapshot"));
+            assert!(
+                schema.name.starts_with("TikTok."),
+                "{method} resolved to {}",
+                schema.name
+            );
+        }
+    }
+
+    /// `TikTok.Messages` still wins when a name exists in more than one namespace.
+    #[test]
+    fn the_messages_namespace_is_preferred() {
+        let chat = schema_for_method("WebcastChatMessage").expect("chat is a page message");
+        assert_eq!(chat.name, "TikTok.Messages.ChatMessage");
+    }
+
+    /// A genuinely newer method has no descriptor, and must stay unknown rather than
+    /// matching some unrelated nested type by name.
+    #[test]
+    fn methods_absent_from_the_snapshot_stay_unknown() {
+        assert!(schema_for_method("WebcastAISummaryMessage").is_none());
+        assert!(schema_for_method("WebcastGiftPanelUpdateMessage").is_none());
+        assert!(schema_for_method("NotEvenAWebcastMethod").is_none());
+    }
+
     #[test]
     fn preserves_unknown_methods_as_raw_schema_fields() {
         let payload = Writer::new()
@@ -269,6 +388,63 @@ mod tests {
                 value: SchemaValue::Varint(UNKNOWN_VALUE),
             }]
         ));
+    }
+
+    /// Any of the snapshot's methods can be read by field name, without a hand-written
+    /// struct per message type.
+    #[test]
+    fn named_accessors_reach_values_and_nested_messages() {
+        const USER_FIELD: u32 = 2;
+        const CONTENT_FIELD: u32 = 3;
+        const USER_ID_FIELD: u32 = 1;
+        const NICKNAME_FIELD: u32 = 3;
+
+        let user = Writer::new()
+            .u64_field(USER_ID_FIELD, 4242)
+            .str_field(NICKNAME_FIELD, "Ada")
+            .clone()
+            .finish();
+        let payload = Writer::new()
+            .bytes_field(USER_FIELD, &user)
+            .str_field(CONTENT_FIELD, "hello")
+            .clone()
+            .finish();
+
+        let event = decode_webcast_message("WebcastChatMessage", &payload).unwrap();
+
+        assert!(event.is_known());
+        assert_eq!(event.text("content"), Some("hello"));
+        // Names are matched case-insensitively: the schema spells it `Content`.
+        assert_eq!(event.text("CONTENT"), Some("hello"));
+
+        let sender = event.message("user").expect("chat carries a user");
+        assert_eq!(sender.text("nickname"), Some("Ada"));
+        assert_eq!(sender.number("id"), Some(4242));
+
+        // Asking for the wrong shape is `None`, never a panic or a coerced value.
+        assert_eq!(event.number("content"), None);
+        assert_eq!(event.text("user"), None);
+        assert_eq!(event.message("content"), None);
+        assert_eq!(event.text("no_such_field"), None);
+    }
+
+    /// An event newer than the snapshot still arrives with its data intact.
+    #[test]
+    fn unknown_methods_keep_their_values_without_names() {
+        let payload = Writer::new()
+            .u64_field(UNKNOWN_FIELD, UNKNOWN_VALUE)
+            .clone()
+            .finish();
+
+        let event = decode_webcast_message("WebcastAISummaryMessage", &payload).unwrap();
+
+        assert!(!event.is_known(), "not in the snapshot");
+        assert_eq!(event.schema_name(), "Unknown");
+        assert_eq!(event.text("anything"), None, "no names to match against");
+        // The payload is not lost, only unnamed.
+        assert_eq!(event.fields.len(), 1);
+        assert_eq!(event.fields[0].number, UNKNOWN_FIELD);
+        assert_eq!(event.fields[0].value, SchemaValue::Varint(UNKNOWN_VALUE));
     }
 
     #[test]

@@ -34,7 +34,9 @@ use ttl_sign_webview::{is_webcast_socket, run, session, EngineConfig, PageWebSoc
 
 const PAGE_TRANSPORT_TIMEOUT: Duration = Duration::from_secs(45);
 const REQUIRED_MESSAGE_FRAMES: usize = 3;
-const MAX_EVENT_TEXT_CHARS: usize = 240;
+const MAX_EVENT_TEXT_CHARS: usize = 80;
+/// Fields shown per schema event; enough to identify it without flooding the log.
+const MAX_SUMMARY_FIELDS: usize = 6;
 /// The gift table is a few megabytes of JSON crossing the IPC bridge.
 const REST_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -489,26 +491,51 @@ fn print_event(message_id: u64, event: &LiveEvent, gifts: &[Gift], streaks: &mut
         } => println!(
             "        [room-user] id={message_id} total={total} popularity={popularity} total_users={total_user}"
         ),
+        // "Unknown" here means only that this method is outside the six-method reduced
+        // enum, not that anything was dropped. The schema line below carries its fields.
         LiveEvent::Unknown {
             method,
             payload_len,
         } => println!(
-            "        [unknown] id={message_id} method={method} payload={payload_len} bytes"
+            "        [other] id={message_id} method={method} payload={payload_len} bytes"
         ),
     }
 }
 
+/// Show that every event carries data, named when the snapshot knows the method and by wire
+/// number when it does not. Nothing is discarded either way.
 fn print_schema_event(message_id: u64, method: &str, event: &SchemaMessage) {
     println!(
         "          [schema] id={message_id} method={method} type={}{}",
         event.schema_name(),
         if event.truncated { " (truncated)" } else { "" }
     );
-    if let Some(field) = event.field_named("content") {
-        if let SchemaValue::Text(content) = &field.value {
-            println!("            content={}", one_line(content));
-        }
+    let summary: Vec<String> = event
+        .fields
+        .iter()
+        .take(MAX_SUMMARY_FIELDS)
+        .map(describe_field)
+        .collect();
+    if !summary.is_empty() {
+        println!("            {}", summary.join(" "));
     }
+}
+
+/// One field as `name=value`, falling back to its wire number when unnamed.
+fn describe_field(field: &ttl_sign_core::SchemaField) -> String {
+    let label = field
+        .name
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("#{}", field.number));
+    let value = match &field.value {
+        SchemaValue::Varint(value) | SchemaValue::Fixed64(value) => value.to_string(),
+        SchemaValue::Fixed32(value) => value.to_string(),
+        SchemaValue::Text(text) => format!("{:?}", one_line(text)),
+        SchemaValue::Bytes(bytes) => format!("<{} bytes>", bytes.len()),
+        SchemaValue::Message(object) => format!("{{{} fields}}", object.fields.len()),
+        SchemaValue::Truncated(bytes) => format!("<truncated {} bytes>", bytes.len()),
+    };
+    format!("{label}={value}")
 }
 
 fn one_line(text: &str) -> String {
