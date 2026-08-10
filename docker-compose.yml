@@ -1,0 +1,19 @@
+services:
+  sign-server:
+    build: .
+    # Bind to loopback on the host and put a reverse proxy in front; the server has no
+    # authentication of its own.
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      TTL_BIND: "0.0.0.0:8080"
+      TTL_MAX_CONCURRENT: "2"
+      RUST_LOG: "ttl_sign_server=info,ttl_sign_webview=info"
+    # Guests need no session. To use an account instead, log in on a workstation and mount
+    # the resulting file read-only:
+    # volumes:
+    #   - ./session:/home/signer/.config/ttl-signer/session:ro
+    restart: unless-stopped
+    # WebKit spawns subprocesses and leaves zombies behind without a real init.
+    init: true
+    shm_size: "512m"

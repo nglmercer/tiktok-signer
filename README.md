@@ -278,9 +278,19 @@ cargo run -p ttl-live-ws --example replay -- fixtures/f0/im_fetch.curl
 TTL_BIND=127.0.0.1:8080 cargo run -p ttl-sign-server
 ```
 
-Linux/WebKitGTK requires X11 or Wayland even when the window is hidden. On systems
-without a GPU, set `WEBKIT_DISABLE_DMABUF_RENDERER=1` and
-`WEBKIT_DISABLE_COMPOSITING_MODE=1`.
+## Deployment
+
+The engine is a real browser: Linux/WebKitGTK requires X11 or Wayland even when the window
+is hidden, so a headless VPS needs `Xvfb` — not a desktop environment. The container does
+this for you:
+
+```sh
+docker compose up -d --build
+curl http://127.0.0.1:8080/healthz
+```
+
+See [07 — Deployment](docs/07-deploy.md) for the bare-VPS setup, systemd units, environment
+variables, and how sessions and captchas work on a host with no screen.
 
 ## Documentation
 
@@ -293,6 +303,7 @@ without a GPU, set `WEBKIT_DISABLE_DMABUF_RENDERER=1` and
 | [04 — WebView bridge specification](docs/04-spec-webview-bridge.md) | JS↔Rust IPC contract |
 | [05 — WebSocket client specification](docs/05-spec-websocket-client.md) | URI construction, headers, heartbeat, and acknowledgements |
 | [06 — Risks and operations](docs/06-risks-and-ops.md) | Failure modes, rate limits, and maintenance |
+| [07 — Deployment](docs/07-deploy.md) | Docker, headless VPS, configuration, and sessions in production |
 
 ## Summary
 

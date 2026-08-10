@@ -20,7 +20,8 @@ unavailable if the problem persists.
 ## Session handling
 
 A session file contains real account cookies and must remain outside the repository with
-mode 0600. The login example polls `sessionid`, and the server can load either
-`TTL_SESSION_ID` or `TTL_SESSION_FILE`. Logs redact cookie values.
+mode 0600. Logs redact cookie values. One WebView instance owns one cookie session; do not
+share it between rooms.
 
-One WebView instance owns one cookie session. Do not share it between rooms.
+Loading a session at startup, and obtaining one for a host with no screen, are covered in
+[07 — Deployment](07-deploy.md).

@@ -1,0 +1,7 @@
+target/
+.git/
+docs/
+fixtures/
+examples/*/node_modules/
+**/node_modules/
+*.md
