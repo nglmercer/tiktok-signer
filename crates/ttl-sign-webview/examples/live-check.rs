@@ -21,13 +21,16 @@
 //!
 //! Requires a display (X11/Wayland). Without one: `xvfb-run -a cargo run …`.
 
+use std::io::Read;
 use std::time::{Duration, Instant};
 
-use ttl_sign_core::proto::PushFrame;
+use flate2::read::GzDecoder;
+use ttl_sign_core::proto::{LiveEvent, PushFrame, WebcastEventBatch};
 use ttl_sign_webview::{run, session, EngineConfig, PageWebSocketEvent, Signer};
 
 const PAGE_TRANSPORT_TIMEOUT: Duration = Duration::from_secs(45);
 const REQUIRED_MESSAGE_FRAMES: usize = 3;
+const MAX_EVENT_TEXT_CHARS: usize = 240;
 
 fn main() -> ! {
     tracing_subscriber::fmt()
@@ -162,6 +165,7 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
     let mut active_url: Option<String> = None;
     let mut binary_frames = 0usize;
     let mut message_frames = 0usize;
+    let mut decoded_events = 0usize;
     let mut decode_errors = 0usize;
 
     loop {
@@ -193,7 +197,36 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
                                 );
                                 if frame.payload_type == "msg" {
                                     message_frames += 1;
-                                    if message_frames >= REQUIRED_MESSAGE_FRAMES {
+                                    match decode_event_batch(&frame) {
+                                        Ok(batch) => {
+                                            println!(
+                                                "        batch: {} events cursor={:?}",
+                                                batch.messages.len(),
+                                                batch.cursor
+                                            );
+                                            for message in batch.messages {
+                                                match message.decode_event() {
+                                                    Ok(event) => {
+                                                        decoded_events += 1;
+                                                        print_event(message.message_id, &event);
+                                                    }
+                                                    Err(error) => {
+                                                        decode_errors += 1;
+                                                        println!(
+                                                            "        [decode-error] method={} id={} error={error}",
+                                                            message.method,
+                                                            message.message_id
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(error) => {
+                                            decode_errors += 1;
+                                            println!("        event batch decode failed: {error}");
+                                        }
+                                    }
+                                    if message_frames >= REQUIRED_MESSAGE_FRAMES && decoded_events > 0 {
                                         break;
                                     }
                                 }
@@ -248,16 +281,108 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
              ({decode_errors} decode failures)"
         ));
     }
+    if decoded_events == 0 {
+        return Err(format!(
+            "received {message_frames} msg frames but decoded no embedded events \
+             ({decode_errors} decode failures)"
+        ));
+    }
 
     println!(
-        "\nOK: relayed {message_frames} message frames from @{user} through TikTok's own \
-         page WebSocket; no Euler or custom signing endpoint was used."
+        "\nOK: decoded {decoded_events} live events from {message_frames} message frames \
+         for @{user}; no Euler or custom signing endpoint was used."
     );
     Ok(())
 }
 
 fn is_live_transport(url: &str) -> bool {
     url.starts_with("wss://") && (url.contains("/webcast/im/") || url.contains("webcast-ws"))
+}
+
+fn decode_event_batch(frame: &PushFrame) -> Result<WebcastEventBatch, String> {
+    let payload =
+        if frame.compress_type() == Some("gzip") || frame.payload.starts_with(&[0x1f, 0x8b]) {
+            let mut decoder = GzDecoder::new(frame.payload.as_slice());
+            let mut decoded = Vec::new();
+            decoder
+                .read_to_end(&mut decoded)
+                .map_err(|error| format!("gzip decompression failed: {error}"))?;
+            decoded
+        } else {
+            frame.payload.clone()
+        };
+    WebcastEventBatch::decode(&payload).map_err(|error| error.to_string())
+}
+
+fn print_event(message_id: u64, event: &LiveEvent) {
+    match event {
+        LiveEvent::Chat { user, content } => println!(
+            "        [chat] id={message_id} @{}: {}",
+            user.label(),
+            one_line(content)
+        ),
+        LiveEvent::Gift {
+            user,
+            gift_id,
+            repeat_count,
+            repeat_end,
+        } => println!(
+            "        [gift] id={message_id} @{} gift_id={gift_id} repeat={repeat_count} end={repeat_end}",
+            user.label()
+        ),
+        LiveEvent::Like { user, count, total } => println!(
+            "        [like] id={message_id} @{} count={count} total={total}",
+            user.label()
+        ),
+        LiveEvent::Member {
+            user,
+            member_count,
+            action,
+        } => println!(
+            "        [member] id={message_id} @{} viewers={member_count} action={action}",
+            user.label()
+        ),
+        LiveEvent::Social {
+            user,
+            action,
+            follow_count,
+            share_count,
+        } => println!(
+            "        [social] id={message_id} @{} action={action} follows={follow_count} shares={share_count}",
+            user.label()
+        ),
+        LiveEvent::RoomUser {
+            total,
+            popularity,
+            total_user,
+        } => println!(
+            "        [room-user] id={message_id} total={total} popularity={popularity} total_users={total_user}"
+        ),
+        LiveEvent::Unknown {
+            method,
+            payload_len,
+        } => println!(
+            "        [unknown] id={message_id} method={method} payload={payload_len} bytes"
+        ),
+    }
+}
+
+fn one_line(text: &str) -> String {
+    let mut output: String = text
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .take(MAX_EVENT_TEXT_CHARS)
+        .collect();
+    if text.chars().count() > MAX_EVENT_TEXT_CHARS {
+        output.push('…');
+    }
+    output
 }
 
 /// The page takes time to render channels, so poll the DOM instead of reading it once.

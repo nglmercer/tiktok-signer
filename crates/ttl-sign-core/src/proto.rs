@@ -487,6 +487,327 @@ impl PushFrame {
     }
 }
 
+// --- Webcast event batch -----------------------------------------------------------
+
+mod base_message_field {
+    pub const METHOD: u32 = 1;
+    pub const PAYLOAD: u32 = 2;
+    pub const MESSAGE_ID: u32 = 3;
+    pub const MESSAGE_TYPE: u32 = 4;
+    pub const OFFSET: u32 = 5;
+    pub const IS_HISTORY: u32 = 6;
+}
+
+mod user_field {
+    pub const ID: u32 = 1;
+    pub const NICKNAME: u32 = 3;
+    pub const DISPLAY_ID: u32 = 38;
+    pub const SEC_UID: u32 = 46;
+}
+
+/// One embedded event from a `msg` WebSocket frame.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WebcastMessage {
+    pub method: String,
+    pub payload: Vec<u8>,
+    pub message_id: u64,
+    pub message_type: u64,
+    pub offset: u64,
+    pub is_history: bool,
+}
+
+impl WebcastMessage {
+    pub fn decode(buf: &[u8]) -> Result<Self, ProtoError> {
+        let mut message = Self::default();
+        let mut reader = Reader::new(buf);
+        while let Some(field) = reader.next_field() {
+            let (number, wire) = field?;
+            match number {
+                base_message_field::METHOD => {
+                    message.method = wire.as_str().unwrap_or_default().to_owned()
+                }
+                base_message_field::PAYLOAD => {
+                    message.payload = wire.as_bytes().unwrap_or_default().to_vec()
+                }
+                base_message_field::MESSAGE_ID => {
+                    message.message_id = wire.as_u64().unwrap_or_default()
+                }
+                base_message_field::MESSAGE_TYPE => {
+                    message.message_type = wire.as_u64().unwrap_or_default()
+                }
+                base_message_field::OFFSET => message.offset = wire.as_u64().unwrap_or_default(),
+                base_message_field::IS_HISTORY => {
+                    message.is_history = wire.as_u64().unwrap_or_default() != 0
+                }
+                _ => {}
+            }
+        }
+        Ok(message)
+    }
+
+    /// Decode the method-specific payload into the stable event subset used by listeners.
+    pub fn decode_event(&self) -> Result<LiveEvent, ProtoError> {
+        decode_live_event(&self.method, &self.payload)
+    }
+}
+
+/// Event batch carried by a `PushFrame` whose `payload_type` is `msg`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WebcastEventBatch {
+    pub messages: Vec<WebcastMessage>,
+    pub cursor: String,
+    pub internal_ext: String,
+    pub need_ack: bool,
+}
+
+impl WebcastEventBatch {
+    pub fn decode(buf: &[u8]) -> Result<Self, ProtoError> {
+        let mut batch = Self::default();
+        let mut reader = Reader::new(buf);
+        while let Some(field) = reader.next_field() {
+            let (number, wire) = field?;
+            match number {
+                1 => {
+                    if let Some(bytes) = wire.as_bytes() {
+                        batch.messages.push(WebcastMessage::decode(bytes)?);
+                    }
+                }
+                fetch_field::CURSOR => batch.cursor = wire.as_str().unwrap_or_default().to_owned(),
+                fetch_field::INTERNAL_EXT => {
+                    batch.internal_ext = wire.as_str().unwrap_or_default().to_owned()
+                }
+                fetch_field::NEED_ACK => batch.need_ack = wire.as_u64().unwrap_or_default() != 0,
+                _ => {}
+            }
+        }
+        Ok(batch)
+    }
+}
+
+/// Minimal user identity shared by public-area events.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EventUser {
+    pub id: u64,
+    pub nickname: String,
+    pub display_id: String,
+    pub sec_uid: String,
+}
+
+impl EventUser {
+    fn decode(buf: &[u8]) -> Result<Self, ProtoError> {
+        let mut user = Self::default();
+        let mut reader = Reader::new(buf);
+        while let Some(field) = reader.next_field() {
+            let (number, wire) = field?;
+            match number {
+                user_field::ID => user.id = wire.as_u64().unwrap_or_default(),
+                user_field::NICKNAME => {
+                    user.nickname = wire.as_str().unwrap_or_default().to_owned()
+                }
+                user_field::DISPLAY_ID => {
+                    user.display_id = wire.as_str().unwrap_or_default().to_owned()
+                }
+                user_field::SEC_UID => user.sec_uid = wire.as_str().unwrap_or_default().to_owned(),
+                _ => {}
+            }
+        }
+        Ok(user)
+    }
+
+    pub fn label(&self) -> &str {
+        if !self.display_id.is_empty() {
+            &self.display_id
+        } else if !self.nickname.is_empty() {
+            &self.nickname
+        } else {
+            "unknown"
+        }
+    }
+}
+
+/// Stable, listener-facing subset of TikTok LIVE events.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LiveEvent {
+    Chat {
+        user: EventUser,
+        content: String,
+    },
+    Gift {
+        user: EventUser,
+        gift_id: u64,
+        repeat_count: u64,
+        repeat_end: bool,
+    },
+    Like {
+        user: EventUser,
+        count: u64,
+        total: u64,
+    },
+    Member {
+        user: EventUser,
+        member_count: u64,
+        action: u64,
+    },
+    Social {
+        user: EventUser,
+        action: u64,
+        follow_count: u64,
+        share_count: u64,
+    },
+    RoomUser {
+        total: u64,
+        popularity: u64,
+        total_user: u64,
+    },
+    Unknown {
+        method: String,
+        payload_len: usize,
+    },
+}
+
+fn decode_live_event(method: &str, payload: &[u8]) -> Result<LiveEvent, ProtoError> {
+    match method {
+        "WebcastChatMessage" => decode_chat(payload),
+        "WebcastGiftMessage" => decode_gift(payload),
+        "WebcastLikeMessage" => decode_like(payload),
+        "WebcastMemberMessage" => decode_member(payload),
+        "WebcastSocialMessage" => decode_social(payload),
+        "WebcastRoomUserSeqMessage" => decode_room_user(payload),
+        _ => Ok(LiveEvent::Unknown {
+            method: method.to_owned(),
+            payload_len: payload.len(),
+        }),
+    }
+}
+
+fn nested_user(wire: &WireValue<'_>) -> Result<EventUser, ProtoError> {
+    wire.as_bytes()
+        .map(EventUser::decode)
+        .unwrap_or_else(|| Ok(EventUser::default()))
+}
+
+fn decode_chat(payload: &[u8]) -> Result<LiveEvent, ProtoError> {
+    let mut user = EventUser::default();
+    let mut content = String::new();
+    let mut reader = Reader::new(payload);
+    while let Some(field) = reader.next_field() {
+        let (number, wire) = field?;
+        match number {
+            2 => user = nested_user(&wire)?,
+            3 => content = wire.as_str().unwrap_or_default().to_owned(),
+            _ => {}
+        }
+    }
+    Ok(LiveEvent::Chat { user, content })
+}
+
+fn decode_gift(payload: &[u8]) -> Result<LiveEvent, ProtoError> {
+    let mut user = EventUser::default();
+    let mut gift_id = 0;
+    let mut repeat_count = 0;
+    let mut repeat_end = false;
+    let mut reader = Reader::new(payload);
+    while let Some(field) = reader.next_field() {
+        let (number, wire) = field?;
+        match number {
+            2 => gift_id = wire.as_u64().unwrap_or_default(),
+            5 => repeat_count = wire.as_u64().unwrap_or_default(),
+            7 => user = nested_user(&wire)?,
+            9 => repeat_end = wire.as_u64().unwrap_or_default() != 0,
+            _ => {}
+        }
+    }
+    Ok(LiveEvent::Gift {
+        user,
+        gift_id,
+        repeat_count,
+        repeat_end,
+    })
+}
+
+fn decode_like(payload: &[u8]) -> Result<LiveEvent, ProtoError> {
+    let mut user = EventUser::default();
+    let mut count = 0;
+    let mut total = 0;
+    let mut reader = Reader::new(payload);
+    while let Some(field) = reader.next_field() {
+        let (number, wire) = field?;
+        match number {
+            2 => count = wire.as_u64().unwrap_or_default(),
+            3 => total = wire.as_u64().unwrap_or_default(),
+            5 => user = nested_user(&wire)?,
+            _ => {}
+        }
+    }
+    Ok(LiveEvent::Like { user, count, total })
+}
+
+fn decode_member(payload: &[u8]) -> Result<LiveEvent, ProtoError> {
+    let mut user = EventUser::default();
+    let mut member_count = 0;
+    let mut action = 0;
+    let mut reader = Reader::new(payload);
+    while let Some(field) = reader.next_field() {
+        let (number, wire) = field?;
+        match number {
+            2 => user = nested_user(&wire)?,
+            3 => member_count = wire.as_u64().unwrap_or_default(),
+            10 => action = wire.as_u64().unwrap_or_default(),
+            _ => {}
+        }
+    }
+    Ok(LiveEvent::Member {
+        user,
+        member_count,
+        action,
+    })
+}
+
+fn decode_social(payload: &[u8]) -> Result<LiveEvent, ProtoError> {
+    let mut user = EventUser::default();
+    let mut action = 0;
+    let mut follow_count = 0;
+    let mut share_count = 0;
+    let mut reader = Reader::new(payload);
+    while let Some(field) = reader.next_field() {
+        let (number, wire) = field?;
+        match number {
+            2 => user = nested_user(&wire)?,
+            4 => action = wire.as_u64().unwrap_or_default(),
+            6 => follow_count = wire.as_u64().unwrap_or_default(),
+            8 => share_count = wire.as_u64().unwrap_or_default(),
+            _ => {}
+        }
+    }
+    Ok(LiveEvent::Social {
+        user,
+        action,
+        follow_count,
+        share_count,
+    })
+}
+
+fn decode_room_user(payload: &[u8]) -> Result<LiveEvent, ProtoError> {
+    let mut total = 0;
+    let mut popularity = 0;
+    let mut total_user = 0;
+    let mut reader = Reader::new(payload);
+    while let Some(field) = reader.next_field() {
+        let (number, wire) = field?;
+        match number {
+            3 => total = wire.as_u64().unwrap_or_default(),
+            6 => popularity = wire.as_u64().unwrap_or_default(),
+            7 => total_user = wire.as_u64().unwrap_or_default(),
+            _ => {}
+        }
+    }
+    Ok(LiveEvent::RoomUser {
+        total,
+        popularity,
+        total_user,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -618,5 +939,64 @@ mod tests {
         assert_eq!(fields[2].as_ref().unwrap().1.as_str(), Some("audience"));
         assert_eq!(fields[3].as_ref().unwrap().0, 9);
         assert_eq!(fields[3].as_ref().unwrap().1.as_str(), Some("0"));
+    }
+
+    #[test]
+    fn decodes_chat_from_an_event_batch() {
+        let user = Writer::new()
+            .u64_field(user_field::ID, 42)
+            .str_field(user_field::NICKNAME, "Ada")
+            .str_field(user_field::DISPLAY_ID, "ada_live")
+            .clone()
+            .finish();
+        let chat = Writer::new()
+            .bytes_field(2, &user)
+            .str_field(3, "hello")
+            .clone()
+            .finish();
+        let message = Writer::new()
+            .str_field(base_message_field::METHOD, "WebcastChatMessage")
+            .bytes_field(base_message_field::PAYLOAD, &chat)
+            .u64_field(base_message_field::MESSAGE_ID, 99)
+            .clone()
+            .finish();
+        let batch_bytes = Writer::new()
+            .bytes_field(1, &message)
+            .str_field(fetch_field::CURSOR, "cursor")
+            .clone()
+            .finish();
+
+        let batch = WebcastEventBatch::decode(&batch_bytes).unwrap();
+        assert_eq!(batch.cursor, "cursor");
+        assert_eq!(batch.messages.len(), 1);
+        assert_eq!(batch.messages[0].message_id, 99);
+        assert_eq!(
+            batch.messages[0].decode_event().unwrap(),
+            LiveEvent::Chat {
+                user: EventUser {
+                    id: 42,
+                    nickname: "Ada".into(),
+                    display_id: "ada_live".into(),
+                    sec_uid: String::new(),
+                },
+                content: "hello".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn preserves_unknown_event_methods() {
+        let message = WebcastMessage {
+            method: "WebcastFutureMessage".into(),
+            payload: vec![1, 2, 3],
+            ..Default::default()
+        };
+        assert_eq!(
+            message.decode_event().unwrap(),
+            LiveEvent::Unknown {
+                method: "WebcastFutureMessage".into(),
+                payload_len: 3,
+            }
+        );
     }
 }

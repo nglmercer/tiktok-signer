@@ -23,6 +23,7 @@ wry = "0.56"
 [dev-dependencies]
 ttl-live-ws = { workspace = true }
 futures-util = "0.3"
+flate2 = { workspace = true }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 tracing-subscriber = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
