@@ -132,6 +132,13 @@ pub struct FetchParams {
     pub internal_ext: String,
     /// Email de contacto que pide la spec de Euler. Vacío = no se emite.
     pub contact_us: String,
+    /// `sup_ws_ds_opt`: le dice a TikTok qué tipo de WebSocket queremos.
+    ///
+    /// Con `1` la respuesta trae un `push_server` de tipo
+    /// `ws_proxy/ws_reuse_supplement/`; el patrón que documenta
+    /// `docs/00-research.md` §1 es `webcast<N>-ws-web-<idc>`. Configurable para poder
+    /// comparar los dos contra una sala real.
+    pub sup_ws_ds_opt: u8,
 }
 
 impl FetchParams {
@@ -142,6 +149,7 @@ impl FetchParams {
             cursor: String::new(),
             internal_ext: String::new(),
             contact_us: String::new(),
+            sup_ws_ds_opt: 1,
         }
     }
 
@@ -180,7 +188,7 @@ impl FetchParams {
             .set("room_id", &self.room_id)
             .set("screen_height", s.height.to_string())
             .set("screen_width", s.width.to_string())
-            .set("sup_ws_ds_opt", "1")
+            .set("sup_ws_ds_opt", self.sup_ws_ds_opt.to_string())
             .set("tz_name", &l.tz_name)
             .set("version_code", "270000")
             .set("webcast_language", &l.language)
@@ -209,6 +217,15 @@ pub struct WsParams {
     /// `gzip`, o vacío para pedir sin compresión.
     pub compress: String,
     pub last_rtt: u32,
+    /// Cursor de la respuesta de `/webcast/im/fetch/`.
+    ///
+    /// Va en la query del WebSocket, no en los `route_params`: comprobado contra una
+    /// respuesta real, donde `route_params` solo trae `wrss` e `imprp`. Sin cursor el
+    /// handshake se acepta igual y luego **no llega ni un frame**, que es el fallo más
+    /// desconcertante de todo el flujo.
+    pub cursor: String,
+    /// `internal_ext` de la misma respuesta. Mismo razonamiento.
+    pub internal_ext: String,
 }
 
 impl WsParams {
@@ -217,6 +234,8 @@ impl WsParams {
             room_id: room_id.into(),
             compress: "gzip".into(),
             last_rtt: random_last_rtt(),
+            cursor: String::new(),
+            internal_ext: String::new(),
         }
     }
 
@@ -238,9 +257,11 @@ impl WsParams {
             .set("client_enter", "1")
             .set("compress", &self.compress)
             .set("cookie_enabled", "true")
+            .set("cursor", &self.cursor)
             .set("device_platform", "web")
             .set("did_rule", "3")
             .set("heartbeat_duration", "10000")
+            .set("internal_ext", &self.internal_ext)
             .set("history_comment_count", "6")
             .set("identity", "audience")
             .set("last_rtt", self.last_rtt.to_string())
@@ -357,6 +378,18 @@ mod tests {
             assert!(id.chars().all(|c| c.is_ascii_digit()));
             assert_ne!(id.as_bytes()[0], b'0', "no debe empezar por cero: {id}");
         }
+    }
+
+    /// `cursor` e `internal_ext` viajan en la query del WS, no en los `route_params`.
+    #[test]
+    fn ws_uri_carries_cursor_and_internal_ext() {
+        let mut params = WsParams::new("42");
+        params.cursor = "1786_7672_1_1".into();
+        params.internal_ext = "internal_src:dim|wss_info:0-1".into();
+        let uri = params.build_uri("wss://x/ws/", &[("wrss".into(), "abc".into())], &preset());
+        assert!(uri.contains("cursor=1786_7672_1_1"), "{uri}");
+        assert!(uri.contains("internal_ext=internal_src"), "{uri}");
+        assert!(uri.contains("wrss=abc"), "{uri}");
     }
 
     #[test]

@@ -26,6 +26,25 @@
     return btoa(s);
   };
 
+  // URLs de WebSocket que abre la propia página. Envolver el constructor es seguro:
+  // webmssdk parchea `fetch` y `XMLHttpRequest`, no esto. Sirve para comparar la URI que
+  // construimos nosotros con la que usa el reproductor real.
+  window.__ttlWsUrls = [];
+  var NativeWebSocket = window.WebSocket;
+  var WrappedWebSocket = function (url, protocols) {
+    try {
+      window.__ttlWsUrls.push(String(url));
+    } catch (e) {}
+    return protocols === undefined
+      ? new NativeWebSocket(url)
+      : new NativeWebSocket(url, protocols);
+  };
+  WrappedWebSocket.prototype = NativeWebSocket.prototype;
+  ["CONNECTING", "OPEN", "CLOSING", "CLOSED"].forEach(function (k) {
+    WrappedWebSocket[k] = NativeWebSocket[k];
+  });
+  window.WebSocket = WrappedWebSocket;
+
   var sleep = function (ms) {
     return new Promise(function (r) { setTimeout(r, ms); });
   };

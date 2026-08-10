@@ -22,6 +22,8 @@ wry = "0.56"
 
 [dev-dependencies]
 ttl-live-ws = { workspace = true }
+futures-util = "0.3"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 tracing-subscriber = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 
@@ -40,3 +42,11 @@ path = "examples/endpoint-probe.rs"
 [[example]]
 name = "login"
 path = "examples/login.rs"
+
+[[example]]
+name = "fetch-dump"
+path = "examples/fetch-dump.rs"
+
+[[example]]
+name = "ws-probe"
+path = "examples/ws-probe.rs"

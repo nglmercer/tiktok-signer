@@ -11,7 +11,7 @@
 use std::time::Duration;
 
 use ttl_sign_core::room::live_page_url;
-use ttl_sign_webview::{run, EngineConfig, Signer};
+use ttl_sign_webview::{run, session, EngineConfig, Signer};
 
 fn main() -> ! {
     tracing_subscriber::fmt()
@@ -29,6 +29,10 @@ fn main() -> ! {
     let config = EngineConfig {
         landing_url: live_page_url(&user),
         sign_timeout: Duration::from_secs(30),
+        // Sin sesión el reproductor no arranca del todo, y entonces no hay nada que ver.
+        session: session::configured_path()
+            .and_then(|p| session::load(&p).ok().flatten())
+            .unwrap_or_default(),
         ..EngineConfig::default()
     };
 

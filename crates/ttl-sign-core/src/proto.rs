@@ -265,6 +265,26 @@ fn decode_map_entry(buf: &[u8]) -> Option<(String, String)> {
     key.map(|k| (k, value))
 }
 
+/// Estructura de un mensaje sin interpretarlo: `(campo, tipo, tamaño)`.
+///
+/// Es la herramienta para confirmar los números de campo contra una respuesta real, que
+/// es exactamente lo que hay que hacer antes de fiarse de este módulo.
+pub fn describe(buf: &[u8]) -> Result<Vec<(u32, &'static str, usize)>, ProtoError> {
+    let mut out = Vec::new();
+    let mut reader = Reader::new(buf);
+    while let Some(field) = reader.next_field() {
+        let (number, wire) = field?;
+        let (kind, size) = match wire {
+            WireValue::Varint(v) => ("varint", v.to_string().len()),
+            WireValue::Fixed64(_) => ("fixed64", 8),
+            WireValue::Fixed32(_) => ("fixed32", 4),
+            WireValue::Bytes(b) => ("bytes", b.len()),
+        };
+        out.push((number, kind, size));
+    }
+    Ok(out)
+}
+
 // --- ProtoMessageFetchResult ------------------------------------------------------
 
 /// Lo que hace falta de `ProtoMessageFetchResult` para abrir el WebSocket.

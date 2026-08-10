@@ -140,6 +140,8 @@ impl LiveConnection {
 
         let mut params = WsParams::new(room_id);
         params.compress = config.compress.clone();
+        params.cursor = result.cursor.clone();
+        params.internal_ext = result.internal_ext.clone();
         let uri = params.build_uri(&result.push_server, &result.route_params, preset);
 
         let mut request = uri
