@@ -24,6 +24,7 @@
   const MAX_CAPTURES = 40;
   const MAX_CAPTURE_BODY_BYTES = 400000;
   const MAX_CAPTURE_TEXT_BYTES = 400;
+  const MAX_RELAY_FRAME_BYTES = 8 * 1024 * 1024;
   const SIGNATURE_TIMELINE_ATTEMPTS = 30;
   const SIGNATURE_TIMELINE_DELAY_MS = 100;
   const SDK_READY_TIMEOUT_MS = 30000;
@@ -87,6 +88,68 @@
   // tries to connect.
   window.__ttlBlockWs = window.__ttlBlockWs === true;
   var NativeWebSocket = window.WebSocket;
+  var relayPageWebSocket = function (socket, url) {
+    var socketUrl = String(url);
+    var relayQueue = Promise.resolve();
+    var postBinary = function (buffer) {
+      if (!buffer || typeof buffer.byteLength !== "number") return;
+      if (buffer.byteLength > MAX_RELAY_FRAME_BYTES) {
+        post({
+          type: "ws_error",
+          url: socketUrl,
+          message: "page WebSocket frame exceeds relay limit",
+        });
+        return;
+      }
+      post({ type: "ws_frame", url: socketUrl, data_b64: b64(buffer) });
+    };
+
+    socket.addEventListener("open", function () {
+      post({ type: "ws_open", url: socketUrl });
+    });
+    socket.addEventListener("message", function (event) {
+      var data = event.data;
+      // Serialize asynchronous Blob conversions so protobuf frames retain wire order.
+      relayQueue = relayQueue
+        .then(function () {
+          if (typeof data === "string") {
+            post({ type: "ws_frame", url: socketUrl, text: data });
+            return;
+          }
+          if (data instanceof ArrayBuffer) {
+            postBinary(data);
+            return;
+          }
+          if (ArrayBuffer.isView(data)) {
+            postBinary(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
+            return;
+          }
+          if (data && typeof data.arrayBuffer === "function") {
+            return data.arrayBuffer().then(postBinary);
+          }
+          post({
+            type: "ws_error",
+            url: socketUrl,
+            message: "unsupported page WebSocket frame type",
+          });
+        })
+        .catch(function (error) {
+          post({ type: "ws_error", url: socketUrl, message: String(error) });
+        });
+    });
+    socket.addEventListener("close", function (event) {
+      post({
+        type: "ws_close",
+        url: socketUrl,
+        code: event.code || 0,
+        reason: event.reason || "",
+      });
+    });
+    socket.addEventListener("error", function () {
+      post({ type: "ws_error", url: socketUrl, message: "page WebSocket error" });
+    });
+    return socket;
+  };
   var blockedEvent = function (type, options) {
     var event = null;
     try {
@@ -208,9 +271,10 @@
       // the deliberately invalid socket previously used here.
       return new BlockedWebSocket(url, protocols);
     }
-    return protocols === undefined
+    var socket = protocols === undefined
       ? new NativeWebSocket(url)
       : new NativeWebSocket(url, protocols);
+    return relayPageWebSocket(socket, url);
   };
   WrappedWebSocket.prototype = NativeWebSocket.prototype;
   ["CONNECTING", "OPEN", "CLOSING", "CLOSED"].forEach(function (k) {

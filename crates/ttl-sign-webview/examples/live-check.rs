@@ -5,8 +5,8 @@
 //! ```text
 //! 1. discover who is live (rendered /live DOM, unsigned)
 //! 2. unique_id → room_id + status (unsigned JSON lookup)
-//! 3. /webcast/im/fetch/ ← the only signed endpoint
-//! 4. open the WebSocket and receive frames
+//! 3. navigate to the live page and let TikTok open its own WebSocket
+//! 4. relay and decode the page-owned WebSocket frames over IPC
 //! ```
 //!
 //! This is the F2 acceptance criterion (and F4 if frames arrive).
@@ -23,9 +23,11 @@
 
 use std::time::{Duration, Instant};
 
-use ttl_live_ws::{ConnectConfig, LiveConnection};
-use ttl_sign_core::{FetchResult, SignOutcome, WsParams};
-use ttl_sign_webview::{run, session, EngineConfig, Signer};
+use ttl_sign_core::proto::PushFrame;
+use ttl_sign_webview::{run, session, EngineConfig, PageWebSocketEvent, Signer};
+
+const PAGE_TRANSPORT_TIMEOUT: Duration = Duration::from_secs(45);
+const REQUIRED_MESSAGE_FRAMES: usize = 3;
 
 fn main() -> ! {
     tracing_subscriber::fmt()
@@ -39,20 +41,18 @@ fn main() -> ! {
     let requested_user = std::env::args().nth(1);
     // The flow currently requires authentication; see step 3.
     let (config, session_source) = configure_session();
-    let authenticated = config.is_authenticated();
     println!("session: {session_source}");
 
     run(config, move |signer| {
         let rt = tokio::runtime::Runtime::new().expect("Tokio runtime");
-        let code = match rt.block_on(check(signer.clone(), requested_user, authenticated)) {
+        let code = match rt.block_on(check(signer.clone(), requested_user)) {
             Ok(()) => 0,
             Err(e) => {
                 eprintln!("\nFAILED: {e}");
                 1
             }
         };
-        signer.shutdown();
-        std::process::exit(code);
+        signer.shutdown_with_code(code);
     })
 }
 
@@ -61,7 +61,7 @@ fn configure_session() -> (EngineConfig, String) {
     if let Ok(id) = std::env::var("TTL_SESSION_ID") {
         if !id.is_empty() {
             return (
-                EngineConfig::default().with_session_id(id),
+                page_transport_config(EngineConfig::default().with_session_id(id)),
                 "authenticated (TTL_SESSION_ID)".into(),
             );
         }
@@ -71,26 +71,27 @@ fn configure_session() -> (EngineConfig, String) {
             if session::is_logged_in(&jar) {
                 let source = format!("authenticated ({})", path.display());
                 return (
-                    EngineConfig {
+                    page_transport_config(EngineConfig {
                         session: jar,
                         ..EngineConfig::default()
-                    },
+                    }),
                     source,
                 );
             }
         }
     }
     (
-        EngineConfig::default(),
+        page_transport_config(EngineConfig::default()),
         "anonymous — log in with: cargo run -p ttl-sign-webview --example login".into(),
     )
 }
 
-async fn check(
-    signer: Signer,
-    requested_user: Option<String>,
-    authenticated: bool,
-) -> Result<(), String> {
+fn page_transport_config(mut config: EngineConfig) -> EngineConfig {
+    config.block_page_websockets = false;
+    config
+}
+
+async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), String> {
     // --- 1. Who is live? -------------------------------------------------------------
     let user = match requested_user {
         Some(user) => {
@@ -137,9 +138,16 @@ async fn check(
         ));
     }
 
-    // --- 3. Signing ------------------------------------------------------------------
-    // We must first be *on* the live page: this is where the real player sends the request;
-    // from the /live landing page it does not leave.
+    // --- 3. Page-owned WebSocket -----------------------------------------------------
+    //
+    // This is intentionally independent of /webcast/im/fetch/. TikTok's own page signs
+    // and opens the socket, enters the room, and sends heartbeats. The initialization
+    // bridge mirrors transport frames to Rust without changing the page connection.
+    let mut page_events = signer
+        .subscribe_page_websocket()
+        .await
+        .map_err(|e| format!("could not subscribe to page WebSocket: {e}"))?;
+
     let room_page = ttl_sign_core::room::live_page_url(&user);
     println!("\n[3/4] navigating to {room_page} …");
     signer
@@ -147,106 +155,109 @@ async fn check(
         .await
         .map_err(|e| format!("could not load live page: {e}"))?;
 
-    println!("      signing /webcast/im/fetch/ …");
-    let signed_at = Instant::now();
-    let signed = match signer.fetch(&lookup.room_id).await {
-        SignOutcome::Ok(signed) => signed,
-        SignOutcome::Rejected(reason) if !authenticated => {
-            return Err(format!(
-                "TikTok rejected the signature: {reason}.\n\n\
-                 The session is anonymous, which is currently insufficient: `/webcast/room/enter/` returns \
-                 \"User doesn\'t login\" and `/webcast/im/fetch/` returns 200 with an empty body, \
-                 which is the same silent rejection. The same signing path returns \
-                 `room/info` and `room/check_alive`, so neither signing nor replay is the problem. Test with:\n\
-                 \n    cargo run -p ttl-sign-webview --example endpoint-probe -- <user>\n\
-                 \nTo test authenticated, export your account's `sessionid` cookie:\n\
-                 \n    TTL_SESSION_ID=<sessionid> cargo run -p ttl-sign-webview --example live-check\n"
-            ))
-        }
-        SignOutcome::Rejected(reason) => {
-            return Err(format!(
-                "TikTok rejected the signature despite authentication: {reason}.\n\n\
-                 If this worked recently and no longer does, rate limiting is likely: signing \
-                 interacts with anti-bot controls, and repeated signatures from one IP/session \
-                 can trigger them. Wait before trying again; looping makes it worse.\n\n\
-                 If it never worked, inspect UA↔params consistency and run: \
-                 cargo run -p ttl-sign-webview --example endpoint-probe -- <user>"
-            ))
-        }
-        SignOutcome::Transport(e) => return Err(format!("transport failure: {e}")),
-    };
-    println!(
-        "      {} bytes in {:?}, {} cookies",
-        signed.protobuf.len(),
-        signed_at.elapsed(),
-        signed.cookies.len()
-    );
-    println!("      cookies: {}", signed.cookies); // redacted
-
-    let result = FetchResult::decode(&signed.protobuf)
-        .map_err(|e| format!("could not decode protobuf: {e}. Confirm field numbers in ttl-sign-core/src/proto.rs against the F0 fixture"))?;
-    println!("      push_server={}", result.push_server);
-    println!("      route_params={} entries", result.route_params.len());
-
-    // --- 4. WebSocket ----------------------------------------------------------------
-    // The URI is built here and signed in the page: the WebSocket has its own signature.
-    println!("\n[4/4] signing and connecting WebSocket…");
-    let config = ConnectConfig::default();
-    let mut params = WsParams::new(&lookup.room_id);
-    params.compress = config.compress.clone();
-    params.cursor = result.cursor.clone();
-    params.internal_ext = result.internal_ext.clone();
-    let preset = signer.preset();
-    let uri = params.build_uri(&result.push_server, &result.route_params, &preset);
-
-    let uri = signer
-        .sign_ws_uri(&uri)
-        .await
-        .map_err(|e| format!("could not sign WebSocket URI: {e}"))?;
-    println!(
-        "      signed: {}",
-        uri.split('?').next().unwrap_or_default()
-    );
-
-    let mut connection = LiveConnection::open_uri(
-        &uri,
-        &signed.cookies,
-        &signed.user_agent,
-        &result.internal_ext,
-        &config,
-    )
-    .await
-    .map_err(|e| format!("could not open WebSocket: {e}"))?;
-
-    println!("      connected {:?} after signing", signed_at.elapsed());
-
-    let deadline = tokio::time::sleep(Duration::from_secs(30));
+    println!("[4/4] waiting for TikTok's page WebSocket and relayed frames…");
+    let deadline = tokio::time::sleep(PAGE_TRANSPORT_TIMEOUT);
     tokio::pin!(deadline);
-    let mut frames = 0usize;
+
+    let mut active_url: Option<String> = None;
+    let mut binary_frames = 0usize;
+    let mut message_frames = 0usize;
+    let mut decode_errors = 0usize;
 
     loop {
         tokio::select! {
             _ = &mut deadline => break,
-            msg = connection.next_message() => match msg {
-                Some(Ok(m)) => {
-                    frames += 1;
-                    println!("      frame msg #{frames}: log_id={} {} bytes", m.log_id, m.payload.len());
-                    if frames >= 3 {
-                        break;
+            event = page_events.recv() => {
+                let Some(event) = event else {
+                    return Err("page WebSocket relay closed before the WebView".into());
+                };
+                match event {
+                    PageWebSocketEvent::Open { url } if is_live_transport(&url) => {
+                        println!(
+                            "      page socket opened: {}",
+                            url.split('?').next().unwrap_or(&url)
+                        );
+                        active_url = Some(url);
                     }
+                    PageWebSocketEvent::Binary { url, data }
+                        if active_url.as_deref() == Some(url.as_str()) =>
+                    {
+                        binary_frames += 1;
+                        match PushFrame::decode(&data) {
+                            Ok(frame) => {
+                                println!(
+                                    "      page frame #{binary_frames}: payload_type={:?} log_id={} {} bytes",
+                                    frame.payload_type,
+                                    frame.log_id,
+                                    frame.payload.len()
+                                );
+                                if frame.payload_type == "msg" {
+                                    message_frames += 1;
+                                    if message_frames >= REQUIRED_MESSAGE_FRAMES {
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                decode_errors += 1;
+                                println!(
+                                    "      page frame #{binary_frames}: {} raw bytes (decode failed: {error})",
+                                    data.len()
+                                );
+                            }
+                        }
+                    }
+                    PageWebSocketEvent::Text { url, text }
+                        if active_url.as_deref() == Some(url.as_str()) =>
+                    {
+                        println!("      page text frame: {} bytes", text.len());
+                    }
+                    PageWebSocketEvent::Close { url, code, reason }
+                        if active_url.as_deref() == Some(url.as_str()) =>
+                    {
+                        return Err(format!(
+                            "TikTok's page WebSocket closed before enough frames: code={code} reason={reason:?}"
+                        ));
+                    }
+                    PageWebSocketEvent::Error { url, message }
+                        if active_url.as_deref() == Some(url.as_str())
+                            || (active_url.is_none() && is_live_transport(&url)) =>
+                    {
+                        return Err(format!("TikTok's page WebSocket failed: {message}"));
+                    }
+                    _ => {}
                 }
-                Some(Err(e)) => return Err(format!("WebSocket failed: {e}")),
-                None => break,
             }
         }
     }
-    connection.close().await;
 
-    if frames == 0 {
-        return Err("connected but no `msg` frame arrived in 30 s".into());
+    if active_url.is_none() {
+        return Err(format!(
+            "TikTok's page did not open a webcast WebSocket within {PAGE_TRANSPORT_TIMEOUT:?}. \
+             The page may require visible playback or a fresh authenticated session."
+        ));
     }
-    println!("\nOK: {frames} frames from @{user} with an independent signature. F2 and F4 passed.");
+    if binary_frames == 0 {
+        return Err(format!(
+            "TikTok's page opened the WebSocket but relayed no binary frames within {PAGE_TRANSPORT_TIMEOUT:?}"
+        ));
+    }
+    if message_frames == 0 {
+        return Err(format!(
+            "received {binary_frames} binary page frames, but none decoded as payload_type=msg \
+             ({decode_errors} decode failures)"
+        ));
+    }
+
+    println!(
+        "\nOK: relayed {message_frames} message frames from @{user} through TikTok's own \
+         page WebSocket; no Euler or custom signing endpoint was used."
+    );
     Ok(())
+}
+
+fn is_live_transport(url: &str) -> bool {
+    url.starts_with("wss://") && (url.contains("/webcast/im/") || url.contains("webcast-ws"))
 }
 
 /// The page takes time to render channels, so poll the DOM instead of reading it once.

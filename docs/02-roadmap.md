@@ -1,19 +1,19 @@
 # 02 — Roadmap
 
-## F0 — Capture
+## F0 — Observe the page transport
 
-Capture a real authenticated `/webcast/im/fetch/` response, its cookies, protobuf body,
-and WebSocket URL. The capture must not commit real session cookies.
+Record native WebSocket lifecycle events without changing the page socket. Never log or
+commit signed query strings or real session cookies.
 
-## F1 — Validate without the WebView
+## F1 — Relay frames
 
-Replay the captured request, decode protobuf, construct the WebSocket URI, send room
-entry, and receive frames. This separates connection-model failures from signing failures.
+Mirror Blob, ArrayBuffer, typed-array, and text frames through IPC while preserving order.
+Decode relayed `WebcastPushFrame` envelopes in Rust.
 
-## F2 — WebView signer
+## F2 — Session and navigation
 
 Create the hidden WebView, install the initialization bridge before the SDK, preserve
-session cookies, navigate to the real channel page, and expose a typed signing API.
+session cookies, navigate to the real channel page, and expose a typed event stream.
 
 ## F3 — HTTP server
 
@@ -21,14 +21,13 @@ Expose `GET /webcast/fetch` and `GET /healthz`. Return protobuf bytes and the co
 and User-Agent headers required by compatible clients. Map missing rooms, rejection,
 rate limiting, and pool readiness to distinct HTTP statuses.
 
-## F4 — Live WebSocket
+## F4 — Live validation
 
-Use the shared URI builder, send room entry immediately after the 101 handshake, send
-application heartbeats, acknowledge frames, and expose closure to the orchestrator.
+Verify that the page opens the webcast socket and that Rust receives room-entry,
+heartbeat, and multiple `msg` frames without an external sign server.
 
 ## F5 — Operations
 
 Add WebView recycling, a rate limiter, rejection and latency metrics, health reporting,
 and long-running authenticated-session validation. Do not add automatic reconnects with
 expired signed parameters.
-

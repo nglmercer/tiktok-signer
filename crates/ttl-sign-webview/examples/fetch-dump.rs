@@ -62,7 +62,7 @@ fn main() -> ! {
                             r.route_params.len(),
                             s.protobuf.len()
                         ),
-                        Err(e) => println!("sup_ws_ds_opt={opt} → protobuf ilegible: {e}"),
+                        Err(e) => println!("sup_ws_ds_opt={opt} → unreadable protobuf: {e}"),
                     },
                     other => println!("sup_ws_ds_opt={opt} → {other:?}"),
                 }
@@ -86,7 +86,7 @@ fn main() -> ! {
             // --- Raw structure: field by field, without interpretation ---
             println!("top-level fields:");
             let mut messages = Vec::new();
-            for (number, kind, size) in describe(&signed.protobuf).expect("protobuf ilegible") {
+            for (number, kind, size) in describe(&signed.protobuf).expect("unreadable protobuf") {
                 let nota = match number {
                     1 => " (messages?)",
                     2 => " (cursor?)",

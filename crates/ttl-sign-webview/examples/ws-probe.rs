@@ -134,10 +134,10 @@ fn main() -> ! {
                             Some(Ok(Message::Binary(bytes))) => {
                                 match PushFrame::decode(&bytes) {
                                     Ok(f) => println!(
-                                        "[{t:>5.1}s] ← binario {} bytes: payload_type={:?} encoding={:?} headers={:?} payload={} bytes",
+                                        "[{t:>5.1}s] ← binary {} bytes: payload_type={:?} encoding={:?} headers={:?} payload={} bytes",
                                         bytes.len(), f.payload_type, f.payload_encoding, f.headers, f.payload.len()
                                     ),
-                                    Err(e) => println!("[{t:>5.1}s] ← binario {} bytes, ilegible: {e}", bytes.len()),
+                                    Err(e) => println!("[{t:>5.1}s] ← unreadable binary, {} bytes: {e}", bytes.len()),
                                 }
                             }
                             Some(Ok(otro)) => println!("[{t:>5.1}s] ← {otro:?}"),

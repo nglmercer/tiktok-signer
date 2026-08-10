@@ -45,6 +45,31 @@ pub enum FromPage {
         status: u16,
         body: String,
     },
+    /// A WebSocket opened by TikTok's own page. This is the open, self-hosted transport:
+    /// the page performs signing, room entry, and heartbeats while Rust observes frames.
+    WsOpen { url: String },
+    /// A page-owned WebSocket frame. Binary data is base64-encoded for JSON IPC.
+    WsFrame {
+        url: String,
+        #[serde(default)]
+        data_b64: String,
+        #[serde(default)]
+        text: String,
+    },
+    /// A page-owned WebSocket closed.
+    WsClose {
+        url: String,
+        #[serde(default)]
+        code: u16,
+        #[serde(default)]
+        reason: String,
+    },
+    /// A page-owned WebSocket emitted an error.
+    WsError {
+        url: String,
+        #[serde(default)]
+        message: String,
+    },
     /// Page failure. `request_id == 0` means it is not tied to a specific request.
     Error { request_id: u64, message: String },
 }
@@ -155,6 +180,19 @@ mod tests {
             serde_json::from_str(r#"{"type":"text","request_id":3,"status":200,"body":"<html>"}"#)
                 .unwrap();
         assert!(matches!(msg, FromPage::Text { request_id: 3, .. }));
+    }
+
+    #[test]
+    fn parses_page_websocket_frame() {
+        let msg: FromPage = serde_json::from_str(
+            r#"{"type":"ws_frame","url":"wss://example.test/ws","data_b64":"AQI="}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            msg,
+            FromPage::WsFrame { url, data_b64, .. }
+                if url == "wss://example.test/ws" && data_b64 == "AQI="
+        ));
     }
 
     /// Without `url`, the bridge returns the DOM: the key must not appear at all.

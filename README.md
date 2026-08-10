@@ -1,23 +1,21 @@
 # tiktok-signer
 
-Custom sign server for TikTok LIVE, written in Rust and using a WebView
-(`wry`) as the signing engine.
+Self-hosted TikTok LIVE transport written in Rust. A Wry WebView runs TikTok's page and
+relays its already-authenticated WebSocket frames to Rust over IPC.
 
-**Single objective:** obtain a valid protobuf response from
-`https://webcast.tiktok.com/webcast/im/fetch/` so the room WebSocket can be opened.
-Protobuf parsing and event consumption already exist and are outside this project's scope.
+**Primary objective:** receive TikTok LIVE protobuf frames without a proprietary sign
+server or a reimplementation of TikTok's anti-bot signatures.
 
 ## Status
 
-Current phase: **F0 — Reconnaissance** (see [roadmap](docs/02-roadmap.md)).
-
-The workspace contains four crates and the F1–F3 tools implemented against the
-specifications. Real-session validation is available through `fetch-dump`.
+The page-owned WebSocket relay was validated against a real room on 2026-08-10. It
+received room-entry, heartbeat, and `msg` frames without Euler and without calling
+`/webcast/im/fetch/`.
 
 | Crate | Status |
 |---|---|
 | `ttl-sign-core` | Presets, queries, cookie jar, `SignOutcome`, and minimal protobuf decoding. |
-| `ttl-sign-webview` | Wry engine, JS bridge, readiness gate, navigation, channel discovery, signing, and replay. |
+| `ttl-sign-webview` | Wry engine, JS bridge, session bootstrap, navigation, and page-WebSocket relay. |
 | `ttl-live-ws` | WebSocket client with heartbeat, acknowledgements, and typed rejection handling. |
 | `ttl-sign-server` | `GET /webcast/fetch` and `GET /healthz` endpoints. |
 
@@ -33,16 +31,13 @@ specifications. Real-session validation is available through `fetch-dump`.
 |---|---|
 | Discover live channels | Works through the rendered `/live` DOM. |
 | `unique_id` → `room_id` | Works without signing or a display. |
-| Signed `/webcast/im/fetch/` | Works with an authenticated session. |
-| Decode protobuf | Works; field numbers are confirmed. |
-| WebSocket handshake | Accepted with status 101 and `handshake-msg: OK`. |
-| Receive frames | Requires continued live-session validation. |
+| Page-owned WebSocket | Works; TikTok signs and opens it. |
+| Room entry and heartbeat | Managed by TikTok's page and observed over IPC. |
+| Receive protobuf frames | Works; multiple `msg` frames received in live validation. |
 
-Anonymous sessions return an empty `/webcast/im/fetch/` body. Use the login example
-to install an authenticated session before signing.
-
-The WebSocket URI is signed independently by the SDK. `Signer::sign_ws_uri` performs
-that signing; avoid repeated attempts from one IP because TikTok rate-limits signing.
+The old `/webcast/im/fetch/` replay remains diagnostic code but is no longer on the
+live-check critical path. It is unreliable because TikTok may return a silent empty-body
+rejection even with an authenticated session.
 
 ## Tools
 
@@ -102,7 +97,6 @@ without a GPU, set `WEBKIT_DISABLE_DMABUF_RENDERER=1` and
 
 ## Summary
 
-1. The critical path has one signature: the HTTP `/webcast/im/fetch/` request.
-2. The WebSocket URL is signed by TikTok inside the protobuf response.
-3. The WebView lets TikTok's own page sign the request instead of reimplementing the algorithm.
-
+1. TikTok's page signs and owns the WebSocket.
+2. The initialization bridge mirrors binary frames to Rust without altering the socket.
+3. No Euler API, custom sign server, or native X-Gnarly implementation is required.

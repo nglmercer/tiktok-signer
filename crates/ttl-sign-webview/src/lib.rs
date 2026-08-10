@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 use tao::event::Event;
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::window::WindowBuilder;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 use wry::WebViewBuilder;
 
@@ -82,7 +82,7 @@ pub struct EngineConfig {
     /// Cookies from a real account. Empty means anonymous session.
     ///
     /// Verified on 2026-08-10 against real live rooms: **the flow requires it**.
-    /// `/webcast/room/enter/` responde literalmente `User doesn't login`, y
+    /// `/webcast/room/enter/` literally returns `User doesn't login`, and
     /// `/webcast/im/fetch/` returns 200 with an empty body, the same silent rejection.
     /// Session-independent endpoints (`room/info`, `room/check_alive`) respond through the
     /// same signing path, so the problem is neither signing nor replay.
@@ -172,12 +172,46 @@ enum UserEvent {
         url: String,
         reply: oneshot::Sender<Result<(), SignError>>,
     },
+    /// Subscribe to the WebSocket already owned by TikTok's page.
+    SubscribePageWebSocket {
+        reply: oneshot::Sender<mpsc::UnboundedReceiver<PageWebSocketEvent>>,
+    },
     /// Wake the event loop from the IPC handler.
     ///
     /// The handler runs outside the event-loop closure. When it marks the instance ready,
     /// queued requests need an event to drain; without this they remain until expiry.
     Wake,
-    Shutdown,
+    Shutdown {
+        code: i32,
+    },
+}
+
+/// Event mirrored from the WebSocket opened and managed by TikTok's own page.
+///
+/// This path needs no external sign server: the page owns signing, room entry, and
+/// heartbeat behavior; Rust receives a copy of each transport event over IPC.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PageWebSocketEvent {
+    Open {
+        url: String,
+    },
+    Binary {
+        url: String,
+        data: Vec<u8>,
+    },
+    Text {
+        url: String,
+        text: String,
+    },
+    Close {
+        url: String,
+        code: u16,
+        reason: String,
+    },
+    Error {
+        url: String,
+        message: String,
+    },
 }
 
 /// Page result: an already signed URL and the cookies used to sign it. Rust fetches the body
@@ -538,14 +572,14 @@ impl Signer {
             .eval("JSON.stringify(window.__ttlCaptures||[])")
             .await?;
         serde_json::from_str(&raw)
-            .map_err(|e| SignError::Decode(format!("capturas ilegibles: {e}")))
+            .map_err(|e| SignError::Decode(format!("unreadable captures: {e}")))
     }
 
     /// WebSocket URIs opened by the page, in order.
     pub async fn page_ws_urls(&self) -> Result<Vec<String>, SignError> {
         let raw = self.eval("JSON.stringify(window.__ttlWsUrls||[])").await?;
         serde_json::from_str(&raw)
-            .map_err(|e| SignError::Decode(format!("lista de WebSockets ilegible: {e}")))
+            .map_err(|e| SignError::Decode(format!("unreadable WebSocket list: {e}")))
     }
 
     async fn page_ws_candidate(&self, uri: &str) -> Option<String> {
@@ -630,9 +664,29 @@ impl Signer {
             .unwrap_or_else(|_| self.config.preset.clone())
     }
 
+    /// Subscribe to the transport opened by TikTok's page.
+    ///
+    /// Set [`EngineConfig::block_page_websockets`] to `false` before starting the engine.
+    /// Subscribe before navigating to a live page so the initial `open` event is retained.
+    pub async fn subscribe_page_websocket(
+        &self,
+    ) -> Result<mpsc::UnboundedReceiver<PageWebSocketEvent>, SignError> {
+        let (tx, rx) = oneshot::channel();
+        self.proxy
+            .send_event(UserEvent::SubscribePageWebSocket { reply: tx })
+            .map_err(|_| SignError::EngineGone("event loop has closed".into()))?;
+        rx.await
+            .map_err(|_| SignError::EngineGone("event loop discarded subscription".into()))
+    }
+
     /// Request orderly event-loop shutdown.
     pub fn shutdown(&self) {
-        let _ = self.proxy.send_event(UserEvent::Shutdown);
+        self.shutdown_with_code(0);
+    }
+
+    /// Request orderly event-loop shutdown and propagate a process exit code.
+    pub fn shutdown_with_code(&self, code: i32) {
+        let _ = self.proxy.send_event(UserEvent::Shutdown { code });
     }
 }
 
@@ -668,6 +722,8 @@ struct Shared {
     /// origin. While pending, bootstrap-document `ready` does not authorize signing.
     session_bootstrap_pending: bool,
     session_bootstrap_ready: bool,
+    /// Consumers observing the WebSocket managed by TikTok's page.
+    page_ws_subscribers: Vec<mpsc::UnboundedSender<PageWebSocketEvent>>,
 }
 
 impl Shared {
@@ -692,6 +748,11 @@ impl Shared {
             }
             None => debug!(request_id, "text has no in-flight request; discarded"),
         }
+    }
+
+    fn publish_page_websocket(&mut self, event: PageWebSocketEvent) {
+        self.page_ws_subscribers
+            .retain(|subscriber| subscriber.send(event.clone()).is_ok());
     }
 
     /// Fail everything waiting. Used when the SDK does not start.
@@ -859,19 +920,24 @@ where
                     state.ready = false;
                     state.gate_started = Some(Instant::now());
                 }
-                info!(%url, "navegando");
+                info!(%url, "navigating");
                 let result = webview
                     .load_url(&url)
                     .map_err(|e| SignError::EngineGone(e.to_string()));
                 let _ = reply.send(result);
             }
+            Event::UserEvent(UserEvent::SubscribePageWebSocket { reply }) => {
+                let (tx, rx) = mpsc::unbounded_channel();
+                shared.borrow_mut().page_ws_subscribers.push(tx);
+                let _ = reply.send(rx);
+            }
             // Only used to reach the queue-draining logic below.
             Event::UserEvent(UserEvent::Wake) => {}
-            Event::UserEvent(UserEvent::Shutdown) => {
+            Event::UserEvent(UserEvent::Shutdown { code }) => {
                 shared
                     .borrow_mut()
                     .fail_all(|| SignError::EngineGone("shutdown requested".into()));
-                *control_flow = ControlFlow::Exit;
+                *control_flow = ControlFlow::ExitWithCode(code);
             }
             _ => {}
         }
@@ -1041,7 +1107,7 @@ fn handle_page_message(
             // document happens to expose one through a cached page.
             state.ready = !state.session_bootstrap_pending;
             state.sdk_version = sdk_version.clone();
-            info!(sdk_version = ?sdk_version, "puente listo");
+            info!(sdk_version = ?sdk_version, "bridge ready");
         }
         FromPage::Session {
             installed,
@@ -1074,6 +1140,46 @@ fn handle_page_message(
             };
             shared.borrow_mut().resolve_text(request_id, result);
         }
+        FromPage::WsOpen { url } => {
+            let endpoint = url.split('?').next().unwrap_or(&url);
+            info!(%endpoint, "page WebSocket opened");
+            shared
+                .borrow_mut()
+                .publish_page_websocket(PageWebSocketEvent::Open { url });
+        }
+        FromPage::WsFrame {
+            url,
+            data_b64,
+            text,
+        } => {
+            let event = if !data_b64.is_empty() {
+                use base64::Engine;
+                match base64::engine::general_purpose::STANDARD.decode(data_b64) {
+                    Ok(data) => PageWebSocketEvent::Binary { url, data },
+                    Err(error) => PageWebSocketEvent::Error {
+                        url,
+                        message: format!("invalid base64 WebSocket frame: {error}"),
+                    },
+                }
+            } else {
+                PageWebSocketEvent::Text { url, text }
+            };
+            shared.borrow_mut().publish_page_websocket(event);
+        }
+        FromPage::WsClose { url, code, reason } => {
+            let endpoint = url.split('?').next().unwrap_or(&url);
+            info!(%endpoint, code, %reason, "page WebSocket closed");
+            shared
+                .borrow_mut()
+                .publish_page_websocket(PageWebSocketEvent::Close { url, code, reason });
+        }
+        FromPage::WsError { url, message } => {
+            let endpoint = url.split('?').next().unwrap_or(&url);
+            warn!(%endpoint, %message, "page WebSocket error");
+            shared
+                .borrow_mut()
+                .publish_page_websocket(PageWebSocketEvent::Error { url, message });
+        }
         FromPage::Error {
             request_id,
             message,
@@ -1086,7 +1192,7 @@ fn handle_page_message(
                 state.fail_all(|| SignError::SdkNotReady);
             } else {
                 // It may belong to a signature or text request: only one of the two
-                // mapas la tiene.
+                // Only one pending map can own this request ID.
                 let mut state = shared.borrow_mut();
                 if state.pending_text.contains_key(&request_id) {
                     state.resolve_text(request_id, Err(SignError::Bridge(message)));
@@ -1103,7 +1209,7 @@ fn handle_page_message(
         } => {
             // The manager supplies HttpOnly cookies; document cookies are merged afterward
             // because they reflect the latest `msToken` and session rotation.
-            // inyectada en WebKitGTK.
+            // The document cookie string reflects values injected into WebKitGTK.
             let mut cookies = jar_from_webview;
             cookies.merge(&CookieJar::parse(&cookie));
             let signed = SignedRequest {
@@ -1227,7 +1333,7 @@ fn http_client(user_agent: &str) -> reqwest::Client {
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(15))
         .build()
-        .expect("cliente HTTP")
+        .expect("HTTP client")
 }
 
 #[cfg(test)]
@@ -1251,7 +1357,7 @@ mod tests {
         let url = "https://x/?a=1&msToken=ab%2Bcd%3D&z=2";
         assert_eq!(query_param(url, "msToken").as_deref(), Some("ab+cd="));
         assert_eq!(query_param(url, "a").as_deref(), Some("1"));
-        assert_eq!(query_param(url, "falta"), None);
+        assert_eq!(query_param(url, "missing"), None);
         assert_eq!(query_param("https://x/no-query", "a"), None);
     }
 
@@ -1291,12 +1397,27 @@ mod tests {
             "https://webcast.tiktok.com/webcast/im/fetch/?X-Gnarly=K",
             valid_protobuf(),
             CookieJar::parse("msToken=abc; ttwid=xyz"),
-            "UA-de-prueba",
+            "test-UA",
         );
         let signed = outcome.ok().expect("expected a valid signature");
         // The WebSocket needs exactly these cookies and this UA, not different ones.
         assert_eq!(signed.cookies.get("ttwid"), Some("xyz"));
-        assert_eq!(signed.user_agent, "UA-de-prueba");
+        assert_eq!(signed.user_agent, "test-UA");
         assert!(signed.signed_url.contains("X-Gnarly"));
+    }
+
+    #[test]
+    fn page_websocket_events_are_published_to_subscribers() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut shared = Shared::default();
+        shared.page_ws_subscribers.push(tx);
+        let event = PageWebSocketEvent::Binary {
+            url: "wss://example.test/webcast/im/".into(),
+            data: vec![1, 2, 3],
+        };
+
+        shared.publish_page_websocket(event.clone());
+
+        assert_eq!(rx.try_recv().unwrap(), event);
     }
 }
