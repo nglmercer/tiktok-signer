@@ -25,3 +25,7 @@ tracing-subscriber = { workspace = true }
 [[example]]
 name = "replay"
 path = "examples/replay.rs"
+
+[[example]]
+name = "rooms"
+path = "examples/rooms.rs"

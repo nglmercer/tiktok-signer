@@ -17,3 +17,12 @@ tracing = { workspace = true }
 
 tao = "0.36"
 wry = "0.56"
+
+[dev-dependencies]
+ttl-live-ws = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+
+[[example]]
+name = "live-check"
+path = "examples/live-check.rs"

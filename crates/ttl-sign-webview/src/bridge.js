@@ -26,38 +26,116 @@
     return btoa(s);
   };
 
-  // Guardamos la URL real que ve `fetch` tras el parcheo del SDK. `res.url` puede no
-  // reflejar los parámetros que añade webmssdk; esto es lo que mantiene abierta la
-  // puerta al Plan B (docs/01-architecture.md §D2).
-  var lastRequestUrl = null;
-  var nativeFetch = window.fetch;
-  window.fetch = function (input, init) {
+  // URL final de la petición, ya con X-Bogus / X-Gnarly puestos por el SDK. Es lo que
+  // mantiene abierta la puerta al Plan B (docs/01-architecture.md §D2).
+  //
+  // Se lee del Performance Timeline y **no** parcheando `window.fetch`: envolver `fetch`
+  // desde el script de inicialización rompe la cadena que instala webmssdk encima, y la
+  // llamada acaba resolviendo a `undefined` en vez de a una `Response`. Verificado en F2.
+  var signedUrlFor = function (needle) {
     try {
-      var url = typeof input === "string" ? input : (input && input.url) || null;
-      if (url && url.indexOf("/webcast/im/fetch/") !== -1) {
-        lastRequestUrl = url;
+      var entries = performance.getEntriesByType("resource");
+      for (var i = entries.length - 1; i >= 0; i--) {
+        if (entries[i].name.indexOf(needle) !== -1) {
+          return entries[i].name;
+        }
       }
     } catch (e) {}
-    return nativeFetch.apply(this, arguments);
+    return null;
+  };
+
+  // `XMLHttpRequest.prototype` también lo parchea webmssdk (docs/00-research.md §2), y a
+  // diferencia de `fetch` devuelve algo utilizable en esta página: el `fetch` de
+  // `www.tiktok.com/live` resuelve a `undefined` para esta petición. Verificado en F2.
+  var xhrArrayBuffer = function (url) {
+    return new Promise(function (resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      xhr.open("GET", url, true);
+      xhr.responseType = "arraybuffer";
+      xhr.withCredentials = true;
+      xhr.setRequestHeader("Accept", "application/protobuf");
+      xhr.onload = function () {
+        resolve({
+          status: xhr.status,
+          url: xhr.responseURL || url,
+          buffer: xhr.response,
+        });
+      };
+      xhr.onerror = function () {
+        reject(new Error("XHR error status=" + xhr.status));
+      };
+      xhr.send();
+    });
   };
 
   window.__ttlSign = async function (req) {
-    lastRequestUrl = null;
     try {
-      // `fetch` ya está parcheado por webmssdk: añade X-Bogus / X-Gnarly por su cuenta.
-      var res = await fetch(req.url, {
-        method: "GET",
-        credentials: "include",
-        headers: { Accept: "application/protobuf" },
-      });
-      var buf = await res.arrayBuffer();
+      // El `fetch` de la página está parcheado por webmssdk y añade X-Bogus / X-Gnarly.
+      // Si no devuelve una `Response` utilizable, se cae a XHR, que el SDK parchea
+      // igual: lo que no se puede hacer es componer la firma por nuestra cuenta.
+      var res = null;
+      try {
+        res = await fetch(req.url, {
+          method: "GET",
+          credentials: "include",
+          headers: { Accept: "application/protobuf" },
+        });
+      } catch (e) {
+        res = null;
+      }
+
+      var status, buffer, finalUrl;
+      if (res && typeof res.arrayBuffer === "function") {
+        status = res.status;
+        buffer = await res.arrayBuffer();
+        finalUrl = res.url;
+      } else {
+        var out = await xhrArrayBuffer(req.url);
+        status = out.status;
+        buffer = out.buffer;
+        finalUrl = out.url;
+      }
+
       post({
         type: "result",
         request_id: req.request_id,
-        status: res.status,
-        url: lastRequestUrl || res.url,
-        body_b64: b64(buf),
+        status: status,
+        url: signedUrlFor("/webcast/im/fetch/") || finalUrl,
+        body_b64: b64(buffer),
         cookie: document.cookie,
+      });
+    } catch (e) {
+      post({ type: "error", request_id: req.request_id, message: String(e) });
+    }
+  };
+
+  // Paso 1 del flujo (docs/00-research.md §1): no lleva firma, pero se hace desde la
+  // página igualmente para reutilizar la sesión y el UA reales.
+  //
+  // - `req.url`  → GET de texto (el lookup uniqueId → roomId).
+  // - sin `url`  → el DOM ya renderizado, que es la única forma de ver quién está en
+  //   directo: la página /live no trae esos datos en el HTML, los pinta el cliente.
+  window.__ttlText = async function (req) {
+    try {
+      if (!req.url) {
+        post({
+          type: "text",
+          request_id: req.request_id,
+          status: 200,
+          body: document.documentElement.outerHTML,
+        });
+        return;
+      }
+      var res = await fetch(req.url, {
+        method: "GET",
+        credentials: "include",
+        headers: { Accept: "application/json, text/html" },
+      });
+      post({
+        type: "text",
+        request_id: req.request_id,
+        status: res.status,
+        body: await res.text(),
       });
     } catch (e) {
       post({ type: "error", request_id: req.request_id, message: String(e) });

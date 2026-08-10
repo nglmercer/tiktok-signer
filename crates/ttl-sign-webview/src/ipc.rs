@@ -21,6 +21,13 @@ pub enum FromPage {
         #[serde(default)]
         cookie: String,
     },
+    /// Respuesta de texto: el lookup `uniqueId` → `room_id`, o el DOM renderizado.
+    /// No lleva cookies porque no interviene en ninguna firma.
+    Text {
+        request_id: u64,
+        status: u16,
+        body: String,
+    },
     /// Fallo dentro de la página. `request_id == 0` significa que no corresponde a
     /// ninguna petición concreta (p. ej. `sdk_not_ready`).
     Error { request_id: u64, message: String },
@@ -38,6 +45,21 @@ impl ToPage {
     pub fn to_script(&self) -> String {
         let json = serde_json::to_string(self).expect("ToPage siempre serializa");
         format!("window.__ttlSign({json})")
+    }
+}
+
+/// Rust → JS para el paso sin firma: un GET de texto, o el DOM si `url` es `None`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ToPageText {
+    pub request_id: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+impl ToPageText {
+    pub fn to_script(&self) -> String {
+        let json = serde_json::to_string(self).expect("ToPageText siempre serializa");
+        format!("window.__ttlText({json})")
     }
 }
 
@@ -88,6 +110,25 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(msg, FromPage::Error { request_id: 7, .. }));
+    }
+
+    #[test]
+    fn parses_text() {
+        let msg: FromPage =
+            serde_json::from_str(r#"{"type":"text","request_id":3,"status":200,"body":"<html>"}"#)
+                .unwrap();
+        assert!(matches!(msg, FromPage::Text { request_id: 3, .. }));
+    }
+
+    /// Sin `url` el puente devuelve el DOM: la clave no debe aparecer siquiera.
+    #[test]
+    fn dom_request_omits_the_url() {
+        let script = ToPageText {
+            request_id: 5,
+            url: None,
+        }
+        .to_script();
+        assert_eq!(script, r#"window.__ttlText({"request_id":5})"#);
     }
 
     #[test]

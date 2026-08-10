@@ -41,11 +41,12 @@ use tokio::sync::oneshot;
 use tracing::{debug, error, info, warn};
 use wry::WebViewBuilder;
 
+use ttl_sign_core::room::{self, LiveChannel, RoomLookup};
 use ttl_sign_core::{
     CookieJar, FetchParams, FetchResult, Preset, RejectReason, SignError, SignOutcome, SignedFetch,
 };
 
-use crate::ipc::{FromPage, ToPage};
+use crate::ipc::{FromPage, ToPage, ToPageText};
 
 /// Script inyectado antes que los de la página.
 pub const BRIDGE_JS: &str = include_str!("bridge.js");
@@ -85,6 +86,17 @@ enum UserEvent {
         params: Box<FetchParams>,
         reply: oneshot::Sender<SignOutcome>,
     },
+    /// Paso 1 sin firma. `url: None` pide el DOM ya renderizado.
+    Text {
+        url: Option<String>,
+        reply: oneshot::Sender<Result<String, SignError>>,
+    },
+    /// Despierta el event loop desde el handler de IPC.
+    ///
+    /// Hace falta porque el handler corre fuera del closure del event loop: cuando marca
+    /// la instancia como lista, nadie vacía la cola de peticiones hasta que llega *algún*
+    /// evento. Sin esto, todo lo encolado antes de `ready` se queda ahí hasta que caduca.
+    Wake,
     Shutdown,
 }
 
@@ -128,6 +140,59 @@ impl Signer {
         }
     }
 
+    /// Resuelve `unique_id` → `room_id` y estado del directo. **Sin firma**
+    /// (`docs/00-research.md` §1).
+    ///
+    /// Se hace desde la página para reutilizar sesión y UA reales, aunque el endpoint
+    /// no lo exija.
+    pub async fn room_lookup(&self, unique_id: &str) -> Result<RoomLookup, SignError> {
+        let body = self.fetch_text(&room::room_lookup_url(unique_id)).await?;
+        RoomLookup::from_json(&body).ok_or_else(|| {
+            SignError::Decode(format!("respuesta inesperada del lookup de @{unique_id}"))
+        })
+    }
+
+    /// Canales en directo, leídos del DOM **ya renderizado** de la página actual.
+    ///
+    /// El motor tiene que estar cargado en una página que los liste (por defecto
+    /// `https://www.tiktok.com/live`). Un `GET` pelado a esa URL no sirve: los datos los
+    /// pinta el cliente, así que el HTML crudo llega vacío.
+    ///
+    /// Devuelve la lista tal cual: si está vacía, es que la página aún no había pintado
+    /// nada, no que no haya nadie emitiendo.
+    pub async fn live_channels(&self) -> Result<Vec<LiveChannel>, SignError> {
+        let dom = self.dom().await?;
+        Ok(room::extract_live_channels(&dom))
+    }
+
+    /// DOM renderizado de la página actual.
+    pub async fn dom(&self) -> Result<String, SignError> {
+        self.text_request(None).await
+    }
+
+    /// GET de texto desde dentro de la página, con su sesión y su UA.
+    pub async fn fetch_text(&self, url: &str) -> Result<String, SignError> {
+        self.text_request(Some(url.to_string())).await
+    }
+
+    async fn text_request(&self, url: Option<String>) -> Result<String, SignError> {
+        let (tx, rx) = oneshot::channel();
+        if self
+            .proxy
+            .send_event(UserEvent::Text { url, reply: tx })
+            .is_err()
+        {
+            return Err(SignError::EngineGone("el event loop se ha cerrado".into()));
+        }
+        match tokio::time::timeout(self.config.sign_timeout, rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(SignError::EngineGone("el motor descartó la petición".into())),
+            Err(_) => Err(SignError::Timeout(
+                self.config.sign_timeout.as_millis() as u64
+            )),
+        }
+    }
+
     /// El preset con el que firma este motor. El WebSocket tiene que usar este mismo UA.
     pub fn preset(&self) -> &Preset {
         &self.config.preset
@@ -146,8 +211,13 @@ struct Shared {
     next_id: u64,
     /// Peticiones en vuelo, por `request_id`.
     pending: HashMap<u64, oneshot::Sender<SignOutcome>>,
+    /// Peticiones de texto en vuelo (paso 1, sin firma).
+    pending_text: HashMap<u64, oneshot::Sender<Result<String, SignError>>>,
     /// Peticiones recibidas antes de que el SDK estuviese listo.
     queued: Vec<(Box<FetchParams>, oneshot::Sender<SignOutcome>)>,
+    /// Igual, para las de texto: `ready` implica además que el documento ya cargó, que
+    /// es lo que hace falta para que el DOM tenga algo que leer.
+    queued_text: Vec<(Option<String>, oneshot::Sender<Result<String, SignError>>)>,
     ready: bool,
     sdk_version: Option<String>,
     signs: u64,
@@ -172,6 +242,15 @@ impl Shared {
         }
     }
 
+    fn resolve_text(&mut self, request_id: u64, result: Result<String, SignError>) {
+        match self.pending_text.remove(&request_id) {
+            Some(tx) => {
+                let _ = tx.send(result);
+            }
+            None => debug!(request_id, "texto sin petición en vuelo, se descarta"),
+        }
+    }
+
     /// Falla todo lo que estuviera esperando. Se usa cuando el SDK no arranca.
     fn fail_all(&mut self, make_error: impl Fn() -> SignError) {
         for (_, tx) in self.pending.drain() {
@@ -179,6 +258,12 @@ impl Shared {
         }
         for (_, tx) in self.queued.drain(..) {
             let _ = tx.send(make_error().into());
+        }
+        for (_, tx) in self.pending_text.drain() {
+            let _ = tx.send(Err(make_error()));
+        }
+        for (_, tx) in self.queued_text.drain(..) {
+            let _ = tx.send(Err(make_error()));
         }
     }
 }
@@ -205,12 +290,13 @@ where
 
     let ipc_shared = Rc::clone(&shared);
     let ipc_ua = user_agent.clone();
+    let ipc_proxy = proxy.clone();
     // El webview aún no existe cuando se construye el handler, y el handler necesita
     // leer el cookie manager: se comparte por una celda que se rellena justo después.
     let webview_slot: Rc<RefCell<Option<Rc<wry::WebView>>>> = Rc::new(RefCell::new(None));
     let ipc_slot = Rc::clone(&webview_slot);
 
-    let webview = WebViewBuilder::new()
+    let builder = WebViewBuilder::new()
         .with_url(&config.landing_url)
         .with_user_agent(&user_agent)
         .with_initialization_script(BRIDGE_JS)
@@ -229,9 +315,11 @@ where
                 .map(|wv| cookies_from_webview(wv))
                 .unwrap_or_default();
             handle_page_message(&ipc_shared, msg, &ipc_ua, jar_from_webview);
-        })
-        .build(&window)
-        .expect("no se pudo crear el webview");
+            // El handler no es el event loop: hay que despertarlo para que drene la cola.
+            let _ = ipc_proxy.send_event(UserEvent::Wake);
+        });
+
+    let webview = build_webview(builder, &window).expect("no se pudo crear el webview");
 
     let webview = Rc::new(webview);
     *webview_slot.borrow_mut() = Some(Rc::clone(&webview));
@@ -253,7 +341,8 @@ where
 
         {
             let mut state = shared.borrow_mut();
-            if !state.ready && !state.queued.is_empty() && started.elapsed() > sdk_ready_timeout {
+            let waiting = !state.queued.is_empty() || !state.queued_text.is_empty();
+            if !state.ready && waiting && started.elapsed() > sdk_ready_timeout {
                 error!("el SDK no apareció en {sdk_ready_timeout:?}");
                 state.fail_all(|| SignError::SdkNotReady);
             }
@@ -273,6 +362,20 @@ where
                 drop(state);
                 dispatch(&webview, &shared, id, &params, &config.preset);
             }
+            Event::UserEvent(UserEvent::Text { url, reply }) => {
+                let mut state = shared.borrow_mut();
+                if !state.ready {
+                    debug!("petición de texto en cola: la página aún no está lista");
+                    state.queued_text.push((url, reply));
+                    return;
+                }
+                let id = state.next_id();
+                state.pending_text.insert(id, reply);
+                drop(state);
+                dispatch_text(&webview, &shared, id, url);
+            }
+            // Solo sirve para llegar al drenaje de colas de más abajo.
+            Event::UserEvent(UserEvent::Wake) => {}
             Event::UserEvent(UserEvent::Shutdown) => {
                 shared
                     .borrow_mut()
@@ -303,7 +406,51 @@ where
         for (id, params) in to_dispatch {
             dispatch(&webview, &shared, id, &params, &config.preset);
         }
+
+        let text_to_dispatch: Vec<(u64, Option<String>)> = {
+            let mut state = shared.borrow_mut();
+            if !state.ready || state.queued_text.is_empty() {
+                Vec::new()
+            } else {
+                let queued: Vec<_> = state.queued_text.drain(..).collect();
+                let mut out = Vec::with_capacity(queued.len());
+                for (url, reply) in queued {
+                    let id = state.next_id();
+                    state.pending_text.insert(id, reply);
+                    out.push((id, url));
+                }
+                out
+            }
+        };
+        for (id, url) in text_to_dispatch {
+            dispatch_text(&webview, &shared, id, url);
+        }
     })
+}
+
+/// En Linux la ventana es invisible, así que GTK nunca la *realiza* y no hay window
+/// handle que darle a `build()`: falla con `WindowHandleError(Unavailable)`. La forma
+/// correcta ahí es meter el webview directamente en el contenedor GTK de la ventana.
+#[cfg(target_os = "linux")]
+fn build_webview(
+    builder: WebViewBuilder<'_>,
+    window: &tao::window::Window,
+) -> wry::Result<wry::WebView> {
+    use tao::platform::unix::WindowExtUnix;
+    use wry::WebViewBuilderExtUnix;
+
+    let vbox = window
+        .default_vbox()
+        .expect("tao siempre crea un vbox en GTK");
+    builder.build_gtk(vbox)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn build_webview(
+    builder: WebViewBuilder<'_>,
+    window: &tao::window::Window,
+) -> wry::Result<wry::WebView> {
+    builder.build(window)
 }
 
 /// Lanza una firma dentro de la página.
@@ -323,6 +470,22 @@ fn dispatch(
         shared
             .borrow_mut()
             .resolve(request_id, SignError::EngineGone(e.to_string()).into());
+    }
+}
+
+/// Lanza una petición de texto (o de DOM, si `url` es `None`) dentro de la página.
+fn dispatch_text(
+    webview: &wry::WebView,
+    shared: &Rc<RefCell<Shared>>,
+    request_id: u64,
+    url: Option<String>,
+) {
+    let msg = ToPageText { request_id, url };
+    if let Err(e) = webview.evaluate_script(&msg.to_script()) {
+        error!(request_id, error = %e, "no se pudo inyectar la petición de texto");
+        shared
+            .borrow_mut()
+            .resolve_text(request_id, Err(SignError::EngineGone(e.to_string())));
     }
 }
 
@@ -355,6 +518,22 @@ fn handle_page_message(
             state.sdk_version = sdk_version.clone();
             info!(sdk_version = ?sdk_version, "puente listo");
         }
+        FromPage::Text {
+            request_id,
+            status,
+            body,
+        } => {
+            let result = if status == 200 {
+                Ok(body)
+            } else {
+                // Sin firma de por medio, un no-200 aquí es un fallo normal del paso 1,
+                // no una detección: no toca `SignOutcome::Rejected`.
+                Err(SignError::Transport(format!(
+                    "el paso sin firma respondió HTTP {status}"
+                )))
+            };
+            shared.borrow_mut().resolve_text(request_id, result);
+        }
         FromPage::Error {
             request_id,
             message,
@@ -366,9 +545,14 @@ fn handle_page_message(
                 state.ready = false;
                 state.fail_all(|| SignError::SdkNotReady);
             } else {
-                shared
-                    .borrow_mut()
-                    .resolve(request_id, SignError::Bridge(message).into());
+                // Puede ser de una firma o de una petición de texto: solo uno de los dos
+                // mapas la tiene.
+                let mut state = shared.borrow_mut();
+                if state.pending_text.contains_key(&request_id) {
+                    state.resolve_text(request_id, Err(SignError::Bridge(message)));
+                } else {
+                    state.resolve(request_id, SignError::Bridge(message).into());
+                }
             }
         }
         FromPage::Result {
