@@ -45,7 +45,8 @@ use flate2::read::GzDecoder;
 use ttl_sign_core::proto::{LiveEvent, PushFrame, WebcastEventBatch};
 use ttl_sign_core::room::{self, LiveChannel, RoomLookup};
 use ttl_sign_core::{
-    CookieJar, FetchParams, FetchResult, Preset, RejectReason, SignError, SignOutcome, SignedFetch,
+    decode_webcast_message, CookieJar, FetchParams, FetchResult, Preset, RejectReason,
+    SchemaMessage, SignError, SignOutcome, SignedFetch,
 };
 
 use crate::ipc::{FromPage, PageEnv, ToPage, ToPageText};
@@ -226,6 +227,20 @@ pub struct DecodedLiveEvent {
     pub message_id: u64,
     pub method: String,
     pub event: LiveEvent,
+}
+
+/// One WebSocket message decoded against the bundled full schema snapshot.
+///
+/// A method not present in the snapshot has `event.schema == None`; its wire fields remain
+/// available in `event.fields`. Known nested messages are decoded with explicit depth and
+/// field-count limits so an evolving TikTok payload cannot destabilize the page relay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedSchemaEvent {
+    pub socket_url: String,
+    pub frame_log_id: u64,
+    pub message_id: u64,
+    pub method: String,
+    pub event: SchemaMessage,
 }
 
 /// Page result: an already signed URL and the cookies used to sign it. Rust fetches the body
@@ -700,6 +715,26 @@ impl Signer {
     pub async fn subscribe_live_events(
         &self,
     ) -> Result<mpsc::UnboundedReceiver<Result<DecodedLiveEvent, SignError>>, SignError> {
+        self.subscribe_decoded_events(decode_live_frame).await
+    }
+
+    /// Subscribe to messages decoded with every type in the bundled Webcast schema snapshot.
+    ///
+    /// This is the broadest listener API. It maps every WebSocket method in the bundled schema
+    /// and retains structurally decoded raw fields for methods that TikTok adds later.
+    pub async fn subscribe_schema_events(
+        &self,
+    ) -> Result<mpsc::UnboundedReceiver<Result<DecodedSchemaEvent, SignError>>, SignError> {
+        self.subscribe_decoded_events(decode_schema_frame).await
+    }
+
+    async fn subscribe_decoded_events<T>(
+        &self,
+        decode_frame: fn(&str, &[u8]) -> Result<Vec<T>, SignError>,
+    ) -> Result<mpsc::UnboundedReceiver<Result<T, SignError>>, SignError>
+    where
+        T: Send + 'static,
+    {
         let mut page_events = self.subscribe_page_websocket().await?;
         let (tx, rx) = mpsc::unbounded_channel();
         tokio::spawn(async move {
@@ -712,7 +747,7 @@ impl Signer {
                     PageWebSocketEvent::Binary { url, data }
                         if active_socket.as_deref() == Some(url.as_str()) =>
                     {
-                        match decode_live_frame(&url, &data) {
+                        match decode_frame(&url, &data) {
                             Ok(events) => {
                                 for event in events {
                                     if tx.send(Ok(event)).is_err() {
@@ -1303,9 +1338,64 @@ fn is_webcast_socket(url: &str) -> bool {
 }
 
 fn decode_live_frame(url: &str, data: &[u8]) -> Result<Vec<DecodedLiveEvent>, SignError> {
+    let Some((frame_log_id, batch)) = decode_event_batch(data)? else {
+        return Ok(Vec::new());
+    };
+
+    batch
+        .messages
+        .into_iter()
+        .map(|message| {
+            let event = message
+                .decode_event()
+                .map_err(|error| SignError::Decode(format!("{}: {error}", message.method)))?;
+            Ok(DecodedLiveEvent {
+                socket_url: url.to_owned(),
+                frame_log_id,
+                message_id: message.message_id,
+                method: message.method,
+                event,
+            })
+        })
+        .collect()
+}
+
+fn decode_schema_frame(url: &str, data: &[u8]) -> Result<Vec<DecodedSchemaEvent>, SignError> {
+    let Some((frame_log_id, batch)) = decode_event_batch(data)? else {
+        return Ok(Vec::new());
+    };
+
+    batch
+        .messages
+        .into_iter()
+        .map(|message| {
+            debug!(
+                method = %message.method,
+                payload_bytes = message.payload.len(),
+                "decoding page message with generated schema registry"
+            );
+            let event = decode_webcast_message(&message.method, &message.payload)
+                .map_err(|error| SignError::Decode(format!("{}: {error}", message.method)))?;
+            debug!(
+                method = %message.method,
+                schema = event.schema_name(),
+                "decoded page message with generated schema registry"
+            );
+            Ok(DecodedSchemaEvent {
+                socket_url: url.to_owned(),
+                frame_log_id,
+                message_id: message.message_id,
+                method: message.method,
+                event,
+            })
+        })
+        .collect()
+}
+
+fn decode_event_batch(data: &[u8]) -> Result<Option<(u64, WebcastEventBatch)>, SignError> {
     let frame = PushFrame::decode(data).map_err(|error| SignError::Decode(error.to_string()))?;
     if !frame.is_message() {
-        return Ok(Vec::new());
+        return Ok(None);
     }
 
     let payload =
@@ -1317,27 +1407,12 @@ fn decode_live_frame(url: &str, data: &[u8]) -> Result<Vec<DecodedLiveEvent>, Si
                 .map_err(|error| SignError::Decode(format!("gzip event payload: {error}")))?;
             decoded
         } else {
-            frame.payload
+            frame.payload.clone()
         };
 
     let batch = WebcastEventBatch::decode(&payload)
         .map_err(|error| SignError::Decode(format!("event batch: {error}")))?;
-    batch
-        .messages
-        .into_iter()
-        .map(|message| {
-            let event = message
-                .decode_event()
-                .map_err(|error| SignError::Decode(format!("{}: {error}", message.method)))?;
-            Ok(DecodedLiveEvent {
-                socket_url: url.to_owned(),
-                frame_log_id: frame.log_id,
-                message_id: message.message_id,
-                method: message.method,
-                event,
-            })
-        })
-        .collect()
+    Ok(Some((frame.log_id, batch)))
 }
 
 /// Align parameters signed by Rust with the environment seen by the real WebView.
@@ -1575,6 +1650,59 @@ mod tests {
             &events[0].event,
             LiveEvent::Chat { user, content }
                 if user.display_id == "grace_live" && content == "hello from live"
+        ));
+    }
+
+    #[test]
+    fn decodes_schema_events_from_a_page_websocket_frame() {
+        const CHAT_CONTENT_FIELD: u32 = 3;
+        const MESSAGE_METHOD_FIELD: u32 = 1;
+        const MESSAGE_PAYLOAD_FIELD: u32 = 2;
+        const MESSAGE_ID_FIELD: u32 = 3;
+        const BATCH_MESSAGES_FIELD: u32 = 1;
+        const FRAME_LOG_ID: u64 = 6;
+        const MESSAGE_ID: u64 = 12;
+
+        let chat = Writer::new()
+            .str_field(CHAT_CONTENT_FIELD, "hello from the schema registry")
+            .clone()
+            .finish();
+        let message = Writer::new()
+            .str_field(MESSAGE_METHOD_FIELD, "WebcastChatMessage")
+            .bytes_field(MESSAGE_PAYLOAD_FIELD, &chat)
+            .u64_field(MESSAGE_ID_FIELD, MESSAGE_ID)
+            .clone()
+            .finish();
+        let batch = Writer::new()
+            .bytes_field(BATCH_MESSAGES_FIELD, &message)
+            .clone()
+            .finish();
+        let frame = PushFrame {
+            log_id: FRAME_LOG_ID,
+            payload_encoding: "pb".into(),
+            payload_type: "msg".into(),
+            payload: batch,
+            ..Default::default()
+        };
+
+        let events = decode_schema_frame("wss://example.test/webcast/im/", &frame.encode())
+            .expect("schema event decoding");
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].frame_log_id, FRAME_LOG_ID);
+        assert_eq!(events[0].message_id, MESSAGE_ID);
+        assert!(matches!(
+            &events[0].event,
+            SchemaMessage { fields, .. }
+                if matches!(
+                    fields.as_slice(),
+                    [ttl_sign_core::SchemaField {
+                        number: CHAT_CONTENT_FIELD,
+                        name: Some("Content"),
+                        value: ttl_sign_core::SchemaValue::Text(content),
+                    }]
+                    if content == "hello from the schema registry"
+                )
         ));
     }
 }

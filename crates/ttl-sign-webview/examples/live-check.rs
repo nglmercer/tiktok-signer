@@ -26,7 +26,10 @@ use std::time::{Duration, Instant};
 
 use flate2::read::GzDecoder;
 use ttl_sign_core::proto::{LiveEvent, PushFrame, WebcastEventBatch};
-use ttl_sign_webview::{run, session, EngineConfig, PageWebSocketEvent, Signer};
+use ttl_sign_core::SchemaValue;
+use ttl_sign_webview::{
+    run, session, DecodedSchemaEvent, EngineConfig, PageWebSocketEvent, Signer,
+};
 
 const PAGE_TRANSPORT_TIMEOUT: Duration = Duration::from_secs(45);
 const REQUIRED_MESSAGE_FRAMES: usize = 3;
@@ -150,6 +153,10 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
         .subscribe_page_websocket()
         .await
         .map_err(|e| format!("could not subscribe to page WebSocket: {e}"))?;
+    let mut schema_events = signer
+        .subscribe_schema_events()
+        .await
+        .map_err(|e| format!("could not subscribe to schema events: {e}"))?;
 
     let room_page = ttl_sign_core::room::live_page_url(&user);
     println!("\n[3/4] navigating to {room_page} …");
@@ -167,6 +174,8 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
     let mut message_frames = 0usize;
     let mut decoded_events = 0usize;
     let mut decode_errors = 0usize;
+    let mut schema_event_count = 0usize;
+    let mut schema_decode_errors = 0usize;
 
     loop {
         tokio::select! {
@@ -226,7 +235,10 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
                                             println!("        event batch decode failed: {error}");
                                         }
                                     }
-                                    if message_frames >= REQUIRED_MESSAGE_FRAMES && decoded_events > 0 {
+                                    if message_frames >= REQUIRED_MESSAGE_FRAMES
+                                        && decoded_events > 0
+                                        && schema_event_count > 0
+                                    {
                                         break;
                                     }
                                 }
@@ -261,6 +273,27 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
                     _ => {}
                 }
             }
+            schema_event = schema_events.recv() => {
+                let Some(schema_event) = schema_event else {
+                    return Err("schema event relay closed before the WebView".into());
+                };
+                match schema_event {
+                    Ok(event) => {
+                        schema_event_count += 1;
+                        print_schema_event(&event);
+                        if message_frames >= REQUIRED_MESSAGE_FRAMES
+                            && decoded_events > 0
+                            && schema_event_count > 0
+                        {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        schema_decode_errors += 1;
+                        println!("        [schema-decode-error] {error}");
+                    }
+                }
+            }
         }
     }
 
@@ -287,10 +320,17 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
              ({decode_errors} decode failures)"
         ));
     }
+    if schema_event_count == 0 {
+        return Err(format!(
+            "decoded {decoded_events} reduced events but no full-schema event \
+             ({schema_decode_errors} schema decode failures)"
+        ));
+    }
 
     println!(
-        "\nOK: decoded {decoded_events} live events from {message_frames} message frames \
-         for @{user}; no Euler or custom signing endpoint was used."
+        "\nOK: decoded {decoded_events} reduced events and {schema_event_count} schema events \
+         from {message_frames} message frames for @{user}; no Euler or custom signing endpoint \
+         was used."
     );
     Ok(())
 }
@@ -364,6 +404,20 @@ fn print_event(message_id: u64, event: &LiveEvent) {
         } => println!(
             "        [unknown] id={message_id} method={method} payload={payload_len} bytes"
         ),
+    }
+}
+
+fn print_schema_event(event: &DecodedSchemaEvent) {
+    println!(
+        "        [schema] id={} method={} type={}",
+        event.message_id,
+        event.method,
+        event.event.schema_name()
+    );
+    if let Some(field) = event.event.field_named("content") {
+        if let SchemaValue::Text(content) = &field.value {
+            println!("          content={}", one_line(content));
+        }
     }
 }
 

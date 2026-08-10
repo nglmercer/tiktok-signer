@@ -120,6 +120,33 @@ impl<'a> WireValue<'a> {
     }
 }
 
+/// Owned protobuf value for methods that are newer than the bundled schema snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RawProtoValue {
+    Varint(u64),
+    Fixed64(u64),
+    Fixed32(u32),
+    Bytes(Vec<u8>),
+}
+
+impl<'a> From<WireValue<'a>> for RawProtoValue {
+    fn from(value: WireValue<'a>) -> Self {
+        match value {
+            WireValue::Varint(value) => Self::Varint(value),
+            WireValue::Fixed64(value) => Self::Fixed64(value),
+            WireValue::Fixed32(value) => Self::Fixed32(value),
+            WireValue::Bytes(value) => Self::Bytes(value.to_vec()),
+        }
+    }
+}
+
+/// One field of a protobuf message decoded without a schema.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawProtoField {
+    pub number: u32,
+    pub value: RawProtoValue,
+}
+
 /// Iterate over protobuf message fields without knowing the schema.
 pub struct Reader<'a> {
     buf: &'a [u8],
@@ -129,6 +156,11 @@ pub struct Reader<'a> {
 impl<'a> Reader<'a> {
     pub fn new(buf: &'a [u8]) -> Self {
         Self { buf, pos: 0 }
+    }
+
+    /// Whether unread bytes remain in the protobuf message.
+    pub fn has_remaining(&self) -> bool {
+        self.pos < self.buf.len()
     }
 
     fn varint(&mut self) -> Result<u64, ProtoError> {
@@ -157,7 +189,7 @@ impl<'a> Reader<'a> {
 
     /// Next field, or `None` at the end of the message.
     pub fn next_field(&mut self) -> Option<Result<(u32, WireValue<'a>), ProtoError>> {
-        if self.pos >= self.buf.len() {
+        if !self.has_remaining() {
             return None;
         }
         Some(self.read_field())
@@ -290,6 +322,23 @@ pub fn describe(buf: &[u8]) -> Result<Vec<(u32, &'static str, usize)>, ProtoErro
         out.push((number, kind, size));
     }
     Ok(out)
+}
+
+/// Decode every protobuf field without assigning semantic names.
+///
+/// This preserves new TikTok methods for callers until a future schema snapshot maps them to
+/// generated types.
+pub fn decode_raw_fields(buf: &[u8]) -> Result<Vec<RawProtoField>, ProtoError> {
+    let mut fields = Vec::new();
+    let mut reader = Reader::new(buf);
+    while let Some(field) = reader.next_field() {
+        let (number, value) = field?;
+        fields.push(RawProtoField {
+            number,
+            value: value.into(),
+        });
+    }
+    Ok(fields)
 }
 
 // --- ProtoMessageFetchResult ------------------------------------------------------

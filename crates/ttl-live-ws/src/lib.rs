@@ -371,7 +371,7 @@ impl LiveConnection {
 fn map_handshake_error(err: tokio_tungstenite::tungstenite::Error) -> WsError {
     use tokio_tungstenite::tungstenite::Error;
     match err {
-        Error::Http(response) if response.status().as_u16() == u16::from(HTTP_OK) => {
+        Error::Http(response) if response.status().as_u16() == HTTP_OK => {
             let msg = response
                 .headers()
                 .get("Handshake-Msg")

@@ -33,6 +33,10 @@ name = "live-check"
 path = "examples/live-check.rs"
 
 [[example]]
+name = "schema-check"
+path = "examples/schema-check.rs"
+
+[[example]]
 name = "page-probe"
 path = "examples/page-probe.rs"
 

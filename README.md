@@ -14,7 +14,7 @@ received room-entry, heartbeat, and `msg` frames without Euler and without calli
 
 | Crate | Status |
 |---|---|
-| `ttl-sign-core` | Presets, queries, cookie jar, `SignOutcome`, and minimal protobuf decoding. |
+| `ttl-sign-core` | Presets, queries, cookie jar, `SignOutcome`, a stable event subset, and generated schema bindings with bounded dynamic decoding. |
 | `ttl-sign-webview` | Wry engine, JS bridge, session bootstrap, navigation, and page-WebSocket relay. |
 | `ttl-live-ws` | WebSocket client with heartbeat, acknowledgements, and typed rejection handling. |
 | `ttl-sign-server` | `GET /webcast/fetch` and `GET /healthz` endpoints. |
@@ -38,6 +38,14 @@ received room-entry, heartbeat, and `msg` frames without Euler and without calli
 The old `/webcast/im/fetch/` replay remains diagnostic code but is no longer on the
 live-check critical path. It is unreliable because TikTok may return a silent empty-body
 rejection even with an authenticated session.
+
+### Schema coverage
+
+`ttl-sign-core` builds the bundled MIT-licensed TikTokLiveSharp snapshot into 477 generated
+protobuf message bindings and descriptors for 134 `Webcast*` page-message methods. The dynamic
+listener exposes known field names and values while retaining unknown fields structurally; the
+generated types are also available under `ttl_sign_core::tik_tok` for trusted, explicit decoding.
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution.
 
 ## Tools
 
@@ -71,6 +79,9 @@ cargo run -p ttl-live-ws --example rooms -- user1 user2
 # Full flow against a live channel
 cargo run -p ttl-sign-webview --example live-check
 cargo run -p ttl-sign-webview --example live-check -- user
+
+# Verify schema-registry decoding against a live channel
+cargo run -p ttl-sign-webview --example schema-check -- user
 
 # Replay a captured request
 cargo run -p ttl-live-ws --example replay -- fixtures/f0/im_fetch.curl

@@ -3,7 +3,7 @@
 The system is split into four crates:
 
 - `ttl-sign-core`: pure data types, ordered queries, cookies, presets, room lookup,
-  and the minimal protobuf codec.
+  a stable protobuf event subset, and generated schema bindings with bounded dynamic decoding.
 - `ttl-sign-webview`: Wry/WebKitGTK event loop, initialization bridge, session cookies,
   navigation, and page-owned WebSocket relay.
 - `ttl-live-ws`: signed WebSocket URI construction, handshake, room entry, heartbeats,
@@ -18,6 +18,11 @@ open/frame/close events to Rust. TikTok's page owns signing, room entry, and hea
 
 The older signed-fetch replay path remains available for diagnostics and compatibility,
 but the primary transport does not depend on it.
+
+The core crate builds the bundled MIT-licensed schema snapshot during compilation. It exposes
+generated types under `ttl_sign_core::tik_tok` and uses descriptor-driven, bounded decoding for
+page-owned WebSocket traffic, so a future field or method remains observable instead of making
+the listener depend on a stale recursive generated type.
 
 One WebView owns one cookie session. Sessions must not be shared between rooms because
 that increases rate-limit and anti-bot risk.
