@@ -1,5 +1,6 @@
 /target
-Cargo.lock
+/fuzz/Cargo.lock
+/fuzz/target
 **/node_modules
 # fixtures and NOTES.md.
 /fixtures/*
@@ -7,3 +8,5 @@ Cargo.lock
 # Event fixtures are versioned: the tests must run on a fresh clone, and unlike
 # the raw captures these files carry no cookies. See fixtures/NOTES.md.
 !/fixtures/events/
+!/fixtures/signing/
+!/fixtures/research/

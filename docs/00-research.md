@@ -2,8 +2,10 @@
 
 ## Scope
 
-This project uses TikTok's own live page as the transport owner. It does not reimplement
-the signing algorithm and does not depend on a proprietary signing service.
+The current live path uses TikTok's own page as the transport owner and does not depend on a
+proprietary signing service. In parallel, the signing research track uses that page as a
+sanitized oracle while building a reproducible native/headless implementation. See
+`09-signing-research.md` for the confirmed boundary and current evidence.
 
 ## Connection flow
 

@@ -1,0 +1,13 @@
+[package]
+name = "ttl-sign-native"
+description = "Staged native/headless signing pipeline."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+ttl-sign-core = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

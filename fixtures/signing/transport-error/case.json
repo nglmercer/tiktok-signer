@@ -1,0 +1,18 @@
+{
+  "fixture_version": 1,
+  "case_id": "transport-error-001",
+  "description": "Upstream transport failure",
+  "request": { "room_id": "7300000000000000007" },
+  "environment": {
+    "preset": "chrome-linux",
+    "user_agent": "fixture-agent/1",
+    "session": "guest"
+  },
+  "expected": {
+    "outcome": "error",
+    "error": {
+      "kind": "transport",
+      "message": "fixture-connection-reset"
+    }
+  }
+}

@@ -4,7 +4,7 @@
 //! built manually on a separate thread. `#[tokio::main]` **does not** work here.
 //!
 //! ```sh
-//! TTL_BIND=0.0.0.0:8080 cargo run -p ttl-sign-server
+//! TTL_BIND=0.0.0.0:8080 cargo run -p ttl-sign-server --features webview
 //! ```
 //!
 //! Pointing a TikTokLive Python client at this server is the F3 acceptance criterion:

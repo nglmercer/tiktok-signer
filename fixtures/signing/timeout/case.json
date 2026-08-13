@@ -1,0 +1,20 @@
+{
+  "fixture_version": 1,
+  "case_id": "timeout-001",
+  "description": "Deterministic backend timeout for HTTP error mapping",
+  "request": {
+    "room_id": "7300000000000000003"
+  },
+  "environment": {
+    "preset": "chrome-linux",
+    "user_agent": "fixture-agent/1",
+    "session": "guest"
+  },
+  "expected": {
+    "outcome": "error",
+    "error": {
+      "kind": "timeout",
+      "milliseconds": 15000
+    }
+  }
+}

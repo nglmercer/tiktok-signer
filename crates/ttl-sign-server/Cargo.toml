@@ -9,10 +9,22 @@ license.workspace = true
 [[bin]]
 name = "ttl-sign-server"
 path = "src/main.rs"
+required-features = ["webview"]
+
+[[bin]]
+name = "ttl-sign-replay-server"
+path = "src/replay_main.rs"
+required-features = ["replay"]
+
+[features]
+default = []
+webview = ["dep:ttl-sign-webview"]
+replay = ["dep:ttl-sign-replay"]
 
 [dependencies]
 ttl-sign-core = { workspace = true }
-ttl-sign-webview = { workspace = true }
+ttl-sign-webview = { workspace = true, optional = true }
+ttl-sign-replay = { workspace = true, optional = true }
 
 anyhow = { workspace = true }
 serde = { workspace = true }
@@ -22,3 +34,8 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 axum = "0.8"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+ttl-sign-replay = { workspace = true }
+ttl-sign-native = { workspace = true }

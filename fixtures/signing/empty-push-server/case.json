@@ -1,0 +1,15 @@
+{
+  "fixture_version": 1,
+  "case_id": "empty-push-server-001",
+  "description": "Silent rejection with no usable push server",
+  "request": { "room_id": "7300000000000000008" },
+  "environment": {
+    "preset": "chrome-linux",
+    "user_agent": "fixture-agent/1",
+    "session": "guest"
+  },
+  "expected": {
+    "outcome": "rejected",
+    "reason": { "kind": "empty_push_server" }
+  }
+}

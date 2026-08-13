@@ -1,0 +1,489 @@
+{
+  "profile_version": 1,
+  "observed_on": "2026-08-13",
+  "session": "guest_incognito",
+  "sdk_global": "window.byted_acrawler",
+  "sdk_version_property": null,
+  "symbols": [
+    "frontierSign",
+    "getReferer",
+    "init",
+    "isWebmssdk",
+    "registerWsSigner",
+    "report",
+    "setTTWebid",
+    "setTTWebidV2",
+    "setTTWid",
+    "setUserMode"
+  ],
+  "bundle": {
+    "endpoint": "https://sf16-website-login.neutral.ttwstatic.com/obj/tiktok_web_login_static/webmssdk/1.0.0.388/webmssdk.js",
+    "sha256": "dee22566273d398e074df6db40f39cfd827f6b8efd6fc382de03c44c501299ac",
+    "bytes": 235357
+  },
+  "vm": {
+    "compressed_bytecode_bytes": 48610,
+    "bytecode_bytes": 94030,
+    "bytecode_sha256": "bc791ca2d4704d407ed36269b9bb758f807377915f90d34d007216de6620e8ff",
+    "opcode_table_slots": 355,
+    "string_table_slots": 1001,
+    "numeric_constant_slots": 180,
+    "opcode_catalog": {
+      "handler_slots": 355,
+      "frontier_observed_handlers": 170,
+      "fetch_observed_handlers": 239,
+      "operand_helper_widths": [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 18, 20],
+      "catalogue_fields": [
+        "source_bytes",
+        "helper_reads",
+        "calls_vm",
+        "reads_window",
+        "reads_document",
+        "reads_storage",
+        "reads_crypto",
+        "reads_fetch",
+        "handler_tags",
+        "visited",
+        "operand_widths",
+        "operand_examples"
+      ],
+      "trace_schema_version": 2,
+      "trace_fields": {
+        "function_steps": [
+          "function_entry",
+          "offset",
+          "opcode",
+          "width",
+          "operand_values",
+          "operand_bytes"
+        ],
+        "vm_calls": [
+          "entry",
+          "parent",
+          "phase",
+          "type",
+          "bytes",
+          "object_keys"
+        ],
+        "vm_inputs": [
+          "entry",
+          "parent",
+          "argument_type",
+          "argument_bytes",
+          "argument_value_class",
+          "argument_object_keys"
+        ]
+      }
+    },
+    "entry_points": {
+      "frontierSign": {
+        "offset": 69021,
+        "frame_size": 25
+      },
+      "registerWsSigner": {
+        "offset": 69906,
+        "frame_size": 31
+      },
+      "init": {
+        "offset": 94000,
+        "frame_size": 11
+      }
+    },
+    "dynamic_observations": {
+      "frontier_sign": {
+        "first_offset": 69021,
+        "observed_opcode_executions": [1609]
+      },
+      "fetch_patch_with_stub_transport": {
+        "first_offset": 61096,
+        "observed_opcode_executions": [40723, 40768]
+      }
+    },
+    "route_frame_map": {
+      "frontier_X-Bogus": {
+        "phase": "invocation",
+        "public_entry": 69021,
+        "entries": [69021, 69171, 67569, 68501],
+        "step_counts": {
+          "69021": 10,
+          "69171": 9,
+          "67569": 74,
+          "68501": 100
+        },
+        "call_edges": ["56>69021", "69021>69171", "56>67569", "67569>68501"],
+        "result_shapes": {
+          "69021": {
+            "type": "object",
+            "object_keys": ["X-Bogus"]
+          },
+          "67569": {
+            "type": "string",
+            "bytes": 16
+          },
+          "68501": {
+            "type": "string",
+            "bytes": 16
+          }
+        }
+      },
+      "msToken": {
+        "phase": "eval",
+        "entries": [8039, 91717, 92825],
+        "init_entry": 94000,
+        "call_edges": ["56>91717", "91717>92825"],
+        "step_counts": {
+          "8039": 1,
+          "91717": 28,
+          "92825": 1,
+          "94000": 2
+        },
+        "input_shapes": {
+          "8039": {
+            "type": "string",
+            "bytes": 4
+          },
+          "91717": {
+            "argument_count": 0
+          },
+          "92825": {
+            "argument_count": 0
+          }
+        },
+        "external_reference_flags": {
+          "8039": {
+            "reads_window": true,
+            "reads_storage": true
+          },
+          "91717": {
+            "calls_vm": true
+          }
+        },
+        "note": "The two msToken-shaped returns are produced while evaluating the bundle; the public init wrapper is a separate frame. The trace retains phase and call edges, never token bytes."
+      },
+      "X-Dynosaur": {
+        "phase": "invocation",
+        "entries": [55188],
+        "step_counts": {
+          "55188": 98
+        },
+        "input_shape": {
+          "type": "object",
+          "value_class": "typed_array",
+          "bytes": 4,
+          "object_keys": ["0", "1", "2", "3"]
+        },
+        "call_edges": ["56>55188", "55188>57048", "55188>57451", "55188>57471", "55188>58048"],
+        "note": "The direct route receives a four-byte typed-array-shaped input and returns the variable-length Dynosaur-shaped string."
+      },
+      "X-Gnarly": {
+        "phase": "invocation",
+        "entries": [48886],
+        "step_counts": {
+          "48886": 383
+        },
+        "input_shape": {
+          "type": "string",
+          "bytes": 1274
+        },
+        "call_edges": ["56>48886", "48886>50818", "48886>50838", "48886>50858", "48886>51033"],
+        "note": "The direct route receives a canonical-input-shaped string; its byte length changes with cookie/query/environment mutations while the observed output shape remains 332 bytes."
+      },
+      "fetch_assembly": {
+        "phase": "invocation",
+        "entry": 58628,
+        "step_counts": {
+          "58628": 34
+        },
+        "call_edges": ["56>58628", "58628>59051", "58628>59053"],
+        "operand_widths": [4, 6, 8, 10, 12, 14, 16]
+      }
+    }
+  },
+  "frontier_sign_probe": {
+    "parameters": [
+      {
+        "name": "X-Bogus",
+        "observed_byte_lengths": [16]
+      }
+    ]
+  },
+  "fetch_patch": {
+    "added_parameters_in_order": [
+      "X-Dynosaur",
+      "msToken",
+      "X-Bogus",
+      "X-Gnarly"
+    ],
+    "slots": [
+      {
+        "name": "X-Dynosaur",
+        "stability": "varies",
+        "observed_byte_lengths": [388, 392, 444]
+      },
+      {
+        "name": "msToken",
+        "stability": "varies",
+        "observed_byte_lengths": [124, 132, 152, 156, 172]
+      },
+      {
+        "name": "X-Bogus",
+        "stability": "stable",
+        "observed_byte_lengths": [1]
+      },
+      {
+        "name": "X-Gnarly",
+        "stability": "varies",
+        "observed_byte_lengths": [332]
+      }
+    ]
+  },
+  "controlled_probe_observations": {
+    "timestamp_fixed": {
+      "timestamp_ms": 1700000000000,
+      "repetitions": 3,
+      "observed_clock_ms": [1700000000000],
+      "result_parameter_order": ["X-Dynosaur", "msToken", "X-Bogus", "X-Gnarly"],
+      "observed_lengths": {
+        "X-Dynosaur": [388, 392],
+        "msToken": [124],
+        "X-Bogus": [1],
+        "X-Gnarly": [332]
+      }
+    },
+    "cookie_msToken_alpha": {
+      "repetitions": 3,
+      "cookie_name": "msToken",
+      "probe_value_class": "fixed_non_secret_alpha",
+      "baseline_lengths": {
+        "msToken": [124],
+        "X-Dynosaur": [388],
+        "X-Bogus": [1],
+        "X-Gnarly": [332]
+      },
+      "probe_lengths": {
+        "msToken": [132],
+        "X-Dynosaur": [388],
+        "X-Bogus": [1],
+        "X-Gnarly": [332]
+      },
+      "changed_candidate_entries": [8039, 92825],
+      "note": "The synthetic cookie changed the msToken-shaped route length in all three paired fresh-identity runs; raw cookie and signature values were not retained."
+    }
+  },
+  "trace_shape_observations": {
+    "schema": {
+      "msToken": {
+        "entry": 8039,
+        "phase": "eval",
+        "input": {
+          "type": "string",
+          "bytes": 4
+        }
+      },
+      "X-Dynosaur": {
+        "entry": 55188,
+        "phase": "invocation",
+        "input": {
+          "value_class": "typed_array",
+          "bytes": 4
+        }
+      },
+      "X-Gnarly": {
+        "entry": 48886,
+        "phase": "invocation"
+      },
+      "X-Bogus": {
+        "entry": 58628,
+        "phase": "invocation",
+        "result_bytes": 1
+      }
+    },
+    "baseline": {
+      "msToken_result_bytes": 124,
+      "X-Dynosaur_result_bytes": 388,
+      "X-Gnarly_input_bytes": 1274,
+      "X-Gnarly_result_bytes": 332,
+      "assembly_input_bytes": 786
+    },
+    "timestamp_fixed": {
+      "msToken_result_bytes": 124,
+      "X-Dynosaur_result_bytes": 388,
+      "X-Gnarly_input_bytes": 1274,
+      "X-Gnarly_result_bytes": 332,
+      "assembly_input_bytes": 786
+    },
+    "cookie_msToken_alpha": {
+      "msToken_result_bytes": 132,
+      "X-Dynosaur_result_bytes": 388,
+      "X-Gnarly_input_bytes": 1282,
+      "X-Gnarly_result_bytes": 332,
+      "assembly_input_bytes": 786
+    },
+    "query_duplicate_room_id": {
+      "msToken_result_bytes": 124,
+      "X-Dynosaur_result_bytes": 388,
+      "X-Gnarly_input_bytes": 1302,
+      "X-Gnarly_result_bytes": 332,
+      "assembly_input_bytes": 814
+    },
+    "query_remove_notice": {
+      "msToken_result_bytes": 124,
+      "X-Dynosaur_result_bytes": 388,
+      "X-Gnarly_input_bytes": 1248,
+      "X-Gnarly_result_bytes": 332,
+      "assembly_input_bytes": 760
+    },
+    "query_empty_region": {
+      "msToken_result_bytes": 124,
+      "X-Dynosaur_result_bytes": 388,
+      "X-Gnarly_input_bytes": 1272,
+      "X-Gnarly_result_bytes": 332,
+      "assembly_input_bytes": 784
+    },
+    "query_room_id_first": {
+      "msToken_result_bytes": 124,
+      "X-Dynosaur_result_bytes": 388,
+      "X-Gnarly_input_bytes": 1274,
+      "X-Gnarly_result_bytes": 332,
+      "assembly_input_bytes": 786
+    },
+    "language_es": {
+      "effective_language": "es",
+      "msToken_result_bytes": 124,
+      "X-Dynosaur_result_bytes": 388,
+      "X-Gnarly_input_bytes": 1274,
+      "X-Gnarly_result_bytes": 332,
+      "assembly_input_bytes": 786
+    },
+    "timezone_lima": {
+      "effective_tz_name": "America/Lima",
+      "msToken_result_bytes": 124,
+      "X-Dynosaur_result_bytes": 388,
+      "X-Gnarly_input_bytes": 1270,
+      "X-Gnarly_result_bytes": 332,
+      "assembly_input_bytes": 782
+    },
+    "platform_win32": {
+      "effective_browser_platform": "Win32",
+      "msToken_result_bytes": 124,
+      "X-Dynosaur_result_bytes": 388,
+      "X-Gnarly_input_bytes": 1265,
+      "X-Gnarly_result_bytes": 332,
+      "assembly_input_bytes": 777
+    },
+    "screen_width_1366": {
+      "effective_screen_width": 1366,
+      "msToken_result_bytes": 124,
+      "X-Dynosaur_result_bytes": 388,
+      "X-Gnarly_input_bytes": 1274,
+      "X-Gnarly_result_bytes": 332,
+      "assembly_input_bytes": 786
+    },
+    "browser_version_132": {
+      "msToken_result_bytes": 124,
+      "X-Dynosaur_result_bytes": 388,
+      "X-Gnarly_input_bytes": 1274,
+      "X-Gnarly_result_bytes": 332,
+      "assembly_input_bytes": 786
+    }
+  },
+  "subroute_candidates": {
+    "method": "runtime VM string-return lengths; candidates are not cryptographic proof",
+    "frontier_x_bogus": {
+      "entries": [88, 1075, 67569, 68501],
+      "observed_byte_lengths": [16],
+      "note": "These entries returned the 16-byte frontierSign result during the sampled path; the X-Bogus field key is decoded at string slot 658 inside nested frame 69171 (under public entry 69021), and 67569 also called 68501."
+    },
+    "fetch_msToken": {
+      "entries": [8039, 92825],
+      "observed_byte_lengths": [124, 132],
+      "baseline_observed_byte_lengths": [124],
+      "cookie_probe_observed_byte_lengths": [132],
+      "phase": "eval",
+      "wrapper_entry": 91717,
+      "init_entry": 94000,
+      "input_shape": {
+        "8039": {
+          "type": "string",
+          "bytes": 4
+        },
+        "91717": {
+          "argument_count": 0
+        },
+        "92825": {
+          "argument_count": 0
+        }
+      },
+      "note": "Entries 8039 and 92825 returned the msToken-shaped string during bundle evaluation; 91717 is the wrapper that calls 92825, and 94000 is the separate init entry."
+    },
+    "fetch_X-Dynosaur": {
+      "entries": [55188],
+      "observed_byte_lengths": [388, 392, 444],
+      "phase": "invocation",
+      "input_shape": {
+        "type": "object",
+        "value_class": "typed_array",
+        "bytes": 4,
+        "object_keys": ["0", "1", "2", "3"]
+      },
+      "note": "Entry 55188 returned the variable-length Dynosaur-shaped string from a four-byte typed-array-shaped input."
+    },
+    "fetch_X-Gnarly": {
+      "entries": [48886],
+      "observed_byte_lengths": [332],
+      "phase": "invocation",
+      "input_shape": {
+        "type": "string",
+        "baseline_bytes": 1274
+      },
+      "note": "Entry 48886 returned the 332-byte Gnarly-shaped string. Its canonical-input-shaped argument changed length under cookie, query, platform, and timezone probes."
+    },
+    "fetch_wrappers": {
+      "entries": [88, 1075, 8685],
+      "observed_byte_lengths": [332, 388, 392, 444],
+      "note": "These entries returned both the 332-byte Gnarly-shaped value and the variable Dynosaur-shaped value; treat them as composition/wrapper candidates."
+    },
+    "fetch_x_bogus": {
+      "entries": [58628],
+      "observed_byte_lengths": [1],
+      "value_class": "literal_one",
+      "note": "The composition frame writes and rereads a sanitized literal_one into the register paired with the X-Bogus key; no separate cryptographic generator was observed."
+    },
+    "fetch_assembly": {
+      "entry": 58628,
+      "field_key_slots": {
+        "X-Dynosaur": 656,
+        "msToken": 657,
+        "X-Bogus": 658,
+        "X-Gnarly": 660
+      },
+      "marker_slot": {
+        "name": "literal_one",
+        "slot": 659,
+        "observed_byte_length": 1,
+        "value_class": "literal_one"
+      },
+      "observed_cases": [
+        "baseline",
+        "timestamp-fixed",
+        "cookie-ms-token-alpha",
+        "query-duplicate-room-id",
+        "query-remove-notice",
+        "query-empty-region",
+        "query-room-id-first",
+        "language-es",
+        "timezone-lima",
+        "platform-win32",
+        "screen-width-1366",
+        "browser-version-132"
+      ],
+      "note": "The frame assembles the four fetch suffix fields; slot numbers and value classes are retained, never decoded string or signature values."
+    }
+  },
+  "excluded_candidate": {
+    "endpoint": "https://sf16-website-login.neutral.ttwstatic.com/obj/tiktok_web_login_static/secsdk/secsdk-lastest.umd.js",
+    "package": "@byted/secsdk",
+    "version": "1.2.22",
+    "reason": "CSRF SDK; it does not contain the observed signing entry points"
+  }
+}

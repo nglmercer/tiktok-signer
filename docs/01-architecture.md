@@ -1,14 +1,20 @@
 # 01 — Architecture
 
-The system is split into six crates:
+The system is split into nine crates:
 
 - `ttl-sign-core`: pure data types, ordered queries, cookies, presets, room lookup,
   a stable protobuf event subset, and generated schema bindings with bounded dynamic decoding.
 - `ttl-sign-webview`: Wry/WebKitGTK event loop, initialization bridge, session cookies,
-  navigation, and page-owned WebSocket relay.
+  navigation, and page-owned WebSocket relay. It implements the backend contract as the
+  optional live oracle.
+- `ttl-sign-replay`: versioned fixture loader and deterministic offline backend.
+- `ttl-sign-native`: staged headless request/environment/signing/transport pipeline. The
+  signing transformation remains an isolated, incomplete research boundary.
+- `ttl-sign-lab`: research-only observations, safe value digests, classified differences,
+  and oracle/candidate comparison.
 - `ttl-live-ws`: signed WebSocket URI construction, handshake, room entry, heartbeats,
   acknowledgements, and frame decoding.
-- `ttl-sign-server`: thin HTTP integration layer exposing the signer.
+- `ttl-sign-server`: thin backend-agnostic HTTP integration layer.
 - `ttl-live-proto`: Prost bindings generated from the vendored TikTok Webcast **v3**
   schemas. Schema only — no transport, no normalisation.
 - `ttl-live-events`: normalises decoded messages into a stable, version-independent
@@ -48,12 +54,31 @@ their licence, which is **not** MIT.
 
 ## Design decisions
 
+The server depends only on the capability-specific `ttl_sign_core::SignerBackend` contract:
+
+```text
+ttl-sign-server -> SignerBackend
+                     |-- WebView Signer (live oracle)
+                     |-- ReplayBackend (offline integration)
+                     |-- NativeBackend (headless target)
+                     `-- MockBackend (unit tests)
+```
+
+The contract takes a `TransportRequest` and returns the existing three-way `SignOutcome`.
+Browser navigation, IPC, room discovery, and gift lookup are deliberately absent. The HTTP
+library therefore compiles and its contract tests run without Wry or WebKitGTK. The live
+binary enables the `webview` feature explicitly; the offline binary enables `replay`.
+
+Default workspace members exclude `ttl-sign-webview`. `cargo test` is the normal headless
+suite; live-oracle compilation and execution are separate, explicit checks.
+
 The WebView initialization script is installed before TikTok page scripts. It wraps the
 native WebSocket constructor, leaves TikTok's connection behavior intact, and mirrors
 open/frame/close events to Rust. TikTok's page owns signing, room entry, and heartbeats.
 
-The older signed-fetch replay path remains available for diagnostics and compatibility,
-but the primary transport does not depend on it.
+The older live signed-fetch replay path remains available for diagnostics and compatibility.
+It is separate from `ReplayBackend`, which never uses the network and replays only sanitized
+observable fixture data.
 
 `ttl-live-proto` builds the pinned v3 schemas during compilation, emitting both generated
 types (under `ttl_live_proto::v3`) and a descriptor registry. `ttl-live-events` uses that
@@ -69,4 +94,25 @@ requests through an event-loop proxy. The WebSocket crate does not reconnect int
 signed URLs expire and the orchestrator must start a fresh flow.
 
 The server returns typed rejection responses instead of treating an empty HTTP 200 body
-as a successful payload.
+as a successful payload. Mock, replay, and native backends run through a shared behavioral
+contract suite.
+
+## Research data safety
+
+Signing fixtures live under `fixtures/signing/<case>/case.json` and carry
+`fixture_version: 1`. The loader rejects unsupported versions, duplicate requests,
+incomplete successful transports, signed query strings, mixed identities, and sensitive
+values that are not replaced by `fixture-*` placeholders. Unknown requests fail explicitly.
+
+`ttl-sign-lab` removes URL queries and serializes sensitive values only as SHA-256 digests
+plus byte lengths. Its JSON includes backend/runtime/OS/timestamp/sanitization metadata and
+classified differences instead of a single match bit.
+
+Experiment plans are schema-versioned and typed. Every non-baseline case must differ from
+the baseline in exactly one declared request, signing, or environment field; zero- and
+multi-variable changes are rejected before a browser starts. Individual traces use a fresh
+incognito guest WebView. Query differentials deliberately interleave baseline and experiment
+inside one ephemeral identity so browser-state differences do not dominate the comparison.
+Captures are create-new and contain a sanitized replay case plus a structured observation.
+Sensitive declared signing fields are represented by equality-preserving digests, not copied
+verbatim.

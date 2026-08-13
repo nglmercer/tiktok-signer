@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release -p ttl-sign-server
+RUN cargo build --release -p ttl-sign-server --bin ttl-sign-server --features webview
 
 
 FROM debian:bookworm-slim AS runtime

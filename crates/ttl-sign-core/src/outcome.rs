@@ -41,15 +41,19 @@ impl std::fmt::Display for RejectReason {
 }
 
 /// Failures that **can** be transient or configuration-related, never detection.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SignError {
     /// `window.byted_acrawler` did not appear before the deadline.
     #[error("TikTok SDK was not ready before the deadline")]
     SdkNotReady,
 
-    /// The pool has no available instance.
-    #[error("no WebView instance is available")]
+    /// The pool has no available signer instance.
+    #[error("no signer backend instance is available")]
     NoInstanceAvailable,
+
+    /// A backend is present but cannot serve this request.
+    #[error("signer backend is unavailable: {0}")]
+    BackendUnavailable(String),
 
     /// The page returned a JavaScript error.
     #[error("page error: {0}")]
@@ -95,7 +99,7 @@ impl SignError {
 }
 
 /// The three possible signing outcomes. There is no fourth.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SignOutcome {
     /// Valid signature.
     Ok(SignedFetch),

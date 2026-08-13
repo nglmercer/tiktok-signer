@@ -1,10 +1,12 @@
 # tiktok-signer
 
-Self-hosted TikTok LIVE transport written in Rust. A Wry WebView runs TikTok's page and
-relays its already-authenticated WebSocket frames to Rust over IPC.
+Self-hosted TikTok LIVE transport written in Rust. Signing implementations now sit behind
+a backend contract: deterministic replay and native-pipeline tests are headless, while a
+Wry WebView remains available as the live reference oracle.
 
-**Primary objective:** receive TikTok LIVE protobuf frames without a proprietary sign
-server or a reimplementation of TikTok's anti-bot signatures.
+**Primary objective:** replace the proprietary sign server with a reproducible native,
+headless signing path. The WebView remains the reference oracle until every required SDK
+stage converges.
 
 ## Status
 
@@ -15,9 +17,70 @@ received room-entry, heartbeat, and `msg` frames without Euler and without calli
 | Crate | Status |
 |---|---|
 | `ttl-sign-core` | Presets, queries, cookie jar, `SignOutcome`, a stable event subset, and generated schema bindings with bounded dynamic decoding. |
+| `ttl-sign-replay` | Versioned, sanitized offline signing fixtures and `ReplayBackend`. |
+| `ttl-sign-native` | Deterministic staged native pipeline with an isolated signing-algorithm boundary. |
+| `ttl-sign-lab` | Safe structured observations and classified backend differential reports. |
 | `ttl-sign-webview` | Wry engine, JS bridge, session bootstrap, navigation, and page-WebSocket relay. |
 | `ttl-live-ws` | WebSocket client with heartbeat, acknowledgements, and typed rejection handling. |
 | `ttl-sign-server` | `GET /webcast/fetch`, `GET /webcast/rooms/{room_id}/connect` (Node client), and `GET /healthz`. |
+
+Default tests do not build or initialize WebView code. Run the deterministic server with:
+
+```sh
+cargo run -p ttl-sign-server --bin ttl-sign-replay-server --features replay
+```
+
+The live reference server remains explicit:
+
+```sh
+cargo run -p ttl-sign-server --bin ttl-sign-server --features webview
+```
+
+The workspace MSRV is Rust 1.86; CI runs the headless suite on that toolchain.
+
+### Controlled oracle research
+
+The research lab validates that every experiment changes exactly one input dimension. It
+runs each selected WebView case in a fresh process, strips signed URL queries, replaces raw
+cookie and transport values with deterministic placeholders, and refuses to overwrite a
+prior capture:
+
+```sh
+cargo run -p ttl-sign-lab --bin ttl-sign-plan -- fixtures/research/plan.example.json
+
+cargo run -p ttl-sign-lab --bin ttl-sign-oracle --features webview -- \
+  fixtures/research/plan.example.json baseline /tmp/ttl-oracle-captures
+
+cargo run -p ttl-sign-lab --bin ttl-sign-observation-diff -- \
+  /tmp/ttl-oracle-captures/baseline/observation.json \
+  /tmp/ttl-oracle-captures/timezone-lima/observation.json
+
+cargo run -p ttl-sign-lab --bin ttl-sign-url-oracle --features webview -- \
+  fixtures/research/plan.example.json baseline /tmp/ttl-oracle-captures
+
+cargo run -p ttl-sign-lab --bin ttl-sign-url-diff -- \
+  /tmp/ttl-oracle-captures/baseline-signing/signing-observation.json \
+  /tmp/ttl-oracle-captures/timezone-lima-signing/signing-observation.json
+
+cargo run -p ttl-sign-lab --bin ttl-sign-trace --features webview -- \
+  fixtures/research/plan.example.json baseline /tmp/ttl-sign-traces
+
+cargo run -p ttl-sign-lab --bin ttl-sign-paired-trace --features webview -- \
+  fixtures/research/plan.example.json query-duplicate-room-id /tmp/ttl-sign-paired
+
+cargo run -p ttl-sign-lab --bin ttl-sign-vm-trace --features webview -- \
+  fixtures/research/plan.example.json baseline fetch
+```
+
+The URL oracle triggers the browser's patched `fetch`, so the browser does issue the signed
+GET. Rust does not replay or consume its response. Artifacts contain parameter names plus
+value digests, never a reusable signed URL, raw cookie/signature value, or raw declared
+signing input. Repeated and paired traces separate stable structure from SDK entropy; see
+[`docs/09-signing-research.md`](docs/09-signing-research.md).
+
+The example room id is synthetic. Replace it only with a room you are authorized to test.
+Guest sessions are preferred; a configured account is loaded from the existing external
+session file and is never embedded in the plan or generated artifacts.
 
 > Protobuf field numbers are confirmed against a real response
 > (`2 = cursor`, `5 = internal_ext`, `7 = route_params`, `10 = push_server`).
@@ -197,7 +260,7 @@ that reacts to them.
 Stream:
 
 ```sh
-cargo run -p ttl-sign-server                      # terminal 1
+cargo run -p ttl-sign-server --features webview   # terminal 1
 cd examples/node-connector && npm install
 bun run verify-signer.ts <username>               # terminal 2
 npm run verify:node -- <username>                 # or tsx, on plain Node
@@ -263,7 +326,7 @@ stores the session at `$XDG_CONFIG_HOME/ttl-signer/session` with mode `0600`.
 ## Usage
 
 ```sh
-cargo test --workspace
+cargo test                                        # headless default members
 
 # Discover channels and resolve room IDs
 cargo run -p ttl-live-ws --example rooms -- user1 user2
@@ -279,7 +342,7 @@ cargo run -p ttl-sign-webview --example schema-check -- user
 cargo run -p ttl-live-ws --example replay -- fixtures/f0/im_fetch.curl
 
 # Start the sign server
-TTL_BIND=127.0.0.1:8080 cargo run -p ttl-sign-server
+TTL_BIND=127.0.0.1:8080 cargo run -p ttl-sign-server --features webview
 ```
 
 ## Deployment

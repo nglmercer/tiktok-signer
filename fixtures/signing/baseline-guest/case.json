@@ -1,0 +1,31 @@
+{
+  "fixture_version": 1,
+  "case_id": "baseline-guest-001",
+  "description": "Sanitized successful transport for offline server integration",
+  "request": {
+    "room_id": "7300000000000000001"
+  },
+  "environment": {
+    "preset": "chrome-linux",
+    "user_agent": "fixture-agent/1",
+    "session": "guest"
+  },
+  "expected": {
+    "outcome": "success",
+    "transport": {
+      "push_server": "wss://fixture.invalid/webcast/im/push/v2/",
+      "route_params": [
+        ["wrss", "fixture-route"],
+        ["imprp", "fixture-imprp"]
+      ],
+      "cursor": "fixture-cursor",
+      "internal_ext": "fixture-internal-ext",
+      "heartbeat_duration": 10000,
+      "need_ack": true
+    },
+    "cookies": [
+      ["msToken", "fixture-ms-token"],
+      ["ttwid", "fixture-ttwid"]
+    ]
+  }
+}

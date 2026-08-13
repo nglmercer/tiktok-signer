@@ -1,0 +1,15 @@
+{
+  "fixture_version": 1,
+  "case_id": "empty-body-001",
+  "description": "Silent upstream empty-body rejection",
+  "request": { "room_id": "7300000000000000004" },
+  "environment": {
+    "preset": "chrome-linux",
+    "user_agent": "fixture-agent/1",
+    "session": "guest"
+  },
+  "expected": {
+    "outcome": "rejected",
+    "reason": { "kind": "empty_body" }
+  }
+}

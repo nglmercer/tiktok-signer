@@ -1,0 +1,20 @@
+{
+  "fixture_version": 1,
+  "case_id": "room-not-found-001",
+  "description": "Observable upstream room-not-found response",
+  "request": {
+    "room_id": "7300000000000000002"
+  },
+  "environment": {
+    "preset": "chrome-linux",
+    "user_agent": "fixture-agent/1",
+    "session": "guest"
+  },
+  "expected": {
+    "outcome": "rejected",
+    "reason": {
+      "kind": "http_status",
+      "code": 404
+    }
+  }
+}

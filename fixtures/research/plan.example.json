@@ -1,0 +1,393 @@
+{
+  "plan_version": 1,
+  "baseline": {
+    "id": "baseline",
+    "description": "Baseline guest transport using the Linux WebView profile",
+    "request": {
+      "room_id": "7300000000000000000"
+    },
+    "signing": {
+      "device_id": "7123456789012345678",
+      "cursor": "",
+      "internal_ext": "",
+      "contact_us": "",
+      "sup_ws_ds_opt": 1
+    },
+    "environment": {
+      "browser_name": "Mozilla",
+      "browser_version": "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "browser_platform": "Linux x86_64",
+      "os": "linux",
+      "language": "en",
+      "browser_language": "en-US",
+      "tz_name": "America/New_York",
+      "region": "US",
+      "screen_width": 1920,
+      "screen_height": 1080,
+      "timestamp": {
+        "mode": "system"
+      },
+      "session": "guest"
+    }
+  },
+  "experiments": [
+    {
+      "id": "timestamp-fixed",
+      "description": "Does a fixed document clock change the sanitized signing route shape?",
+      "request": {
+        "room_id": "7300000000000000000"
+      },
+      "signing": {
+        "device_id": "7123456789012345678",
+        "cursor": "",
+        "internal_ext": "",
+        "contact_us": "",
+        "sup_ws_ds_opt": 1
+      },
+      "environment": {
+        "browser_name": "Mozilla",
+        "browser_version": "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "browser_platform": "Linux x86_64",
+        "os": "linux",
+        "language": "en",
+        "browser_language": "en-US",
+        "tz_name": "America/New_York",
+        "region": "US",
+        "screen_width": 1920,
+        "screen_height": 1080,
+        "timestamp": {
+          "mode": "fixed",
+          "timestamp_ms": 1700000000000
+        },
+        "session": "guest"
+      }
+    },
+    {
+      "id": "timezone-lima",
+      "description": "Does changing only the declared timezone change observed transport metadata?",
+      "request": {
+        "room_id": "7300000000000000000"
+      },
+      "signing": {
+        "device_id": "7123456789012345678",
+        "cursor": "",
+        "internal_ext": "",
+        "contact_us": "",
+        "sup_ws_ds_opt": 1
+      },
+      "environment": {
+        "browser_name": "Mozilla",
+        "browser_version": "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "browser_platform": "Linux x86_64",
+        "os": "linux",
+        "language": "en",
+        "browser_language": "en-US",
+        "tz_name": "America/Lima",
+        "region": "US",
+        "screen_width": 1920,
+        "screen_height": 1080,
+        "timestamp": {
+          "mode": "system"
+        },
+        "session": "guest"
+      }
+    },
+    {
+      "id": "cookie-ms-token-alpha",
+      "description": "Does a synthetic msToken cookie change the sanitized signing route shape?",
+      "request": {
+        "room_id": "7300000000000000000"
+      },
+      "signing": {
+        "device_id": "7123456789012345678",
+        "cursor": "",
+        "internal_ext": "",
+        "contact_us": "",
+        "sup_ws_ds_opt": 1,
+        "cookie_mutation": {
+          "kind": "set_probe",
+          "name": "msToken",
+          "value": "alpha"
+        }
+      },
+      "environment": {
+        "browser_name": "Mozilla",
+        "browser_version": "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "browser_platform": "Linux x86_64",
+        "os": "linux",
+        "language": "en",
+        "browser_language": "en-US",
+        "tz_name": "America/New_York",
+        "region": "US",
+        "screen_width": 1920,
+        "screen_height": 1080,
+        "timestamp": {
+          "mode": "system"
+        },
+        "session": "guest"
+      }
+    },
+    {
+      "id": "language-es",
+      "description": "Does changing only app language change observed transport metadata?",
+      "request": {
+        "room_id": "7300000000000000000"
+      },
+      "signing": {
+        "device_id": "7123456789012345678",
+        "cursor": "",
+        "internal_ext": "",
+        "contact_us": "",
+        "sup_ws_ds_opt": 1
+      },
+      "environment": {
+        "browser_name": "Mozilla",
+        "browser_version": "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "browser_platform": "Linux x86_64",
+        "os": "linux",
+        "language": "es",
+        "browser_language": "en-US",
+        "tz_name": "America/New_York",
+        "region": "US",
+        "screen_width": 1920,
+        "screen_height": 1080,
+        "timestamp": {
+          "mode": "system"
+        },
+        "session": "guest"
+      }
+    },
+    {
+      "id": "browser-version-132",
+      "description": "Does changing only the declared browser version change transport fields?",
+      "request": {
+        "room_id": "7300000000000000000"
+      },
+      "signing": {
+        "device_id": "7123456789012345678",
+        "cursor": "",
+        "internal_ext": "",
+        "contact_us": "",
+        "sup_ws_ds_opt": 1
+      },
+      "environment": {
+        "browser_name": "Mozilla",
+        "browser_version": "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+        "browser_platform": "Linux x86_64",
+        "os": "linux",
+        "language": "en",
+        "browser_language": "en-US",
+        "tz_name": "America/New_York",
+        "region": "US",
+        "screen_width": 1920,
+        "screen_height": 1080,
+        "timestamp": {
+          "mode": "system"
+        },
+        "session": "guest"
+      }
+    },
+    {
+      "id": "platform-win32",
+      "description": "Does changing only browser_platform expose a consistency dependency?",
+      "request": {
+        "room_id": "7300000000000000000"
+      },
+      "signing": {
+        "device_id": "7123456789012345678",
+        "cursor": "",
+        "internal_ext": "",
+        "contact_us": "",
+        "sup_ws_ds_opt": 1
+      },
+      "environment": {
+        "browser_name": "Mozilla",
+        "browser_version": "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "browser_platform": "Win32",
+        "os": "linux",
+        "language": "en",
+        "browser_language": "en-US",
+        "tz_name": "America/New_York",
+        "region": "US",
+        "screen_width": 1920,
+        "screen_height": 1080,
+        "timestamp": {
+          "mode": "system"
+        },
+        "session": "guest"
+      }
+    },
+    {
+      "id": "screen-width-1366",
+      "description": "Does changing only declared screen width change observed metadata?",
+      "request": {
+        "room_id": "7300000000000000000"
+      },
+      "signing": {
+        "device_id": "7123456789012345678",
+        "cursor": "",
+        "internal_ext": "",
+        "contact_us": "",
+        "sup_ws_ds_opt": 1
+      },
+      "environment": {
+        "browser_name": "Mozilla",
+        "browser_version": "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "browser_platform": "Linux x86_64",
+        "os": "linux",
+        "language": "en",
+        "browser_language": "en-US",
+        "tz_name": "America/New_York",
+        "region": "US",
+        "screen_width": 1366,
+        "screen_height": 1080,
+        "timestamp": {
+          "mode": "system"
+        },
+        "session": "guest"
+      }
+    },
+    {
+      "id": "query-duplicate-room-id",
+      "description": "Does duplicating room_id change only signing output structure?",
+      "request": {
+        "room_id": "7300000000000000000"
+      },
+      "signing": {
+        "device_id": "7123456789012345678",
+        "cursor": "",
+        "internal_ext": "",
+        "contact_us": "",
+        "sup_ws_ds_opt": 1,
+        "query_mutation": {
+          "kind": "duplicate",
+          "name": "room_id",
+          "occurrence": 0
+        }
+      },
+      "environment": {
+        "browser_name": "Mozilla",
+        "browser_version": "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "browser_platform": "Linux x86_64",
+        "os": "linux",
+        "language": "en",
+        "browser_language": "en-US",
+        "tz_name": "America/New_York",
+        "region": "US",
+        "screen_width": 1920,
+        "screen_height": 1080,
+        "timestamp": {
+          "mode": "system"
+        },
+        "session": "guest"
+      }
+    },
+    {
+      "id": "query-remove-notice",
+      "description": "Does omitting notice change the SDK-added signing fields?",
+      "request": {
+        "room_id": "7300000000000000000"
+      },
+      "signing": {
+        "device_id": "7123456789012345678",
+        "cursor": "",
+        "internal_ext": "",
+        "contact_us": "",
+        "sup_ws_ds_opt": 1,
+        "query_mutation": {
+          "kind": "remove",
+          "name": "notice",
+          "occurrence": 0
+        }
+      },
+      "environment": {
+        "browser_name": "Mozilla",
+        "browser_version": "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "browser_platform": "Linux x86_64",
+        "os": "linux",
+        "language": "en",
+        "browser_language": "en-US",
+        "tz_name": "America/New_York",
+        "region": "US",
+        "screen_width": 1920,
+        "screen_height": 1080,
+        "timestamp": {
+          "mode": "system"
+        },
+        "session": "guest"
+      }
+    },
+    {
+      "id": "query-empty-region",
+      "description": "Does replacing region with an empty value change signing output?",
+      "request": {
+        "room_id": "7300000000000000000"
+      },
+      "signing": {
+        "device_id": "7123456789012345678",
+        "cursor": "",
+        "internal_ext": "",
+        "contact_us": "",
+        "sup_ws_ds_opt": 1,
+        "query_mutation": {
+          "kind": "set",
+          "name": "region",
+          "occurrence": 0,
+          "value": ""
+        }
+      },
+      "environment": {
+        "browser_name": "Mozilla",
+        "browser_version": "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "browser_platform": "Linux x86_64",
+        "os": "linux",
+        "language": "en",
+        "browser_language": "en-US",
+        "tz_name": "America/New_York",
+        "region": "US",
+        "screen_width": 1920,
+        "screen_height": 1080,
+        "timestamp": {
+          "mode": "system"
+        },
+        "session": "guest"
+      }
+    },
+    {
+      "id": "query-room-id-first",
+      "description": "Does moving room_id to index zero change signing output?",
+      "request": {
+        "room_id": "7300000000000000000"
+      },
+      "signing": {
+        "device_id": "7123456789012345678",
+        "cursor": "",
+        "internal_ext": "",
+        "contact_us": "",
+        "sup_ws_ds_opt": 1,
+        "query_mutation": {
+          "kind": "move",
+          "name": "room_id",
+          "occurrence": 0,
+          "new_index": 0
+        }
+      },
+      "environment": {
+        "browser_name": "Mozilla",
+        "browser_version": "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "browser_platform": "Linux x86_64",
+        "os": "linux",
+        "language": "en",
+        "browser_language": "en-US",
+        "tz_name": "America/New_York",
+        "region": "US",
+        "screen_width": 1920,
+        "screen_height": 1080,
+        "timestamp": {
+          "mode": "system"
+        },
+        "session": "guest"
+      }
+    }
+  ]
+}

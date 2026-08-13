@@ -1,0 +1,18 @@
+{
+  "fixture_version": 1,
+  "case_id": "backend-unavailable-001",
+  "description": "Backend unavailable response",
+  "request": { "room_id": "7300000000000000005" },
+  "environment": {
+    "preset": "chrome-linux",
+    "user_agent": "fixture-agent/1",
+    "session": "guest"
+  },
+  "expected": {
+    "outcome": "error",
+    "error": {
+      "kind": "backend_unavailable",
+      "message": "fixture-backend-unavailable"
+    }
+  }
+}

@@ -62,6 +62,23 @@ const SESSION_BOOTSTRAP_URL: &str = "https://www.tiktok.com/robots.txt";
 /// Script injected before page scripts.
 pub const BRIDGE_JS: &str = include_str!("bridge.js");
 
+/// Browser-visible values used by controlled signing experiments.
+///
+/// The default is `None`: production WebView runs use the host/page environment. Research
+/// runners may provide these overrides before navigation so a declared mutation is also a real
+/// `navigator`/`Intl`/`screen`/clock mutation inside the page.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct PageEnvironmentOverride {
+    pub language: Option<String>,
+    pub browser_language: Option<String>,
+    pub browser_platform: Option<String>,
+    pub tz_name: Option<String>,
+    pub region: Option<String>,
+    pub screen_width: Option<u32>,
+    pub screen_height: Option<u32>,
+    pub timestamp_ms: Option<u64>,
+}
+
 /// Frames buffered per page-WebSocket subscriber before it is considered stalled.
 ///
 /// Large enough to absorb a slow consumer across several event batches; small enough that a
@@ -105,6 +122,9 @@ pub struct EngineConfig {
     /// parameters returned by `/im/fetch/`; two sockets for the same room/session cause the
     /// second one to remain silent.
     pub block_page_websockets: bool,
+    /// Use an ephemeral browser data store. Research tools enable this for guest runs so
+    /// cookies and cache from an earlier experiment cannot become hidden input.
+    pub incognito: bool,
     /// Cookies from a real account. **Empty is the recommended default.**
     ///
     /// Listening does not need an account. Verified anonymously against a real live room on
@@ -123,6 +143,12 @@ pub struct EngineConfig {
     /// not a remedy for rate limiting — see [`Signer::reload`] and a fresh guest identity
     /// for that.
     pub session: CookieJar,
+    /// Optional browser-visible overrides for controlled signing research. The default is
+    /// `None`, preserving the real host/page environment.
+    pub page_environment: Option<PageEnvironmentOverride>,
+    /// Additional cookies installed at the page origin before navigation. This is empty for
+    /// normal operation; research callers should use only synthetic probes here.
+    pub page_cookies: CookieJar,
 }
 
 impl Default for EngineConfig {
@@ -141,7 +167,10 @@ impl Default for EngineConfig {
             contact_us: String::new(),
             visible: false,
             block_page_websockets: true,
+            incognito: false,
             session: CookieJar::new(),
+            page_environment: None,
+            page_cookies: CookieJar::new(),
         }
     }
 }
@@ -396,7 +425,10 @@ impl Signer {
         }
     }
 
-    /// Sign a TikTok LIVE URL and return it signed, **without executing it**.
+    /// Sign a TikTok LIVE URL and return it without replaying it from Rust.
+    ///
+    /// The page's patched `fetch` issues a `no-cors` browser GET so webmssdk can sign it;
+    /// the bridge reads the final URL from the Performance Timeline and ignores the body.
     ///
     /// This corresponds to Euler's optional `GET /webcast/sign_url` and is useful for
     /// comparing endpoints when one stops responding.
@@ -1087,6 +1119,39 @@ impl Signer {
     }
 }
 
+impl ttl_sign_core::SignerBackend for Signer {
+    fn transport(
+        &self,
+        request: ttl_sign_core::TransportRequest,
+    ) -> ttl_sign_core::BackendFuture<'_> {
+        Box::pin(async move {
+            let result = match self.page_ws_fetch_result(&request.room_id).await {
+                Ok(result) => result,
+                Err(error) => return SignOutcome::Transport(error),
+            };
+            if let Some(reason) = result.rejection_reason() {
+                return SignOutcome::Rejected(reason);
+            }
+
+            // The WebSocket must be opened with the same browser identity that signed it.
+            let cookies = match self.cookies().await {
+                Ok(cookies) => cookies,
+                Err(error) => return SignOutcome::Transport(error),
+            };
+            SignOutcome::Ok(ttl_sign_core::SignedFetch {
+                protobuf: result.encode(),
+                cookies,
+                user_agent: self.preset().user_agent(),
+                signed_url: result.push_server.clone(),
+            })
+        })
+    }
+
+    fn identity(&self) -> ttl_sign_core::ClientIdentity {
+        ttl_sign_core::ClientIdentity::new(self.preset().user_agent())
+    }
+}
+
 /// A signature waiting for the SDK.
 type QueuedSign = (String, oneshot::Sender<Result<SignedRequest, SignError>>);
 
@@ -1218,6 +1283,7 @@ where
     let ipc_shared = Rc::clone(&shared);
     let ipc_ua = user_agent.clone();
     let ipc_preset = Arc::clone(&preset);
+    let ipc_environment_override = config.page_environment.clone();
     let ipc_proxy = proxy.clone();
     // The WebView does not exist when the handler is built, but the handler needs to read
     // the cookie manager; share it through a cell filled immediately afterward.
@@ -1227,16 +1293,25 @@ where
     // With a session, the first document is only a cookie bootstrap. Its response can be
     // anonymous, but its document-start script runs on the correct TikTok origin; after it
     // reports `session`, the event loop navigates to the real landing URL.
+    let mut initialization_cookies = config.session.clone();
+    initialization_cookies.merge(&config.page_cookies);
     let session_script =
-        session_initialization_script(&config.session, config.block_page_websockets);
+        session_initialization_script(&initialization_cookies, config.block_page_websockets);
+    let environment_script =
+        page_environment_initialization_script(config.page_environment.as_ref());
     let initial_url = if config.session.is_empty() {
         config.landing_url.as_str()
     } else {
         SESSION_BOOTSTRAP_URL
     };
-    let builder = WebViewBuilder::new()
+    let mut builder = WebViewBuilder::new()
         .with_url(initial_url)
         .with_user_agent(&user_agent)
+        .with_incognito(config.incognito);
+    if !environment_script.is_empty() {
+        builder = builder.with_initialization_script(environment_script);
+    }
+    let builder = builder
         .with_initialization_script(session_script)
         .with_initialization_script(BRIDGE_JS)
         .with_ipc_handler(move |req| {
@@ -1253,7 +1328,14 @@ where
                 .as_ref()
                 .map(|wv| cookies_from_webview(wv))
                 .unwrap_or_default();
-            handle_page_message(&ipc_shared, msg, &ipc_ua, jar_from_webview, &ipc_preset);
+            handle_page_message(
+                &ipc_shared,
+                msg,
+                &ipc_ua,
+                jar_from_webview,
+                &ipc_preset,
+                ipc_environment_override.as_ref(),
+            );
             // The handler is not the event loop; wake it so it can drain the queue.
             let _ = ipc_proxy.send_event(UserEvent::Wake);
         });
@@ -1457,6 +1539,71 @@ fn session_initialization_script(jar: &CookieJar, block_page_websockets: bool) -
     format!("window.__ttlSession = {json}; window.__ttlBlockWs = {block_page_websockets};")
 }
 
+/// Build a document-start script for controlled research runs.
+///
+/// This deliberately patches only browser-observable getters and the wall clock. It does not
+/// change the WebView's User-Agent header or server response, so callers must still keep the
+/// declared preset internally consistent and treat server-derived page data separately.
+fn page_environment_initialization_script(overrides: Option<&PageEnvironmentOverride>) -> String {
+    let Some(overrides) = overrides else {
+        return String::new();
+    };
+    let json = serde_json::to_string(overrides).expect("page environment always serializes");
+    format!(
+        r#"(function(){{
+  var o={json};
+  window.__ttlPageEnvironment=o;
+  var setValue=function(target,key,value){{
+    if(value===null||value===undefined) return;
+    try{{Object.defineProperty(target,key,{{configurable:true,enumerable:true,get:function(){{return value;}}}});}}catch(e){{}}
+  }};
+  var navigatorObject=window.navigator;
+  if(navigatorObject){{
+    setValue(navigatorObject,'language',o.browser_language);
+    setValue(navigatorObject,'languages',o.browser_language?[o.browser_language]:null);
+    setValue(navigatorObject,'platform',o.browser_platform);
+  }}
+  var screenObject=window.screen;
+  if(screenObject){{
+    setValue(screenObject,'width',o.screen_width);
+    setValue(screenObject,'height',o.screen_height);
+    setValue(screenObject,'availWidth',o.screen_width);
+    setValue(screenObject,'availHeight',o.screen_height);
+  }}
+  if(o.tz_name&&window.Intl&&Intl.DateTimeFormat){{
+    try{{
+      var nativeResolvedOptions=Intl.DateTimeFormat.prototype.resolvedOptions;
+      Intl.DateTimeFormat.prototype.resolvedOptions=function(){{
+        var result=nativeResolvedOptions.call(this);
+        result.timeZone=o.tz_name;
+        return result;
+      }};
+    }}catch(e){{}}
+  }}
+  if(o.timestamp_ms!==null&&o.timestamp_ms!==undefined){{
+    try{{
+      var NativeDate=window.Date;
+      var fixed=Number(o.timestamp_ms);
+      var FixedDate=function(){{
+        if(this instanceof FixedDate){{
+          if(arguments.length===0) return new NativeDate(fixed);
+          var args=[null].concat(Array.prototype.slice.call(arguments));
+          return new (NativeDate.bind.apply(NativeDate,args))();
+        }}
+        return new NativeDate(fixed).toString();
+      }};
+      FixedDate.prototype=NativeDate.prototype;
+      FixedDate.now=function(){{return fixed;}};
+      FixedDate.parse=NativeDate.parse;
+      FixedDate.UTC=NativeDate.UTC;
+      try{{Object.setPrototypeOf(FixedDate,NativeDate);}}catch(e){{}}
+      window.Date=FixedDate;
+    }}catch(e){{}}
+  }}
+}})();"#
+    )
+}
+
 /// On Linux the window is invisible, so GTK never realizes it and `build()` has no window
 /// handle, returning `WindowHandleError(Unavailable)`. Put the WebView directly in the
 /// window's GTK container instead.
@@ -1532,11 +1679,12 @@ fn handle_page_message(
     user_agent: &str,
     jar_from_webview: CookieJar,
     preset: &Arc<Mutex<Preset>>,
+    environment_override: Option<&PageEnvironmentOverride>,
 ) {
     match msg {
         FromPage::Ready { sdk_version, env } => {
             if let Some(env) = env {
-                apply_page_env(preset, &env);
+                apply_page_env(preset, &env, environment_override);
             }
             let mut state = shared.borrow_mut();
             // `robots.txt` has no SDK of its own, but keep this guard in case the bootstrap
@@ -1756,28 +1904,56 @@ fn decode_event_batch(data: &[u8]) -> Result<Option<(u64, WebcastEventBatch)>, S
 }
 
 /// Align parameters signed by Rust with the environment seen by the real WebView.
-fn apply_page_env(preset: &Arc<Mutex<Preset>>, env: &PageEnv) {
+fn apply_page_env(
+    preset: &Arc<Mutex<Preset>>,
+    env: &PageEnv,
+    environment_override: Option<&PageEnvironmentOverride>,
+) {
     let Ok(mut current) = preset.lock() else {
         warn!("could not update preset from page environment");
         return;
     };
 
-    if !env.language.is_empty() {
+    if environment_override
+        .and_then(|value| value.language.as_ref())
+        .is_none()
+        && !env.language.is_empty()
+    {
         current.location.language = env.language.clone();
     }
-    if !env.browser_language.is_empty() {
+    if environment_override
+        .and_then(|value| value.browser_language.as_ref())
+        .is_none()
+        && !env.browser_language.is_empty()
+    {
         current.location.browser_language = env.browser_language.clone();
     }
-    if !env.tz_name.is_empty() {
+    if environment_override
+        .and_then(|value| value.tz_name.as_ref())
+        .is_none()
+        && !env.tz_name.is_empty()
+    {
         current.location.tz_name = env.tz_name.clone();
     }
-    if !env.region.is_empty() {
+    if environment_override
+        .and_then(|value| value.region.as_ref())
+        .is_none()
+        && !env.region.is_empty()
+    {
         current.location.region = env.region.clone();
     }
-    if env.screen_width != 0 {
+    if environment_override
+        .and_then(|value| value.screen_width)
+        .is_none()
+        && env.screen_width != 0
+    {
         current.screen.width = env.screen_width;
     }
-    if env.screen_height != 0 {
+    if environment_override
+        .and_then(|value| value.screen_height)
+        .is_none()
+        && env.screen_height != 0
+    {
         current.screen.height = env.screen_height;
     }
 }
@@ -1912,6 +2088,21 @@ mod tests {
                 "wss://webcast5-ws-web-useast1a.tiktok.com/webcast/im/ws/",
             );
         w.finish()
+    }
+
+    #[test]
+    fn page_environment_script_is_optional_and_escapes_values() {
+        assert!(page_environment_initialization_script(None).is_empty());
+        let script = page_environment_initialization_script(Some(&PageEnvironmentOverride {
+            browser_language: Some("en\"-US\n".into()),
+            tz_name: Some("America/New_York".into()),
+            timestamp_ms: Some(1_700_000_000_000),
+            ..PageEnvironmentOverride::default()
+        }));
+        assert!(script.contains("__ttlPageEnvironment"));
+        assert!(script.contains("Date.now"));
+        assert!(script.contains("en\\\"-US\\n"));
+        assert!(!script.contains("en\"-US\n"));
     }
 
     #[test]

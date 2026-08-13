@@ -579,6 +579,7 @@
   // values: a mismatch between the User-Agent and `browser_language` is detectable
   // (`docs/06-risks-and-ops.md` §1). Read it from the page instead of guessing.
   var environment = function () {
+    var configured = window.__ttlPageEnvironment || {};
     var region = "";
     var language = "";
     try {
@@ -596,12 +597,12 @@
       // `navigator.language` is `C` in the current WebKitGTK image, while TikTok's
       // application context and its own webcast query use `en`. Prefer the context;
       // falling back to the navigator is still correct on pages without SSR data.
-      language: language || browserLanguage.split("-")[0],
-      browser_language: browserLanguage,
-      tz_name: tz,
-      region: region,
-      screen_width: screen.width || DEFAULT_SCREEN_WIDTH,
-      screen_height: screen.height || DEFAULT_SCREEN_HEIGHT,
+      language: configured.language || language || browserLanguage.split("-")[0],
+      browser_language: configured.browser_language || browserLanguage,
+      tz_name: configured.tz_name || tz,
+      region: configured.region || region,
+      screen_width: configured.screen_width || screen.width || DEFAULT_SCREEN_WIDTH,
+      screen_height: configured.screen_height || screen.height || DEFAULT_SCREEN_HEIGHT,
     };
   };
 

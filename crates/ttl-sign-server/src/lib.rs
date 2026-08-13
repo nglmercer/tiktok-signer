@@ -1,7 +1,7 @@
 //! HTTP server compatible with the Euler Stream sign-server specification.
 //!
-//! Deliberately thin layer: translates HTTP ↔ `Signer` calls and has no signing logic of its
-//! own. It primarily enables validation with external clients such as TikTokLive for Python.
+//! Deliberately thin layer: translates HTTP ↔ [`ttl_sign_core::SignerBackend`] calls and has
+//! no signing logic or browser dependency of its own.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -16,8 +16,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tracing::{info, warn};
 
-use ttl_sign_core::{RejectReason, SignError, SignOutcome};
-use ttl_sign_webview::Signer;
+use ttl_sign_core::{RejectReason, SignError, SignOutcome, SignerBackend, TransportRequest};
 
 /// Header required by the Python client: without it, the client aborts with `EMPTY_COOKIES`.
 const X_SET_TT_COOKIE: &str = "X-Set-TT-Cookie";
@@ -28,7 +27,7 @@ const X_ROOM_ID: &str = "X-Room-Id";
 const X_REQUEST_ID: &str = "X-Request-Id";
 
 pub struct AppState {
-    signer: Signer,
+    backend: Arc<dyn SignerBackend>,
     /// Allowed concurrent signatures. Queuing makes signatures expire, so requests above
     /// this limit receive 429.
     slots: tokio::sync::Semaphore,
@@ -40,9 +39,9 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(signer: Signer, max_concurrent: usize) -> Arc<Self> {
+    pub fn new(backend: impl SignerBackend + 'static, max_concurrent: usize) -> Arc<Self> {
         Arc::new(Self {
-            signer,
+            backend: Arc::new(backend),
             slots: tokio::sync::Semaphore::new(max_concurrent),
             max_concurrent,
             started: Instant::now(),
@@ -135,7 +134,10 @@ async fn sign_room(
     };
 
     let started = Instant::now();
-    let outcome = sign_outcome(&state, &room_id).await;
+    let outcome = state
+        .backend
+        .transport(TransportRequest::new(&room_id))
+        .await;
     let latency_ms = started.elapsed().as_millis();
 
     match outcome {
@@ -192,6 +194,7 @@ async fn sign_room(
                 // The pool is not ready yet: this is retryable, and 503 communicates that.
                 SignError::SdkNotReady
                 | SignError::NoInstanceAvailable
+                | SignError::BackendUnavailable(_)
                 | SignError::LoginTimeout(_) => StatusCode::SERVICE_UNAVAILABLE,
                 SignError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
                 _ => StatusCode::BAD_GATEWAY,
@@ -201,40 +204,13 @@ async fn sign_room(
     }
 }
 
-/// Produce the protobuf a client needs to open the room's WebSocket.
-///
-/// Reconstructed from the player's own signed socket URI rather than fetched from
-/// `/webcast/im/fetch/`, which answers with an empty body for this signer. The response is
-/// byte-compatible either way: clients read `push_server`, `route_params`, `cursor`, and
-/// `internal_ext` and never learn where they came from.
-async fn sign_outcome(state: &Arc<AppState>, room_id: &str) -> SignOutcome {
-    let result = match state.signer.page_ws_fetch_result(room_id).await {
-        Ok(result) => result,
-        Err(error) => return SignOutcome::Transport(error),
-    };
-    if let Some(reason) = result.rejection_reason() {
-        return SignOutcome::Rejected(reason);
-    }
-
-    // The WebSocket must be opened with the same identity that signed the URI.
-    let cookies = match state.signer.cookies().await {
-        Ok(cookies) => cookies,
-        Err(error) => return SignOutcome::Transport(error),
-    };
-    SignOutcome::Ok(ttl_sign_core::SignedFetch {
-        protobuf: result.encode(),
-        cookies,
-        user_agent: state.signer.preset().user_agent(),
-        signed_url: result.push_server.clone(),
-    })
-}
-
 async fn healthz(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let available = state.slots.available_permits();
+    let identity = state.backend.identity();
     Json(json!({
         "ready": true,
         "uptime_s": state.started.elapsed().as_secs(),
-        "user_agent": state.signer.preset().user_agent(),
+        "user_agent": identity.user_agent,
         "in_flight": state.max_concurrent - available,
         "max_concurrent": state.max_concurrent,
         "requests": state.requests.load(Ordering::Relaxed),
@@ -265,6 +241,26 @@ fn error_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::{to_bytes, Body};
+    use axum::http::Request;
+    use tower::ServiceExt;
+    use ttl_sign_core::{
+        BackendFuture, ClientIdentity, CookieJar, MockBackend, SignedFetch, SignerBackend,
+        TransportRequest,
+    };
+
+    const ROOM: &str = "7300000000000000000";
+    const USER_AGENT: &str = "fixture-agent/1";
+
+    fn mock(outcome: SignOutcome) -> MockBackend {
+        MockBackend::new(ClientIdentity::new(USER_AGENT)).with_response(ROOM, outcome)
+    }
+
+    async fn request(app: Router, uri: &str) -> Response {
+        app.oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
 
     #[test]
     fn room_id_validation_rejects_non_numeric() {
@@ -286,5 +282,158 @@ mod tests {
         );
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(response.headers().get(X_REQUEST_ID).unwrap(), "7");
+    }
+
+    #[tokio::test]
+    async fn success_contract_is_fully_headless() {
+        let protobuf = vec![0x12, 0x03, b'a', b'b', b'c'];
+        let outcome = SignOutcome::Ok(SignedFetch {
+            protobuf: protobuf.clone(),
+            cookies: CookieJar::parse("msToken=fixture-token; ttwid=fixture-id"),
+            user_agent: USER_AGENT.into(),
+            signed_url: "wss://fixture.invalid/webcast".into(),
+        });
+        let response = request(
+            router(AppState::new(mock(outcome), 1)),
+            &format!("/webcast/fetch?room_id={ROOM}&client=test"),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "application/protobuf"
+        );
+        assert_eq!(
+            response.headers()[X_SET_TT_COOKIE],
+            "msToken=fixture-token; ttwid=fixture-id"
+        );
+        assert_eq!(response.headers()[X_SET_TT_USER_AGENT], USER_AGENT);
+        assert_eq!(response.headers()[X_ROOM_ID], ROOM);
+        assert_eq!(
+            to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+            protobuf
+        );
+    }
+
+    #[tokio::test]
+    async fn path_route_uses_the_same_backend_contract() {
+        let outcome = SignOutcome::Ok(SignedFetch {
+            protobuf: vec![1, 2, 3],
+            cookies: CookieJar::parse("msToken=fixture-token"),
+            user_agent: USER_AGENT.into(),
+            signed_url: "wss://fixture.invalid/webcast".into(),
+        });
+        let response = request(
+            router(AppState::new(mock(outcome), 1)),
+            &format!("/webcast/rooms/{ROOM}/connect"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[X_ROOM_ID], ROOM);
+    }
+
+    #[tokio::test]
+    async fn backend_outcomes_map_to_stable_http_errors() {
+        let cases = [
+            (
+                SignOutcome::Rejected(RejectReason::EmptyBody),
+                StatusCode::BAD_GATEWAY,
+            ),
+            (
+                SignOutcome::Transport(SignError::Timeout(250)),
+                StatusCode::GATEWAY_TIMEOUT,
+            ),
+            (
+                SignOutcome::Transport(SignError::BackendUnavailable("offline".into())),
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (
+                SignOutcome::Transport(SignError::Transport("reset".into())),
+                StatusCode::BAD_GATEWAY,
+            ),
+        ];
+
+        for (outcome, expected) in cases {
+            let response = request(
+                router(AppState::new(mock(outcome), 1)),
+                &format!("/webcast/fetch?room_id={ROOM}"),
+            )
+            .await;
+            assert_eq!(response.status(), expected);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert!(json["message"]
+                .as_str()
+                .is_some_and(|message| !message.is_empty()));
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_requests_are_rejected_before_the_backend() {
+        let state = AppState::new(MockBackend::new(ClientIdentity::new(USER_AGENT)), 1);
+        for uri in ["/webcast/fetch", "/webcast/fetch?room_id=@user"] {
+            let response = request(router(state.clone()), uri).await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[tokio::test]
+    async fn health_reports_backend_identity() {
+        let state = AppState::new(MockBackend::new(ClientIdentity::new(USER_AGENT)), 2);
+        let response = request(router(state), "/healthz").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["user_agent"], USER_AGENT);
+        assert_eq!(json["max_concurrent"], 2);
+    }
+
+    #[derive(Clone)]
+    struct BlockingBackend {
+        entered: Arc<tokio::sync::Barrier>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    impl SignerBackend for BlockingBackend {
+        fn transport(&self, _request: TransportRequest) -> BackendFuture<'_> {
+            Box::pin(async move {
+                self.entered.wait().await;
+                self.release.notified().await;
+                SignOutcome::Transport(SignError::BackendUnavailable("released".into()))
+            })
+        }
+
+        fn identity(&self) -> ClientIdentity {
+            ClientIdentity::new(USER_AGENT)
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_requests_are_rejected_instead_of_queued() {
+        let backend = BlockingBackend {
+            entered: Arc::new(tokio::sync::Barrier::new(2)),
+            release: Arc::new(tokio::sync::Notify::new()),
+        };
+        let entered = backend.entered.clone();
+        let release = backend.release.clone();
+        let app = router(AppState::new(backend, 1));
+        let uri = format!("/webcast/fetch?room_id={ROOM}");
+
+        let first_app = app.clone();
+        let first_uri = uri.clone();
+        let first = tokio::spawn(async move { request(first_app, &first_uri).await });
+        entered.wait().await;
+        let second = request(app, &uri).await;
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["limit_label"], "concurrent_signs");
+
+        release.notify_one();
+        assert_eq!(
+            first.await.unwrap().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 }

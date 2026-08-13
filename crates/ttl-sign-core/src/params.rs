@@ -100,6 +100,22 @@ impl Query {
         }
         q
     }
+
+    /// Parse an encoded query into semantic key/value pairs.
+    ///
+    /// Unlike [`Query::parse`], this decodes each component. Use it when a subsequent
+    /// [`Query::encode`] must reproduce `%2F` rather than double-encoding it as `%252F`.
+    pub fn parse_encoded(raw: &str) -> Self {
+        let mut query = Query::new();
+        for pair in raw.trim_start_matches('?').split('&') {
+            if pair.is_empty() {
+                continue;
+            }
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            query.push_raw(percent_decode(key), percent_decode(value));
+        }
+        query
+    }
 }
 
 /// Percent-encoding for query strings: preserve unreserved characters plus `.`, `-`, `_`,
@@ -501,5 +517,12 @@ mod tests {
         let mut q = Query::new();
         q.set("tz_name", "America/New_York");
         assert_eq!(q.encode(), "tz_name=America%2FNew_York");
+    }
+
+    #[test]
+    fn encoded_parse_avoids_double_encoding() {
+        let query = Query::parse_encoded("X-Gnarly=abc%2Fdef%2Bghi%3D&empty=");
+        assert_eq!(query.get("X-Gnarly"), Some("abc/def+ghi="));
+        assert_eq!(query.encode(), "X-Gnarly=abc%2Fdef%2Bghi%3D&empty=");
     }
 }

@@ -15,6 +15,7 @@
 //! - [`gift_streak`] — collapses a burst of gift messages into one gift with its true total.
 //! - [`ws_uri`] — rebuilds a `ProtoMessageFetchResult` from the player's signed socket URI.
 
+pub mod backend;
 pub mod cookie;
 pub mod gift_streak;
 pub mod outcome;
@@ -24,6 +25,7 @@ pub mod proto;
 pub mod room;
 pub mod ws_uri;
 
+pub use backend::{BackendFuture, ClientIdentity, MockBackend, SignerBackend, TransportRequest};
 pub use cookie::CookieJar;
 pub use gift_streak::{CompletedGift, GiftStreaks};
 pub use outcome::{RejectReason, SignError, SignOutcome, SignedFetch};

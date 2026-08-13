@@ -1,0 +1,35 @@
+[package]
+name = "ttl-sign-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+ttl-sign-core = { path = "../crates/ttl-sign-core" }
+ttl-sign-replay = { path = "../crates/ttl-sign-replay" }
+
+[[bin]]
+name = "ws_uri_parser"
+path = "fuzz_targets/ws_uri_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "protobuf_transport"
+path = "fuzz_targets/protobuf_transport.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fixture_loader"
+path = "fuzz_targets/fixture_loader.rs"
+test = false
+doc = false
+bench = false
