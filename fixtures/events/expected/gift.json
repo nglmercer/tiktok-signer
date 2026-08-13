@@ -1,0 +1,16 @@
+{
+  "type": "gift",
+  "user": {
+    "id": "6820914516086834",
+    "nickname": "Golden Tester",
+    "unique_id": "golden.tester",
+    "sec_uid": "MS4wLjABAAAAgolden"
+  },
+  "gift_id": "5655",
+  "gift_name": "Rose",
+  "diamond_count": "1",
+  "repeat_count": "7",
+  "combo_count": "3",
+  "group_id": "1739382910000",
+  "repeat_end": true
+}

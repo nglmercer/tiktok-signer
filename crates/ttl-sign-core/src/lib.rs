@@ -10,13 +10,12 @@
 //! - [`cookie`] — minimal `CookieJar` in `X-Set-TT-Cookie` format.
 //! - [`outcome`] — `SignOutcome`: rejection and transport errors never share a variant.
 //! - [`room`] — unsigned `unique_id` → `room_id` lookup and live-channel discovery.
-//! - [`proto`] — transport envelope decoding and a stable subset of common live events.
+//! - [`proto`] — transport envelope decoding: `PushFrame`, `FetchResult`, and the batch
+//!   splitter. Event semantics live in `ttl-live-events`.
 //! - [`gift_streak`] — collapses a burst of gift messages into one gift with its true total.
-//! - [`full_schema`] — generated bindings for the bundled TikTok Webcast schema snapshot.
 //! - [`ws_uri`] — rebuilds a `ProtoMessageFetchResult` from the player's signed socket URI.
 
 pub mod cookie;
-pub mod full_schema;
 pub mod gift_streak;
 pub mod outcome;
 pub mod params;
@@ -26,11 +25,6 @@ pub mod room;
 pub mod ws_uri;
 
 pub use cookie::CookieJar;
-pub use full_schema::{
-    decode_webcast_message, schema_by_name, schema_for_method, tik_tok, FieldKind, FieldSchema,
-    MessageSchema, SchemaField, SchemaMessage, SchemaValue, GENERATED_SCHEMA_MESSAGE_COUNT,
-    GENERATED_WEBCAST_METHOD_COUNT,
-};
 pub use gift_streak::{CompletedGift, GiftStreaks};
 pub use outcome::{RejectReason, SignError, SignOutcome, SignedFetch};
 pub use params::{FetchParams, Query, WsParams};

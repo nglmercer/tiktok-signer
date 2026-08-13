@@ -138,17 +138,17 @@ things:
 | Label | Meaning | Fix |
 |---|---|---|
 | `[other] method=…` | Outside the six-method `LiveEvent` enum | Use the schema layer below |
-| `type=Unknown` | Method not in the bundled proto snapshot | Refresh the snapshot |
+| `type=Unknown` | Method not in the pinned v3 schema | Re-pin the schema |
 
 `LiveEvent` is a deliberately small, stable subset (chat, gift, like, member, social, room
 user). Everything else lands in `LiveEvent::Unknown` — that is the enum's boundary, not a
 decoding failure.
 
-The schema layer covers all of it. Read any of the snapshot's methods by field name, without
+The schema layer covers all of it. Read any of the schema's methods by field name, without
 a hand-written struct per message type:
 
 ```rust
-let event = decode_webcast_message(&method, &payload)?;
+let event = ttl_live_events::decode_webcast_message(&method, &payload)?;
 if let Some(text) = event.text("content") { … }
 if let Some(user) = event.message("user") {
     let nickname = user.text("nickname");
@@ -159,18 +159,22 @@ if let Some(user) = event.message("user") {
 Accessors exist on both events and nested messages, so walking `user.badge.name` meets the
 same API at each level. Asking for the wrong shape returns `None` rather than panicking.
 
-When `is_known()` is `false`, TikTok shipped a message type newer than the snapshot. The
+When `is_known()` is `false`, TikTok shipped a message type newer than the pinned schema. The
 event is still decoded — fields keep their wire numbers and values, only the names are
-missing, which `live-check` shows as `#1=<60 bytes>`. To name them, refresh
-`proto/tiktok_schema.proto`; `build.rs` regenerates the registry from it.
+missing, which `live-check` shows as `#1=<60 bytes>`. To name them, move the pin with
+`scripts/update-tiktok-protos.sh <commit>`.
 
 ### Schema coverage
 
-`ttl-sign-core` builds the bundled MIT-licensed TikTokLiveSharp snapshot into 477 generated
-protobuf message bindings and descriptors for 134 `Webcast*` page-message methods. The dynamic
-listener exposes known field names and values while retaining unknown fields structurally; the
-generated types are also available under `ttl_sign_core::tik_tok` for trusted, explicit decoding.
-See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution.
+`ttl-live-proto` builds the pinned TikTok Webcast **v3** schemas into generated protobuf
+bindings plus descriptors for 730 message types, 64 of them addressable as `Webcast*` methods.
+The dynamic listener in `ttl-live-events` exposes known field names and values while retaining
+unknown fields structurally; the generated types are also available under `ttl_live_proto::v3`
+for trusted, explicit decoding.
+
+These schemas are **not** MIT-licensed like the rest of the workspace. See
+[`crates/ttl-live-proto/README.md`](crates/ttl-live-proto/README.md) and
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) before redistributing or hosting.
 
 ## Tools
 

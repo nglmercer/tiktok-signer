@@ -1,0 +1,20 @@
+[package]
+name = "ttl-live-events"
+description = "Stable TikTok LIVE event API normalised from the Webcast v3 schema."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ttl-live-proto = { workspace = true }
+ttl-sign-core = { workspace = true }
+
+prost = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+

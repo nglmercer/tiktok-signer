@@ -5,6 +5,8 @@ members = [
     "crates/ttl-sign-webview",
     "crates/ttl-sign-server",
     "crates/ttl-live-ws",
+    "crates/ttl-live-proto",
+    "crates/ttl-live-events",
 ]
 
 [workspace.package]
@@ -18,6 +20,8 @@ repository = "https://github.com/nglmercer/tiktok-signer"
 ttl-sign-core = { path = "crates/ttl-sign-core" }
 ttl-sign-webview = { path = "crates/ttl-sign-webview" }
 ttl-live-ws = { path = "crates/ttl-live-ws" }
+ttl-live-proto = { path = "crates/ttl-live-proto" }
+ttl-live-events = { path = "crates/ttl-live-events" }
 
 anyhow = "1"
 base64 = "0.22"

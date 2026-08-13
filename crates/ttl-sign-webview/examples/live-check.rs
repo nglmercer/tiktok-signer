@@ -26,10 +26,9 @@ use std::io::Read;
 use std::time::{Duration, Instant};
 
 use flate2::read::GzDecoder;
-use ttl_sign_core::proto::{LiveEvent, PushFrame, WebcastEventBatch};
-use ttl_sign_core::{
-    decode_webcast_message, Gift, GiftStreaks, RoomInfo, SchemaMessage, SchemaValue,
-};
+use ttl_live_events::{decode_webcast_message, LiveEvent, SchemaMessage, SchemaValue};
+use ttl_sign_core::proto::{PushFrame, WebcastEventBatch};
+use ttl_sign_core::{Gift, GiftStreaks, RoomInfo};
 use ttl_sign_webview::{is_webcast_socket, run, session, EngineConfig, PageWebSocketEvent, Signer};
 
 const PAGE_TRANSPORT_TIMEOUT: Duration = Duration::from_secs(45);
@@ -263,23 +262,17 @@ async fn check(signer: Signer, requested_user: Option<String>) -> Result<(), Str
                                                 batch.cursor
                                             );
                                             for message in batch.messages {
-                                                match message.decode_event() {
-                                                    Ok(event) => {
-                                                        decoded_events += 1;
-                                                        print_event(message.message_id, &event, &gifts, &mut streaks);
-                                                    }
-                                                    Err(error) => {
-                                                        decode_errors += 1;
-                                                        println!(
-                                                            "        [decode-error] method={} id={} error={error}",
-                                                            message.method,
-                                                            message.message_id
-                                                        );
-                                                    }
-                                                }
-                                                // Decode the same payload against the full
-                                                // schema snapshot here, so each schema line
-                                                // sits directly under its own event.
+                                                // Normalisation never fails: an unreadable
+                                                // payload arrives as `Unknown` with its bytes.
+                                                let event = ttl_live_events::decode_event(
+                                                    &message.method,
+                                                    &message.payload,
+                                                );
+                                                decoded_events += 1;
+                                                print_event(message.message_id, &event, &gifts, &mut streaks);
+                                                // Decode the same payload against the pinned
+                                                // v3 schema here, so each schema line sits
+                                                // directly under its own event.
                                                 match decode_webcast_message(
                                                     &message.method,
                                                     &message.payload,
@@ -427,29 +420,26 @@ fn print_room_info(info: &RoomInfo) {
 
 fn print_event(message_id: u64, event: &LiveEvent, gifts: &[Gift], streaks: &mut GiftStreaks) {
     match event {
-        LiveEvent::Chat { user, content } => println!(
+        LiveEvent::Chat(chat) => println!(
             "        [chat] id={message_id} @{}: {}",
-            user.label(),
-            one_line(content)
+            chat.user.label(),
+            one_line(&chat.comment)
         ),
-        LiveEvent::Gift {
-            user,
-            gift_id,
-            repeat_count,
-            repeat_end,
-        } => {
+        LiveEvent::Gift(gift_event) => {
+            let (user, gift_id, repeat_count, repeat_end) = (
+                &gift_event.user,
+                &gift_event.gift_id,
+                &gift_event.repeat_count,
+                &gift_event.repeat_end,
+            );
             // A gift event carries only an id; the gift table turns it into a name and a
             // diamond value. A streakable gift is reported once, when TikTok ends the
             // streak, so a held send button is one gift rather than a dozen.
             let gift = gifts.iter().find(|gift| gift.id == *gift_id);
             let streakable = gift.is_some_and(Gift::is_streakable);
-            let Some(completed) = streaks.observe(
-                user.id,
-                *gift_id,
-                *repeat_count,
-                *repeat_end,
-                streakable,
-            ) else {
+            let Some(completed) =
+                streaks.observe(user.id, *gift_id, *repeat_count, *repeat_end, streakable)
+            else {
                 return;
             };
             let named = match gift {
@@ -463,47 +453,40 @@ fn print_event(message_id: u64, event: &LiveEvent, gifts: &[Gift], streaks: &mut
             };
             println!("        [gift] id={message_id} @{} {named}", user.label());
         }
-        LiveEvent::Like { user, count, total } => println!(
-            "        [like] id={message_id} @{} count={count} total={total}",
-            user.label()
+        LiveEvent::Like(like) => println!(
+            "        [like] id={message_id} @{} count={} total={}",
+            like.user.label(),
+            like.count,
+            like.total
         ),
-        LiveEvent::Member {
-            user,
-            member_count,
-            action,
-        } => println!(
-            "        [member] id={message_id} @{} viewers={member_count} action={action}",
-            user.label()
+        LiveEvent::Member(member) => println!(
+            "        [member] id={message_id} @{} viewers={} action={}",
+            member.user.label(),
+            member.member_count,
+            member.action
         ),
-        LiveEvent::Social {
-            user,
-            action,
-            follow_count,
-            share_count,
-        } => println!(
-            "        [social] id={message_id} @{} action={action} follows={follow_count} shares={share_count}",
-            user.label()
+        LiveEvent::Social(social) => println!(
+            "        [social] id={message_id} @{} action={} follows={} shares={}",
+            social.user.label(),
+            social.action,
+            social.follow_count,
+            social.share_count
         ),
-        LiveEvent::RoomUser {
-            total,
-            popularity,
-            total_user,
-        } => println!(
-            "        [room-user] id={message_id} total={total} popularity={popularity} total_users={total_user}"
+        LiveEvent::RoomUser(room) => println!(
+            "        [room-user] id={message_id} total={} popularity={} total_users={}",
+            room.total, room.popularity, room.total_user
         ),
         // "Unknown" here means only that this method is outside the six-method reduced
         // enum, not that anything was dropped. The schema line below carries its fields.
-        LiveEvent::Unknown {
-            method,
-            payload_len,
-        } => println!(
-            "        [other] id={message_id} method={method} payload={payload_len} bytes"
+        LiveEvent::Unknown { method, payload } => println!(
+            "        [other] id={message_id} method={method} payload={} bytes",
+            payload.len()
         ),
     }
 }
 
-/// Show that every event carries data, named when the snapshot knows the method and by wire
-/// number when it does not. Nothing is discarded either way.
+/// Show that every event carries data, named when the pinned schema knows the method and by
+/// wire number when it does not. Nothing is discarded either way.
 fn print_schema_event(message_id: u64, method: &str, event: &SchemaMessage) {
     println!(
         "          [schema] id={message_id} method={method} type={}{}",
@@ -522,7 +505,7 @@ fn print_schema_event(message_id: u64, method: &str, event: &SchemaMessage) {
 }
 
 /// One field as `name=value`, falling back to its wire number when unnamed.
-fn describe_field(field: &ttl_sign_core::SchemaField) -> String {
+fn describe_field(field: &ttl_live_events::SchemaField) -> String {
     let label = field
         .name
         .map(str::to_owned)

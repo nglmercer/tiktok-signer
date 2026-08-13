@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use ttl_sign_core::SchemaValue;
+use ttl_live_events::SchemaValue;
 use ttl_sign_webview::{run, session, DecodedSchemaEvent, EngineConfig, Signer};
 
 const EVENT_TIMEOUT: Duration = Duration::from_secs(45);

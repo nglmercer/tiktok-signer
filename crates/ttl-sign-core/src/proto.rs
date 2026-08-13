@@ -587,59 +587,6 @@ mod event_batch_field {
     pub const NEED_ACK: u32 = 9;
 }
 
-mod user_field {
-    pub const ID: u32 = 1;
-    pub const NICKNAME: u32 = 3;
-    pub const DISPLAY_ID: u32 = 38;
-    pub const SEC_UID: u32 = 46;
-}
-
-mod chat_field {
-    pub const USER: u32 = 2;
-    pub const CONTENT: u32 = 3;
-}
-
-mod gift_field {
-    pub const GIFT_ID: u32 = 2;
-    pub const REPEAT_COUNT: u32 = 5;
-    pub const USER: u32 = 7;
-    pub const REPEAT_END: u32 = 9;
-}
-
-mod like_field {
-    pub const COUNT: u32 = 2;
-    pub const TOTAL: u32 = 3;
-    pub const USER: u32 = 5;
-}
-
-mod member_field {
-    pub const USER: u32 = 2;
-    pub const MEMBER_COUNT: u32 = 3;
-    pub const ACTION: u32 = 10;
-}
-
-mod social_field {
-    pub const USER: u32 = 2;
-    pub const ACTION: u32 = 4;
-    pub const FOLLOW_COUNT: u32 = 6;
-    pub const SHARE_COUNT: u32 = 8;
-}
-
-mod room_user_field {
-    pub const TOTAL: u32 = 3;
-    pub const POPULARITY: u32 = 6;
-    pub const TOTAL_USER: u32 = 7;
-}
-
-mod event_method {
-    pub const CHAT: &str = "WebcastChatMessage";
-    pub const GIFT: &str = "WebcastGiftMessage";
-    pub const LIKE: &str = "WebcastLikeMessage";
-    pub const MEMBER: &str = "WebcastMemberMessage";
-    pub const SOCIAL: &str = "WebcastSocialMessage";
-    pub const ROOM_USER: &str = "WebcastRoomUserSeqMessage";
-}
-
 /// One embedded event from a `msg` WebSocket frame.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WebcastMessage {
@@ -679,11 +626,6 @@ impl WebcastMessage {
         }
         Ok(message)
     }
-
-    /// Decode the method-specific payload into the stable event subset used by listeners.
-    pub fn decode_event(&self) -> Result<LiveEvent, ProtoError> {
-        decode_live_event(&self.method, &self.payload)
-    }
 }
 
 /// Event batch carried by a `PushFrame` whose `payload_type` is `msg`.
@@ -721,230 +663,6 @@ impl WebcastEventBatch {
         }
         Ok(batch)
     }
-}
-
-/// Minimal user identity shared by public-area events.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct EventUser {
-    pub id: u64,
-    pub nickname: String,
-    pub display_id: String,
-    pub sec_uid: String,
-}
-
-impl EventUser {
-    fn decode(buf: &[u8]) -> Result<Self, ProtoError> {
-        let mut user = Self::default();
-        let mut reader = Reader::new(buf);
-        while let Some(field) = reader.next_field() {
-            let (number, wire) = field?;
-            match number {
-                user_field::ID => user.id = wire.as_u64().unwrap_or_default(),
-                user_field::NICKNAME => {
-                    user.nickname = wire.as_str().unwrap_or_default().to_owned()
-                }
-                user_field::DISPLAY_ID => {
-                    user.display_id = wire.as_str().unwrap_or_default().to_owned()
-                }
-                user_field::SEC_UID => user.sec_uid = wire.as_str().unwrap_or_default().to_owned(),
-                _ => {}
-            }
-        }
-        Ok(user)
-    }
-
-    pub fn label(&self) -> &str {
-        if !self.display_id.is_empty() {
-            &self.display_id
-        } else if !self.nickname.is_empty() {
-            &self.nickname
-        } else {
-            "unknown"
-        }
-    }
-}
-
-/// Stable, listener-facing subset of TikTok LIVE events.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LiveEvent {
-    Chat {
-        user: EventUser,
-        content: String,
-    },
-    Gift {
-        user: EventUser,
-        gift_id: u64,
-        repeat_count: u64,
-        repeat_end: bool,
-    },
-    Like {
-        user: EventUser,
-        count: u64,
-        total: u64,
-    },
-    Member {
-        user: EventUser,
-        member_count: u64,
-        action: u64,
-    },
-    Social {
-        user: EventUser,
-        action: u64,
-        follow_count: u64,
-        share_count: u64,
-    },
-    RoomUser {
-        total: u64,
-        popularity: u64,
-        total_user: u64,
-    },
-    Unknown {
-        method: String,
-        payload_len: usize,
-    },
-}
-
-fn decode_live_event(method: &str, payload: &[u8]) -> Result<LiveEvent, ProtoError> {
-    match method {
-        event_method::CHAT => decode_chat(payload),
-        event_method::GIFT => decode_gift(payload),
-        event_method::LIKE => decode_like(payload),
-        event_method::MEMBER => decode_member(payload),
-        event_method::SOCIAL => decode_social(payload),
-        event_method::ROOM_USER => decode_room_user(payload),
-        _ => Ok(LiveEvent::Unknown {
-            method: method.to_owned(),
-            payload_len: payload.len(),
-        }),
-    }
-}
-
-fn nested_user(wire: &WireValue<'_>) -> Result<EventUser, ProtoError> {
-    wire.as_bytes()
-        .map(EventUser::decode)
-        .unwrap_or_else(|| Ok(EventUser::default()))
-}
-
-fn decode_chat(payload: &[u8]) -> Result<LiveEvent, ProtoError> {
-    let mut user = EventUser::default();
-    let mut content = String::new();
-    let mut reader = Reader::new(payload);
-    while let Some(field) = reader.next_field() {
-        let (number, wire) = field?;
-        match number {
-            chat_field::USER => user = nested_user(&wire)?,
-            chat_field::CONTENT => content = wire.as_str().unwrap_or_default().to_owned(),
-            _ => {}
-        }
-    }
-    Ok(LiveEvent::Chat { user, content })
-}
-
-fn decode_gift(payload: &[u8]) -> Result<LiveEvent, ProtoError> {
-    let mut user = EventUser::default();
-    let mut gift_id = 0;
-    let mut repeat_count = 0;
-    let mut repeat_end = false;
-    let mut reader = Reader::new(payload);
-    while let Some(field) = reader.next_field() {
-        let (number, wire) = field?;
-        match number {
-            gift_field::GIFT_ID => gift_id = wire.as_u64().unwrap_or_default(),
-            gift_field::REPEAT_COUNT => repeat_count = wire.as_u64().unwrap_or_default(),
-            gift_field::USER => user = nested_user(&wire)?,
-            gift_field::REPEAT_END => repeat_end = wire.as_u64().unwrap_or_default() != 0,
-            _ => {}
-        }
-    }
-    Ok(LiveEvent::Gift {
-        user,
-        gift_id,
-        repeat_count,
-        repeat_end,
-    })
-}
-
-fn decode_like(payload: &[u8]) -> Result<LiveEvent, ProtoError> {
-    let mut user = EventUser::default();
-    let mut count = 0;
-    let mut total = 0;
-    let mut reader = Reader::new(payload);
-    while let Some(field) = reader.next_field() {
-        let (number, wire) = field?;
-        match number {
-            like_field::COUNT => count = wire.as_u64().unwrap_or_default(),
-            like_field::TOTAL => total = wire.as_u64().unwrap_or_default(),
-            like_field::USER => user = nested_user(&wire)?,
-            _ => {}
-        }
-    }
-    Ok(LiveEvent::Like { user, count, total })
-}
-
-fn decode_member(payload: &[u8]) -> Result<LiveEvent, ProtoError> {
-    let mut user = EventUser::default();
-    let mut member_count = 0;
-    let mut action = 0;
-    let mut reader = Reader::new(payload);
-    while let Some(field) = reader.next_field() {
-        let (number, wire) = field?;
-        match number {
-            member_field::USER => user = nested_user(&wire)?,
-            member_field::MEMBER_COUNT => member_count = wire.as_u64().unwrap_or_default(),
-            member_field::ACTION => action = wire.as_u64().unwrap_or_default(),
-            _ => {}
-        }
-    }
-    Ok(LiveEvent::Member {
-        user,
-        member_count,
-        action,
-    })
-}
-
-fn decode_social(payload: &[u8]) -> Result<LiveEvent, ProtoError> {
-    let mut user = EventUser::default();
-    let mut action = 0;
-    let mut follow_count = 0;
-    let mut share_count = 0;
-    let mut reader = Reader::new(payload);
-    while let Some(field) = reader.next_field() {
-        let (number, wire) = field?;
-        match number {
-            social_field::USER => user = nested_user(&wire)?,
-            social_field::ACTION => action = wire.as_u64().unwrap_or_default(),
-            social_field::FOLLOW_COUNT => follow_count = wire.as_u64().unwrap_or_default(),
-            social_field::SHARE_COUNT => share_count = wire.as_u64().unwrap_or_default(),
-            _ => {}
-        }
-    }
-    Ok(LiveEvent::Social {
-        user,
-        action,
-        follow_count,
-        share_count,
-    })
-}
-
-fn decode_room_user(payload: &[u8]) -> Result<LiveEvent, ProtoError> {
-    let mut total = 0;
-    let mut popularity = 0;
-    let mut total_user = 0;
-    let mut reader = Reader::new(payload);
-    while let Some(field) = reader.next_field() {
-        let (number, wire) = field?;
-        match number {
-            room_user_field::TOTAL => total = wire.as_u64().unwrap_or_default(),
-            room_user_field::POPULARITY => popularity = wire.as_u64().unwrap_or_default(),
-            room_user_field::TOTAL_USER => total_user = wire.as_u64().unwrap_or_default(),
-            _ => {}
-        }
-    }
-    Ok(LiveEvent::RoomUser {
-        total,
-        popularity,
-        total_user,
-    })
 }
 
 #[cfg(test)]
@@ -1095,16 +813,13 @@ mod tests {
         assert_eq!(fields[3].as_ref().unwrap().1.as_str(), Some("0"));
     }
 
+    /// The batch splitter is transport, not event semantics: it hands out method
+    /// names and payload bytes and interprets neither. Normalising those payloads
+    /// is `ttl-live-events`' job.
     #[test]
-    fn decodes_chat_from_an_event_batch() {
-        let user = Writer::new()
-            .u64_field(user_field::ID, 42)
-            .str_field(user_field::NICKNAME, "Ada")
-            .str_field(user_field::DISPLAY_ID, "ada_live")
-            .clone()
-            .finish();
+    fn splits_a_batch_into_messages_without_interpreting_them() {
         let chat = Writer::new()
-            .bytes_field(2, &user)
+            .bytes_field(2, b"user-bytes")
             .str_field(3, "hello")
             .clone()
             .finish();
@@ -1121,36 +836,30 @@ mod tests {
             .finish();
 
         let batch = WebcastEventBatch::decode(&batch_bytes).unwrap();
+
         assert_eq!(batch.cursor, "cursor");
         assert_eq!(batch.messages.len(), 1);
         assert_eq!(batch.messages[0].message_id, 99);
-        assert_eq!(
-            batch.messages[0].decode_event().unwrap(),
-            LiveEvent::Chat {
-                user: EventUser {
-                    id: 42,
-                    nickname: "Ada".into(),
-                    display_id: "ada_live".into(),
-                    sec_uid: String::new(),
-                },
-                content: "hello".into(),
-            }
-        );
+        assert_eq!(batch.messages[0].method, "WebcastChatMessage");
+        // The payload is passed through byte for byte.
+        assert_eq!(batch.messages[0].payload, chat);
     }
 
+    /// A method this crate has never heard of is still split out with its bytes;
+    /// the transport layer has no opinion about which methods exist.
     #[test]
-    fn preserves_unknown_event_methods() {
-        let message = WebcastMessage {
-            method: "WebcastFutureMessage".into(),
-            payload: vec![1, 2, 3],
-            ..Default::default()
-        };
-        assert_eq!(
-            message.decode_event().unwrap(),
-            LiveEvent::Unknown {
-                method: "WebcastFutureMessage".into(),
-                payload_len: 3,
-            }
-        );
+    fn preserves_unknown_methods_with_their_payloads() {
+        let message = Writer::new()
+            .str_field(base_message_field::METHOD, "WebcastFutureMessage")
+            .bytes_field(base_message_field::PAYLOAD, &[1, 2, 3])
+            .clone()
+            .finish();
+        let batch_bytes = Writer::new().bytes_field(1, &message).clone().finish();
+
+        let batch = WebcastEventBatch::decode(&batch_bytes).unwrap();
+
+        assert_eq!(batch.messages.len(), 1);
+        assert_eq!(batch.messages[0].method, "WebcastFutureMessage");
+        assert_eq!(batch.messages[0].payload, vec![1, 2, 3]);
     }
 }

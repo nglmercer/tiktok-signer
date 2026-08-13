@@ -42,11 +42,11 @@ use wry::WebViewBuilder;
 
 use flate2::read::GzDecoder;
 
-use ttl_sign_core::proto::{LiveEvent, PushFrame, WebcastEventBatch};
+use ttl_live_events::{decode_webcast_message, LiveEvent, SchemaMessage};
+use ttl_sign_core::proto::{PushFrame, WebcastEventBatch};
 use ttl_sign_core::room::{self, Gift, LiveChannel, RoomInfo, RoomLookup};
 use ttl_sign_core::{
-    decode_webcast_message, CookieJar, FetchParams, FetchResult, Preset, RejectReason,
-    SchemaMessage, SignError, SignOutcome, SignedFetch,
+    CookieJar, FetchParams, FetchResult, Preset, RejectReason, SignError, SignOutcome, SignedFetch,
 };
 
 use crate::ipc::{FromPage, PageEnv, ToPage, ToPageText};
@@ -265,9 +265,9 @@ pub struct DecodedLiveEvent {
     pub event: LiveEvent,
 }
 
-/// One WebSocket message decoded against the bundled full schema snapshot.
+/// One WebSocket message decoded against the pinned Webcast v3 schema.
 ///
-/// A method not present in the snapshot has `event.schema == None`; its wire fields remain
+/// A method not present in the schema has `event.schema == None`; its wire fields remain
 /// available in `event.fields`. Known nested messages are decoded with explicit depth and
 /// field-count limits so an evolving TikTok payload cannot destabilize the page relay.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -908,9 +908,9 @@ impl Signer {
         self.subscribe_decoded_events(decode_live_frame).await
     }
 
-    /// Subscribe to messages decoded with every type in the bundled Webcast schema snapshot.
+    /// Subscribe to messages decoded with every type in the pinned Webcast v3 schema.
     ///
-    /// This is the broadest listener API. It maps every WebSocket method in the bundled schema
+    /// This is the broadest listener API. It maps every WebSocket method in the pinned schema
     /// and retains structurally decoded raw fields for methods that TikTok adds later.
     pub async fn subscribe_schema_events(
         &self,
@@ -1681,9 +1681,10 @@ fn decode_live_frame(
         .messages
         .into_iter()
         .map(|message| {
-            let event = message
-                .decode_event()
-                .map_err(|error| SignError::Decode(format!("{}: {error}", message.method)))?;
+            // Normalisation never fails: an unreadable or unmodelled payload
+            // becomes `LiveEvent::Unknown` with its bytes intact, so one odd
+            // message cannot take its neighbours with it.
+            let event = ttl_live_events::decode_event(&message.method, &message.payload);
             Ok(DecodedLiveEvent {
                 socket_url: url.to_owned(),
                 frame_log_id,
@@ -1695,7 +1696,7 @@ fn decode_live_frame(
         .collect())
 }
 
-/// Decode one relayed frame against the bundled schema snapshot, per message.
+/// Decode one relayed frame against the pinned v3 schema, per message.
 fn decode_schema_frame(
     url: &str,
     data: &[u8],
@@ -1711,14 +1712,14 @@ fn decode_schema_frame(
             debug!(
                 method = %message.method,
                 payload_bytes = message.payload.len(),
-                "decoding page message with generated schema registry"
+                "decoding page message with the v3 schema registry"
             );
             let event = decode_webcast_message(&message.method, &message.payload)
                 .map_err(|error| SignError::Decode(format!("{}: {error}", message.method)))?;
             debug!(
                 method = %message.method,
                 schema = event.schema_name(),
-                "decoded page message with generated schema registry"
+                "decoded page message with the v3 schema registry"
             );
             Ok(DecodedSchemaEvent {
                 socket_url: url.to_owned(),
@@ -2068,13 +2069,14 @@ mod tests {
         assert_eq!(event.message_id, 11);
         assert!(matches!(
             &event.event,
-            LiveEvent::Chat { user, content }
-                if user.display_id == "grace_live" && content == "hello from live"
+            LiveEvent::Chat(chat)
+                if chat.user.unique_id == "grace_live" && chat.comment == "hello from live"
         ));
     }
 
     /// A batch mixes methods, and TikTok ships payloads this decoder has not seen. One
-    /// unreadable message must cost exactly that message.
+    /// unreadable message must cost exactly that message — and even then its bytes
+    /// survive as `LiveEvent::Unknown` rather than being discarded.
     #[test]
     fn one_undecodable_message_does_not_discard_its_batch() {
         const METHOD: u32 = 1;
@@ -2121,12 +2123,25 @@ mod tests {
         }
 
         let events = decode_live_frame("wss://example.test/webcast/im/", &encoded).unwrap();
-        assert!(events[0].is_err(), "the broken message is reported as such");
+
+        // The broken message is no longer an error: normalisation degrades it to
+        // `Unknown` and keeps its bytes, so a listener can still see that a chat
+        // arrived and inspect the payload itself.
+        let broken = events[0]
+            .as_ref()
+            .expect("the bad message is still reported");
+        assert_eq!(broken.message_id, 2);
+        assert!(matches!(
+            &broken.event,
+            LiveEvent::Unknown { method, payload }
+                if method == "WebcastChatMessage" && payload == &[0x12, 0xff]
+        ));
+
         let survivor = events[1].as_ref().expect("the neighbour still decodes");
         assert_eq!(survivor.message_id, 1);
         assert!(matches!(
             &survivor.event,
-            LiveEvent::Chat { content, .. } if content == "survived"
+            LiveEvent::Chat(chat) if chat.comment == "survived"
         ));
     }
 
@@ -2187,10 +2202,10 @@ mod tests {
             SchemaMessage { fields, .. }
                 if matches!(
                     fields.as_slice(),
-                    [ttl_sign_core::SchemaField {
+                    [ttl_live_events::SchemaField {
                         number: CHAT_CONTENT_FIELD,
-                        name: Some("Content"),
-                        value: ttl_sign_core::SchemaValue::Text(content),
+                        name: Some("content"),
+                        value: ttl_live_events::SchemaValue::Text(content),
                     }]
                     if content == "hello from the schema registry"
                 )

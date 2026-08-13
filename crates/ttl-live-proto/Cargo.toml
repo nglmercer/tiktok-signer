@@ -1,0 +1,23 @@
+[package]
+name = "ttl-live-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+# The vendored `.proto` sources under `proto/v3/` come from
+# isaackogan/TikTok-Webcast-Protobuf under a modified AGPL-3.0 (AGPL plus
+# Section 7 additional permissions). That is not a plain SPDX identifier, so the
+# terms are referenced as a file rather than mislabelled. `publish = false`:
+# read README.md in this crate before redistributing.
+license-file = "LICENSE.upstream"
+description = "Prost bindings for the TikTok Webcast Protobuf v3 schema."
+publish = false
+
+[dependencies]
+prost = { workspace = true }
+
+[build-dependencies]
+prost = { workspace = true }
+prost-build = { workspace = true }
+prost-types = { workspace = true }
+protoc-bin-vendored = { workspace = true }
