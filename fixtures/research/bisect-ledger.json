@@ -282,6 +282,61 @@
         "X-Gnarly": 324
       },
       "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "8d134d1247fb",
+      "shim": "9957f0e3",
+      "variant": "unsigned",
+      "what": "no signature at all, which is what the page itself sends to this path",
+      "outcome": "empty",
+      "status": 200,
+      "bytes": 0,
+      "signed_lengths": {},
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "7f1d2d125d60",
+      "shim": "9957f0e3",
+      "variant": "unsigned-project-params",
+      "what": "unsigned, with the fuller FetchParams query",
+      "outcome": "empty",
+      "status": 200,
+      "bytes": 0,
+      "signed_lengths": {},
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "ee5538bcba34",
+      "shim": "9957f0e3",
+      "variant": "unsigned-minimal",
+      "what": "unsigned, with only the parameters the transport chunk reads",
+      "outcome": "empty",
+      "status": 200,
+      "bytes": 0,
+      "signed_lengths": {},
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "6106d8c8d00c",
+      "shim": "9957f0e3",
+      "variant": "unsigned-with-mstoken",
+      "what": "unsigned but carrying the msToken the page holds, as a page request would",
+      "outcome": "empty",
+      "status": 200,
+      "bytes": 0,
+      "signed_lengths": {},
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "0b93cdee11ac",
+      "shim": "9957f0e3",
+      "variant": "unsigned-player-exact",
+      "what": "the chunk's own query — version_code 180800, cursor=0, internal_ext=0, last_rtt=-1",
+      "outcome": "empty",
+      "status": 200,
+      "bytes": 0,
+      "signed_lengths": {},
+      "observed_on": "2026-08-18"
     }
   ]
 }

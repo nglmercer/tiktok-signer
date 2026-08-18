@@ -11,11 +11,16 @@ path. That is now the only path; the WebView oracle has been removed.
 ## Status
 
 Verified against live rooms on 2026-08-18 with no browser: discovery, `room/info` and `gift/list`
-return live data. The transport does not: `/webcast/im/fetch/` refuses this signer, and the
-captured-URI fallback has been removed rather than kept, so there is currently **no working
-transport**. [docs/12](docs/12-transport-reverse-engineering.md) records what has been measured,
-including two claims withdrawn on 2026-08-18 — those read endpoints never verified a signature, and
-the refusal turns out to be insensitive to every input the signature reads.
+return live data, and `/webcast/room/enter/` **accepts this project's signature** — it refuses
+unsigned and `X-Bogus`-only requests with 403 and accepts the full computed suffix with 200, which is
+positive proof the signing is correct.
+
+The transport still does not deliver. `/webcast/im/fetch/` answers 200 with an empty body, and the
+captured-URI fallback was removed rather than kept, so there is currently **no working transport**.
+Two long-standing defects were fixed on the way there: the transport request was being *signed*,
+which draws a 403 because the page does not sign that path, and its query was ours rather than the
+player's. Neither was the empty body. See
+[docs/12](docs/12-transport-reverse-engineering.md) — including the claims withdrawn that day.
 
 | Crate | Status |
 |---|---|
@@ -304,11 +309,12 @@ deliberately, because a fallback that needs a browser once is still a browser de
 keeping it meant the real problem never had to be solved. The transport is `/webcast/im/fetch/`
 or nothing.
 
-`im/fetch` does not yet answer this signer with a `push_server`. What is known about why is in
-[docs/12](docs/12-transport-reverse-engineering.md), and one long-standing claim there has been
-withdrawn: `room/info` and `gift/list` were believed to prove the signer works, and they do not
-verify signatures at all — a one-character tamper and an unsigned request return identical data.
-They are now called unsigned, and `im/fetch` is the only signed request in the system.
+`im/fetch` does not yet answer with a `push_server`. What is known about why is in
+[docs/12](docs/12-transport-reverse-engineering.md), and two long-standing claims there have been
+withdrawn. `room/info` and `gift/list` were believed to prove the signer works; they do not verify
+signatures at all, so they are now called unsigned. And the transport request was believed to need a
+signature; the page's own allowlist excludes that path, signing it is what produced the 403, and it
+now goes out unsigned. The signer's remaining job is `room/enter`.
 
 Everything downstream of a `push_server` is built and tested: `ttl-live-ws` connects,
 heartbeats, and acknowledges, `sanitize_uri` escapes the raw spaces a browser emits in

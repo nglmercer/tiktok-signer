@@ -24,8 +24,18 @@ const LAST_RTT_MAX: u32 = 200;
 const APP_ID: &str = "1988";
 const LIVE_ID: &str = "12";
 const FETCH_RULE: &str = "1";
-const FETCH_VERSION_CODE: &str = "270000";
+/// `version_code` for the transport request.
+///
+/// `180800`, which is a constant in the player's own transport chunk
+/// (`static/js/async/9894.*.js`), not the `270000` the rest of the web app sends. Read directly out
+/// of that chunk on 2026-08-18.
+const FETCH_VERSION_CODE: &str = "180800";
 const WS_VERSION_CODE: &str = "180800";
+/// The `version_code` a client appends after the signed query, which is not the one in it.
+///
+/// Distinct from [`FETCH_VERSION_CODE`]: this duplicate is the connector's own value and stays
+/// `270000` regardless of what the transport request carries.
+const TRAILING_VERSION_CODE: &str = "270000";
 const HEARTBEAT_DURATION_MS: &str = "10000";
 
 /// Query string under construction: ordered pairs with duplicates allowed.
@@ -216,8 +226,11 @@ impl FetchParams {
         Self {
             room_id: room_id.into(),
             device_id: random_device_id(),
-            cursor: String::new(),
-            internal_ext: String::new(),
+            // The player's *initial* fetch sends `cursor=0` and `internal_ext=0`, not empty ones —
+            // and its query builder deletes empty values outright, so an empty `cursor` is a request
+            // it can never produce. Read from the transport chunk on 2026-08-18.
+            cursor: "0".into(),
+            internal_ext: "0".into(),
             contact_us: String::new(),
             sup_ws_ds_opt: 1,
         }
@@ -246,10 +259,11 @@ impl FetchParams {
             .set("did_rule", "3")
             .set("fetch_rule", FETCH_RULE)
             .set("history_comment_count", "6")
-            .set("history_comment_cursor", "")
             .set("identity", "audience")
             .set("internal_ext", &self.internal_ext)
-            .set("last_rtt", "0")
+            // `-1` on the first fetch, the value the chunk passes when it has no round trip to
+            // report yet.
+            .set("last_rtt", "-1")
             .set("live_id", LIVE_ID)
             .set("os", &d.os)
             .set("priority_region", &l.region)
@@ -261,8 +275,7 @@ impl FetchParams {
             .set("sup_ws_ds_opt", self.sup_ws_ds_opt.to_string())
             .set("tz_name", &l.tz_name)
             .set("version_code", FETCH_VERSION_CODE)
-            .set("webcast_language", &l.language)
-            .set("notice", "CUSTOM_SIGN_SERVER");
+            .set("webcast_language", &l.language);
 
         if !self.contact_us.is_empty() {
             q.set("contact_us", &self.contact_us);
@@ -376,7 +389,7 @@ impl WsParams {
         for (k, v) in self.client_params(preset).iter() {
             q.set(k, v);
         }
-        q.push_raw("version_code", FETCH_VERSION_CODE);
+        q.push_raw("version_code", TRAILING_VERSION_CODE);
 
         let sep = if push_server.contains('?') { '&' } else { '?' };
         format!("{push_server}{sep}{}", q.encode())

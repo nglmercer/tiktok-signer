@@ -143,6 +143,39 @@ const paramSets = {
     screen_width: '1920', sup_ws_ds_opt: '1', tz_name: 'America/New_York',
     version_code: '270000', webcast_language: 'en',
   }),
+  // The chunk's own parameter set, in its own order, with its own constants.
+  'player-exact': (browser) => playerQuery({
+    // k(): the environment block, in the order the chunk writes it.
+    versionCode: PLAYER_VERSION_CODE,
+    devicePlatform: 'web',
+    cookieEnabled: 'true',
+    screenWidth: '1920',
+    screenHeight: '1080',
+    browserLanguage: 'en-US',
+    browserPlatform: browser.platform,
+    browserName: 'Mozilla',
+    browserVersion: browser.version,
+    browserOnline: 'true',
+    tzName: 'America/New_York',
+    // The caller's props.
+    roomId: roomId,
+    aid: '1988',
+    appName: 'tiktok_web',
+    appLanguage: 'en',
+    identity: 'audience',
+    liveId: '12',
+    fetchRule: '1',
+    // V(): appended unconditionally.
+    supWsDsOpt: '1',
+    respContentType: 'protobuf',
+    didRule: '3',
+    deviceId: deviceId,
+    webcastLanguage: 'en',
+    // The initial fetch's overrides. Not empty — the chunk cannot send an empty one.
+    lastRtt: '-1',
+    cursor: '0',
+    internalExt: '0',
+  }),
   // Only what the chunk reads back out of the response cycle.
   minimal: () => new URLSearchParams({
     aid: '1988', app_name: 'tiktok_web', device_platform: 'web', fetch_rule: '1',
@@ -150,6 +183,37 @@ const paramSets = {
     sup_ws_ds_opt: '1', version_code: '270000',
   }),
 };
+
+// --- the player's own query, reproduced ---------------------------------------------------------
+//
+// Read out of the transport chunk (`static/js/async/9894.*.js`), which builds this query itself and
+// sends it over a plain unsigned XHR. Three things in it differ from what this repository has been
+// sending, and each is a candidate for the empty body:
+//
+//   * `version_code` is **180800**, a constant in the chunk. We send 270000.
+//   * The *initial* fetch sends `cursor=0`, `internal_ext=0`, `last_rtt=-1`. We send `cursor=` and
+//     `internal_ext=` empty and `last_rtt=0` — and the chunk deletes empty values outright, so an
+//     empty `cursor` is not a value it can ever produce.
+//   * Keys are camelCase converted to snake_case and values are written **raw**, not
+//     percent-encoded.
+//
+// `H(V(props))` in the chunk is these two functions.
+const PLAYER_VERSION_CODE = '180800';
+
+/// The chunk's serializer: snake_case the key, drop empty values, leave values otherwise untouched.
+function playerQuery(fields) {
+  return Object.entries(fields)
+    .filter(([, value]) => value !== undefined && value !== '')
+    .map(([key, value]) => {
+      const name = key
+        .replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)
+        .replace(/\s+/g, '_')
+        .replace(/[^a-zA-Z0-9_]/g, '')
+        .toLowerCase();
+      return `${name}=${String(value)}`;
+    })
+    .join('&');
+}
 
 const LINUX = { platform: 'Linux x86_64', version: LINUX_UA.slice(8) };
 const WINDOWS = { platform: 'Win32', version: WINDOWS_UA.slice(8) };
@@ -248,6 +312,30 @@ const VARIANTS = {
     what: 'the public frontierSign X-Bogus alone — the control, expected to answer empty',
     ua: LINUX_UA, browser: LINUX, params: 'player', product: 'frontier',
   },
+  // The page's own signing allowlist, read from its main chunk, covers 7 GET and 22 POST webcast
+  // paths — all wallet, KYC, room/chat and room/enter. `/webcast/im/fetch/` is in neither list, so a
+  // real browser sends it with **no** signature of any kind. Every signed variant above may
+  // therefore have been asking the wrong question: a parameter the endpoint never expects.
+  'unsigned': {
+    what: 'no signature at all, which is what the page itself sends to this path',
+    ua: LINUX_UA, browser: LINUX, params: 'player', product: 'unsigned',
+  },
+  'unsigned-project-params': {
+    what: 'unsigned, with the fuller FetchParams query',
+    ua: LINUX_UA, browser: LINUX, params: 'project', product: 'unsigned',
+  },
+  'unsigned-minimal': {
+    what: 'unsigned, with only the parameters the transport chunk reads',
+    ua: LINUX_UA, browser: LINUX, params: 'minimal', product: 'unsigned',
+  },
+  'unsigned-player-exact': {
+    what: "the chunk's own query — version_code 180800, cursor=0, internal_ext=0, last_rtt=-1",
+    ua: LINUX_UA, browser: LINUX, params: 'player-exact', product: 'unsigned',
+  },
+  'unsigned-with-mstoken': {
+    what: 'unsigned but carrying the msToken the page holds, as a page request would',
+    ua: LINUX_UA, browser: LINUX, params: 'player', product: 'unsigned', msToken: true,
+  },
 };
 
 // --- ledger -----------------------------------------------------------------------------------
@@ -279,7 +367,8 @@ function fingerprint(name, spec) {
     name, ua: spec.ua, browser: spec.browser, params: spec.params,
     noWebgl: !!spec.noWebgl, xmst: spec.xmst || 'issued', strip: spec.strip || [],
     clientHints: spec.clientHints !== false, deterministic: !!spec.deterministic,
-    realBogus: !!spec.realBogus, product: spec.product || 'suffix',
+    realBogus: !!spec.realBogus, msToken: !!spec.msToken,
+    product: spec.product || 'suffix',
   });
   return crypto.createHash('sha256').update(material).digest('hex').slice(0, 12);
 }
@@ -299,6 +388,9 @@ function classify(record) {
 }
 
 async function attempt(name, spec) {
+  const query = paramSets[spec.params](spec.browser);
+  const unsigned = `https://webcast.tiktok.com/webcast/im/fetch/?${query}`;
+
   // The shim reads these at collection time, so they are per-variant switches rather than state.
   if (spec.noWebgl) process.env.TTL_NO_WEBGL = '1'; else delete process.env.TTL_NO_WEBGL;
   if (spec.deterministic) process.env.TTL_DETERMINISTIC = '1'; else delete process.env.TTL_DETERMINISTIC;
@@ -355,8 +447,30 @@ async function attempt(name, spec) {
   const sdk = w.byted_acrawler;
   await Promise.resolve(sdk.init({ aid: 1988, enablePathList: ['/webcast/'] }));
 
-  const query = paramSets[spec.params](spec.browser);
-  const unsigned = `https://webcast.tiktok.com/webcast/im/fetch/?${query}`;
+  if (spec.product === 'unsigned') {
+    // No SDK, no hooks: the request a page makes to a path outside its signing allowlist. Headers
+    // are the player's, since those it does send.
+    const target = new URL(unsigned);
+    if (spec.msToken && jar.get('msToken')) {
+      target.searchParams.set('msToken', jar.get('msToken'));
+    }
+    const response = await fetch(target.toString(), {
+      headers: {
+        'user-agent': spec.ua, origin: 'https://www.tiktok.com', referer: ROOM_URL,
+        'accept-language': 'en-US,en;q=0.9', cookie: cookieHeader(),
+        'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+      },
+    });
+    absorb(response);
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const record = {
+      status: response.status,
+      bytes: buffer.length,
+      push_server: buffer.toString('latin1').includes('wss://'),
+      sdk_headers: [],
+    };
+    return { outcome: classify(record), record, signed: {} };
+  }
 
   if (spec.product === 'frontier') {
     // The public product signs a URL rather than hooking a channel, so it is issued directly.

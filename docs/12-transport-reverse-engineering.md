@@ -35,7 +35,7 @@ so the SDK's hooks operate on something that behaves like the browser's.
 
 ## Where it stands
 
-Every signing route has been tried against `/webcast/im/fetch/`, with an authenticated session:
+Every signing route was tried against `/webcast/im/fetch/`, with an authenticated session:
 
 | Route | Result |
 |---|---|
@@ -43,6 +43,11 @@ Every signing route has been tried against `/webcast/im/fetch/`, with an authent
 | **XHR-signed** (same four parameters) | **403** |
 | public `frontierSign` X-Bogus | 200, empty body |
 | any of the above, `room_id=1` (nonexistent) | identical |
+| **no signature at all** | **200** |
+
+That last row was not measured until 2026-08-18, and it is the answer: the page does not sign this
+endpoint. Read on for why, and read the two sections after it for what the earlier rows were actually
+showing. Everything between here and there is kept as the record of a diagnosis that went wrong.
 
 The XHR route adds the same four parameters as the fetch route and — confirmed directly, by pointing
 the hooked XHR at a dead local port and reading back what it set — **no headers of its own at all**.
@@ -103,13 +108,17 @@ Three consequences, and they matter more than anything above:
 1. **Our suffix has never been validated by anything.** Every "the signer works" result in this
    repository came from an endpoint that does not check. The signing path has been carrying a
    success signal that was never a signal.
-2. **`im/fetch` is the only verifier available.** It is a binary oracle — refused, answered empty, or
-   answered with a `push_server` — and it is the only one.
+2. **`im/fetch` looked like the only verifier available.** It turned out not to be a verifier at all;
+   `/webcast/room/enter/` is, and it accepts our signature. See below.
 3. **"Right shape, wrong value" is unsupported.** It may still be true. Nothing measured implies it.
 
 Those endpoints are now called unsigned, which removed a signer subprocess from every read.
 
-## What the only verifier says
+## What varying the inputs said
+
+At this point `im/fetch` was believed to be the only endpoint that evaluates a signature. It is not
+an evaluator of one at all — `room/enter` is the verifier, established further down — so read this
+section as "what the endpoint does when handed a parameter it does not expect".
 
 `scripts/headless/im-fetch-bisect.mjs` walks the inputs against `im/fetch`, and
 `scripts/headless/value-differential.mjs` establishes what those inputs are. With the clock,
@@ -155,75 +164,92 @@ length convergence Phases A and B achieved bought nothing measurable.
 Identity was already ruled out: a request with no cookies at all is refused exactly like a fully
 authenticated one.
 
-## Where that leaves it
+## The answer: the page does not sign this endpoint
 
-Content-insensitivity is the important part. If the service were checking our value against a
-correct one, some content dimension would be expected to move the verdict; none does. What is
-established is narrower than either "the value is wrong" or "the value is right": **no black-box
-dimension reachable from here changes the answer.**
+Read on 2026-08-18, out of the live page's own `static/js/main.*.js`, where the app calls
+`byted_acrawler.init`. The signing allowlist is per host **and per method**, and for
+`webcast.tiktok.com` it is seven GET paths and twenty-two POST paths — wallet, KYC, `room/chat`,
+`room/enter`, `room/leave`, `room/ping/audience`. In full, the GET list:
 
-### The field layout, measured
+```text
+/webcast/wallet_api_tiktok/periodic_payout_onboarding/
+/webcast/wallet_api_tiktok/payment_instrument_bind_url/
+/webcast/wallet_api_tiktok/payment/payment_methods
+/webcast/wallet_api_tiktok/notifycenter/notices/
+/webcast/wallet_api_tiktok/income_plus/get_user_region_info/
+/webcast/wallet_api_tiktok/income_plus/account_steps/
+/webcast/wallet_api_tiktok/income_plus/user/
+```
 
-The first lever is built: `scripts/headless/byte-map.mjs`. Pin the clock and entropy, move one input,
-and diff the signature *by byte position*. The first position that changes says where that input's
-contribution begins, and ordering the inputs by it recovers the layout — with no correct signature
-anywhere in the process.
+`/webcast/im/fetch/` is not there. Neither is `room/info` nor `gift/list`, which is independently why
+the tamper test found those unverified. **A browser sends the transport request with no signature at
+all**, and the service confirms it:
 
-| Input | `X-Gnarly` | `X-Dynosaur` |
-|---|---|---|
-| the clock | from byte 1, avalanches | from byte 1, avalanches |
-| the canvas fingerprint | from byte 2 (249 of 332 bytes) | from byte 7 |
-| `navigator.userAgent` | from byte 36 | from byte 5 |
-| the query | from byte 107 | from byte 6 |
-| `xmst` | from byte 128 | absent |
+| Form | Result |
+|---|---|
+| unsigned | **200** |
+| `X-Bogus` alone | 200, empty |
+| with `X-Gnarly` or `X-Dynosaur`, any content, any length | **403** |
 
-Three things fall out of it:
+So the 403 was never about the value. It was a signature the endpoint does not expect, which is
+exactly why no content dimension moved it — the one observation that "wrong value" could not explain.
 
-- **Byte 0 never moves**, in either signature, under any input. It is a container or version tag.
-  `X-Dynosaur`'s last byte is likewise fixed.
-- **Entropy contributes nothing.** Two runs under real `getRandomValues` are byte-identical, so the
-  value is fully determined by the five inputs. The earlier note that real entropy was needed "for
-  anything but differential work" was wrong: there is no nonce.
-- **The clock avalanches from byte 1**, so the payload is enciphered under something time-derived.
-  The later offsets are still ordered — bytes 1–35 respond to the clock but not the user agent — so
-  the container is segmented rather than one hash over everything.
+## The signature is correct, and `room/enter` proves it
 
-The layout points at one input, by elimination: of the five, four have verifiable content — the clock
-is real, the user agent is a real Chrome's, the query is what we send, `xmst` is a service-issued
-token — and the canvas fingerprint was **invented**. It was also plainly wrong: `toDataURL` returned
-20 bytes, a PNG signature followed by a truncated IHDR, undecodable as an image and impossible for
-any real canvas. The shim now builds a valid 300×150 RGBA PNG (~1.5 KB base64), with text metrics
-that vary by string and real pixels from `getImageData`.
+`/webcast/room/enter/` *is* on the POST allowlist, and it is the only endpoint measured here that
+answers differently depending on a signature:
 
-That fixed a genuine defect and did not change the verdict: still 403, with `X-Gnarly` still exactly
-332 bytes, since the data URL is hashed rather than embedded. Worth knowing, and worth not repeating.
+| `POST /webcast/room/enter/` | Result |
+|---|---|
+| unsigned | 403 |
+| `X-Bogus` alone | 403 |
+| **the full computed suffix** | **200** |
 
-### What is left
+An endpoint that refuses unsigned and unsigned-plus-`X-Bogus`, and accepts our `X-Dynosaur` +
+`msToken` + `X-Bogus` + `X-Gnarly`, is verifying the suffix and accepting it. The signature this
+project computes is **right**. Nothing needed fixing in it, and the premise this document argued from
+for two commits — that the value was wrong and needed a known-good capture to diff against — was
+false in both directions. `scripts/headless/enter-then-fetch.mjs` runs the comparison.
 
-Two levers remain, and neither is a proxy measurement:
+That also retires the capture as a blocker. `import-capture.mjs` stays, because a capture is still
+the cheapest way to check the query byte for byte, but nothing is waiting on it.
 
-1. **Per-byte introspection of the signature.** Pin the clock and entropy, vary one input, and diff
-   the output *by byte position*. That yields a field map — which bytes carry the timestamp, which
-   the fingerprint, which are structural — and a field map localizes a wrong field without any
-   known-good value to compare against.
-2. **One known-good signed request** — now the only outstanding one, and the importer is built:
+## The query, from the chunk that builds it
 
-   ```sh
-   # Chrome, live room, devtools Network, filter im/fetch, Copy as cURL (or Save all as HAR)
-   node scripts/headless/import-capture.mjs /tmp/webmssdk.js --curl /tmp/copied.txt
-   ```
+`static/js/async/9894.*.js` builds the transport query itself, in `H(V(props))`, and sends it over a
+plain `XMLHttpRequest` with `withCredentials = true` and one header,
+`Content-Type: application/x-www-form-urlencoded; charset=UTF-8`. Three differences from what this
+repository sent, all now fixed in `ttl_sign_core::params::FetchParams`:
 
-   It signs the *captured* query with our signer, so the input is identical and every difference is
-   ours, then reports encoding, length, the format byte, and the first differing position. Read
-   against the table above, that offset names the field.
+- **`version_code` is `180800`**, a constant in the chunk, not the `270000` the rest of the web app
+  uses. Corroborated by the player's own captured socket URI, which carries `180800` too.
+- **The initial fetch sends `cursor=0`, `internal_ext=0`, `last_rtt=-1`.** Not empty, and not `0` for
+  `last_rtt`. Its builder deletes empty values outright, so `cursor=` is a request no player can
+  produce — and we were sending it.
+- **`notice=CUSTOM_SIGN_SERVER` is ours**, sent by no browser. Removed.
 
-   The capture is a replayable capability, so the raw bytes stay in `.local/`, mode 0600 and
-   gitignored; only the structure — lengths, encodings, alphabets, differing-position counts — is
-   written to `fixtures/research/known-good-signature-v1.json`.
+## What is still not working
 
-   It does not need to be repeatable. It needs to exist, once.
+`im/fetch` answers **200 with zero bytes**, and so does `room/enter` when accepted. A zero-byte 200 is
+not an application refusal — a refusal carries a `status_code` — so this is an edge answering nothing
+rather than the service objecting to the request.
 
-Native execution of routes 48886 and 55188 remains the third option and remains weeks of work.
+Ruled out for the empty body, each measured:
+
+| Suspect | Result |
+|---|---|
+| the signature, present or absent | both empty (present is also 403) |
+| three parameter sets, including the chunk's exact query | empty |
+| `resp_content_type=protobuf` versus JSON | empty either way, so there is no error message to read |
+| `webcast.us.tiktok.com` | 403 |
+| `webcast.tiktokv.com` | empty |
+| `x-tt-target-idc` routing header | empty |
+| identity, from a full account session to no cookies at all | empty or 403, never data |
+| the room | empty across every room tried |
+
+The account is pinned to `alisg` and the rooms tested report idc `my2`, so cross-data-centre routing
+remains the standing hypothesis, and it is the one dimension a differently-located session would
+settle immediately.
 
 ## After `push_server`, nothing is missing
 
@@ -236,7 +262,10 @@ finish line is explicit: the transport is one accepted `im/fetch` away from work
 | Tool | What it does |
 |---|---|
 | `scripts/headless/verify-probe.mjs` | Does an endpoint verify a signature at all — the tamper test that overturned the premise |
-| `scripts/headless/im-fetch-bisect.mjs` | Bisects the signature's inputs against `im/fetch`, with a request budget and a dated ledger |
+| `scripts/headless/im-fetch-bisect.mjs` | Bisects the signature's inputs against `im/fetch`, with a request budget and a dated ledger; includes the unsigned variants |
+| `scripts/headless/enter-then-fetch.mjs` | Signs `room/enter` — the one verifying endpoint — then issues the unsigned transport request |
+| `scripts/headless/import-capture.mjs` | Imports one captured signed request and diffs ours against it structurally |
+| `scripts/headless/byte-map.mjs` | Per-byte field map of the signature, offline |
 | `scripts/headless/value-differential.mjs` | Which inputs the signature value depends on, offline, with a stability gate on the baseline |
 | `scripts/headless/canonical-input.mjs` | Signing-input length per route, against the recorded values |
 | `scripts/headless/xhr-transport.mjs` | Drives `im/fetch` over a real `XMLHttpRequest`, so the SDK's XHR hook runs |

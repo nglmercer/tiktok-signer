@@ -10,34 +10,50 @@
 //! subprocess with an embedded JavaScript engine changes one constructor argument and nothing
 //! else.
 //!
+//! # The transport request is not signed
+//!
+//! It was, until 2026-08-18, and that was the defect. The live page's own signing allowlist —
+//! read out of `static/js/main.*.js`, where the app calls `byted_acrawler.init` — covers seven GET
+//! paths and twenty-two POST paths on `webcast.tiktok.com`, all wallet, KYC, `room/chat` and
+//! `room/enter`. **`/webcast/im/fetch/` is on neither list**, so a browser sends it with no
+//! signature at all, and the service refuses one that carries a signature it never expects:
+//!
+//! | Form | Result |
+//! |---|---|
+//! | unsigned | **200** |
+//! | `X-Bogus` alone | 200, empty |
+//! | with `X-Gnarly` or `X-Dynosaur`, any content | **403** |
+//!
+//! That is why the 403 was insensitive to every input the signature reads: it was never about the
+//! value. `scripts/headless/im-fetch-bisect.mjs` has the dated rows.
+//!
+//! The query matters as much as the absence of a signature, and the same chunk supplies it —
+//! `version_code` is `180800`, the initial fetch sends `cursor=0`, `internal_ext=0` and
+//! `last_rtt=-1`, and its builder deletes empty values, so `cursor=` is a request no player makes.
+//! [`ttl_sign_core::params::FetchParams`] now builds that query.
+//!
+//! # The signer is still needed, for `room/enter`
+//!
+//! `/webcast/room/enter/` *is* on the POST allowlist, and it is the one endpoint measured here that
+//! verifies a signature — unsigned and `X-Bogus`-only are both refused with 403, while the full
+//! computed suffix is accepted with 200. So the signature this project produces is **correct**, and
+//! `room/enter` is the oracle that proves it. `scripts/headless/enter-then-fetch.mjs` runs that
+//! sequence.
+//!
+//! # What still does not work
+//!
+//! `im/fetch` answers 200 with **zero bytes** — as does `room/enter` — and a zero-byte 200 is not an
+//! application refusal, since a refusal carries a `status_code`. Ruled out: the signature (in either
+//! direction), the query and its three parameter sets, `resp_content_type` (JSON is empty too), the
+//! host (`webcast.us`, `webcast.tiktokv.com`), the `x-tt-target-idc` routing header, identity, and
+//! the room. An empty body is reported as [`RejectReason::EmptyBody`].
+//!
 //! # What it requires
 //!
-//! - **The public signing product.** `/webcast/im/fetch/` answers the `frontierSign` product with
-//!   an empty 200, and refuses the patched-fetch suffix with a 403 — either `X-Gnarly` or
-//!   `X-Dynosaur`, alone, is enough to draw the 403. This backend pins the form that is at least
-//!   answered rather than leaving the choice to the caller. "Accepted" would be too strong a word
-//!   for it.
-//! - **An authenticated session.** Supply the account cookies; [`HeadlessConfig::session`] takes
-//!   the same jar the WebView path loaded.
+//! - **An authenticated session.** [`HeadlessConfig::session`] takes the same jar the WebView
+//!   path loaded.
+//! - **A signer**, for `room/enter`. Not for the transport request.
 //!
-//! # This path does not yet reach a push_server
-//!
-//! An empty body is reported as [`RejectReason::EmptyBody`], matching the WebView's classification
-//! exactly. What that empty body means is unresolved, and the shape of the open question changed on
-//! 2026-08-18:
-//!
-//! - The endpoints this crate's signature *was* verified against — `room/info`, `gift/list`, the
-//!   live search — do not verify signatures at all (`scripts/headless/verify-probe.mjs`). Their
-//!   success was never evidence that the suffix is correct.
-//! - The refusal on `im/fetch` does not respond to any input the signature is known to read:
-//!   fifteen variants over the user agent, the canvas fingerprint, three parameter sets, `msToken`,
-//!   entropy, client hints and `X-Bogus` all land on the same 403
-//!   (`scripts/headless/im-fetch-bisect.mjs`, and `fixtures/research/bisect-ledger.json` for the
-//!   dated outcomes).
-//!
-//! So this is not "one wrong field away". See `docs/12-transport-reverse-engineering.md` for the
-//! two levers that remain.
-
 use std::time::Duration;
 
 use ttl_live_discovery::{SigningProduct, UrlSigner};
