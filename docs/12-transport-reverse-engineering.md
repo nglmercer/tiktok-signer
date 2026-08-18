@@ -159,15 +159,66 @@ correct one, some content dimension would be expected to move the verdict; none 
 established is narrower than either "the value is wrong" or "the value is right": **no black-box
 dimension reachable from here changes the answer.**
 
+### The field layout, measured
+
+The first lever is built: `scripts/headless/byte-map.mjs`. Pin the clock and entropy, move one input,
+and diff the signature *by byte position*. The first position that changes says where that input's
+contribution begins, and ordering the inputs by it recovers the layout — with no correct signature
+anywhere in the process.
+
+| Input | `X-Gnarly` | `X-Dynosaur` |
+|---|---|---|
+| the clock | from byte 1, avalanches | from byte 1, avalanches |
+| the canvas fingerprint | from byte 2 (249 of 332 bytes) | from byte 7 |
+| `navigator.userAgent` | from byte 36 | from byte 5 |
+| the query | from byte 107 | from byte 6 |
+| `xmst` | from byte 128 | absent |
+
+Three things fall out of it:
+
+- **Byte 0 never moves**, in either signature, under any input. It is a container or version tag.
+  `X-Dynosaur`'s last byte is likewise fixed.
+- **Entropy contributes nothing.** Two runs under real `getRandomValues` are byte-identical, so the
+  value is fully determined by the five inputs. The earlier note that real entropy was needed "for
+  anything but differential work" was wrong: there is no nonce.
+- **The clock avalanches from byte 1**, so the payload is enciphered under something time-derived.
+  The later offsets are still ordered — bytes 1–35 respond to the clock but not the user agent — so
+  the container is segmented rather than one hash over everything.
+
+The layout points at one input, by elimination: of the five, four have verifiable content — the clock
+is real, the user agent is a real Chrome's, the query is what we send, `xmst` is a service-issued
+token — and the canvas fingerprint was **invented**. It was also plainly wrong: `toDataURL` returned
+20 bytes, a PNG signature followed by a truncated IHDR, undecodable as an image and impossible for
+any real canvas. The shim now builds a valid 300×150 RGBA PNG (~1.5 KB base64), with text metrics
+that vary by string and real pixels from `getImageData`.
+
+That fixed a genuine defect and did not change the verdict: still 403, with `X-Gnarly` still exactly
+332 bytes, since the data URL is hashed rather than embedded. Worth knowing, and worth not repeating.
+
+### What is left
+
 Two levers remain, and neither is a proxy measurement:
 
 1. **Per-byte introspection of the signature.** Pin the clock and entropy, vary one input, and diff
    the output *by byte position*. That yields a field map — which bytes carry the timestamp, which
    the fingerprint, which are structural — and a field map localizes a wrong field without any
    known-good value to compare against.
-2. **One known-good signed request**, imported as bytes from any source and kept as a sanitized
-   fixture. It does not need to be repeatable; it needs to exist. With the byte map, one capture
-   answers a great deal.
+2. **One known-good signed request** — now the only outstanding one, and the importer is built:
+
+   ```sh
+   # Chrome, live room, devtools Network, filter im/fetch, Copy as cURL (or Save all as HAR)
+   node scripts/headless/import-capture.mjs /tmp/webmssdk.js --curl /tmp/copied.txt
+   ```
+
+   It signs the *captured* query with our signer, so the input is identical and every difference is
+   ours, then reports encoding, length, the format byte, and the first differing position. Read
+   against the table above, that offset names the field.
+
+   The capture is a replayable capability, so the raw bytes stay in `.local/`, mode 0600 and
+   gitignored; only the structure — lengths, encodings, alphabets, differing-position counts — is
+   written to `fixtures/research/known-good-signature-v1.json`.
+
+   It does not need to be repeatable. It needs to exist, once.
 
 Native execution of routes 48886 and 55188 remains the third option and remains weeks of work.
 

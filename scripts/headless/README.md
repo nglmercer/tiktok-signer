@@ -27,6 +27,12 @@ A digest mismatch means the bundle drifted; re-run the probes before trusting an
 # Does an endpoint verify a signature at all? (room-info | gift-list | live-search | all)
 node scripts/headless/verify-probe.mjs /tmp/webmssdk.js <room_id> all
 
+# Where in the signature does each input land? Offline.
+node scripts/headless/byte-map.mjs /tmp/webmssdk.js
+
+# Import one browser-captured im/fetch request and diff ours against it.
+node scripts/headless/import-capture.mjs /tmp/webmssdk.js --curl /tmp/copied.txt
+
 # Which inputs does the signature value depend on? Offline, no network.
 node scripts/headless/value-differential.mjs /tmp/webmssdk.js
 
@@ -39,6 +45,12 @@ node scripts/headless/im-fetch-bisect.mjs /tmp/webmssdk.js <unique_id> --budget 
 changed, and no signature at all return the same data. Every "the signer works" result in this
 repository came from an endpoint that does not check, and `/webcast/im/fetch/` is the only verifier
 available. Those reads are now unsigned.
+
+`byte-map.mjs` goes further and needs no oracle either: it diffs the signature *by byte position*,
+so each input's first differing offset locates its field. Byte 0 never moves in either signature (a
+container tag), entropy contributes nothing at all (two real-entropy runs are byte-identical), and
+the order is clock → canvas → user agent → query → `xmst`. `import-capture.mjs` then turns one
+captured browser signature into a bounded diff against that layout.
 
 `value-differential.mjs` needs no oracle. Pin the clock, `performance`, `Math.random` and entropy and
 the signer is reproducible byte for byte — it fails loudly if two identical runs disagree, because an

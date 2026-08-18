@@ -261,10 +261,21 @@ function readLedger() {
   }
 }
 
+// The environment the sandbox reports is part of what a row measured, so the shim's own content is
+// folded into the fingerprint. Without it, changing the canvas fingerprint or any other reported
+// value would look like a repeat of an earlier variant and be skipped — silently answering a new
+// question with an old answer.
+const SHIM_REVISION = crypto
+  .createHash('sha256')
+  .update(fs.readFileSync(path.join(HERE, 'shim.mjs')))
+  .digest('hex')
+  .slice(0, 8);
+
 // The fingerprint covers what was varied, so a row from an earlier day is comparable to this one.
 // The room is deliberately excluded: docs/12 established the outcome does not depend on it.
 function fingerprint(name, spec) {
   const material = JSON.stringify({
+    shim: SHIM_REVISION,
     name, ua: spec.ua, browser: spec.browser, params: spec.params,
     noWebgl: !!spec.noWebgl, xmst: spec.xmst || 'issued', strip: spec.strip || [],
     clientHints: spec.clientHints !== false, deterministic: !!spec.deterministic,
@@ -432,7 +443,7 @@ for (const [name, spec] of planned) {
   rows.push({ name, outcome: result.outcome, from: 'run', signed: result.signed,
     status: r.status ?? null, bytes: r.bytes ?? 0 });
   ledger.runs.push({
-    fingerprint: fp, variant: name, what: spec.what, outcome: result.outcome,
+    fingerprint: fp, shim: SHIM_REVISION, variant: name, what: spec.what, outcome: result.outcome,
     status: r.status ?? null, bytes: r.bytes ?? 0, signed_lengths: result.signed || {},
     observed_on: new Date().toISOString().slice(0, 10),
   });

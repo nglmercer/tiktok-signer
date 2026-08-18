@@ -29,14 +29,17 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import nodeCrypto from 'node:crypto';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { createSandbox } from './shim.mjs';
+import {
+  signOnce, sessionCookies, DEFAULT_URL as SHARED_DEFAULT_URL, FIXED_NOW as SHARED_FIXED_NOW,
+  SIGNED_PARAMS,
+} from './lib/sign.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
-const FIXED_NOW = 1787000000000;
-const PARAMS = ['X-Dynosaur', 'msToken', 'X-Bogus', 'X-Gnarly'];
+const FIXED_NOW = SHARED_FIXED_NOW;
+const PARAMS = SIGNED_PARAMS;
 
 // A real Chrome's values, for the properties the sweep moves. The point of a mutation is to be a
 // plausible alternative, so that a row which does not move means "not read" rather than "rejected".
@@ -69,105 +72,34 @@ const VARIANTS = {
   'query-extra-param': { queryPatch: (u) => `${u}&pad=abcdefgh` },
   'webid-setters': { setters: true },
   'clock-later': { now: FIXED_NOW + 3600_000 },
+  'entropy-live': { realEntropy: true },
 };
 
-function sessionCookies() {
-  const file = process.env.TTL_SESSION_FILE
-    || path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'ttl-signer', 'session');
-  try {
-    const jar = new Map();
-    for (const part of fs.readFileSync(file, 'utf8').trim().split(';')) {
-      const eq = part.indexOf('=');
-      if (eq > 0) jar.set(part.slice(0, eq).trim(), part.slice(eq + 1).trim());
-    }
-    return jar;
-  } catch {
-    return new Map();
-  }
-}
+const DEFAULT_URL = SHARED_DEFAULT_URL;
 
-const DEFAULT_URL = 'https://webcast.tiktok.com/webcast/im/fetch/?aid=1988&app_language=en'
-  + '&app_name=tiktok_web&browser_language=en-US&browser_name=Mozilla&browser_online=true'
-  + '&browser_platform=Linux%20x86_64'
-  + `&browser_version=${encodeURIComponent('5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36')}`
-  + '&cookie_enabled=true&cursor=&device_id=7300000000000000001&device_platform=web&did_rule=3'
-  + '&fetch_rule=1&identity=audience&internal_ext=&last_rtt=0&live_id=12&resp_content_type=protobuf'
-  + '&room_id=7300000000000000001&screen_height=1080&screen_width=1920&sup_ws_ds_opt=1'
-  + '&tz_name=America%2FNew_York&version_code=270000&webcast_language=en';
-
-async function sign(bundle, variant) {
+async function sign(bundlePath, variant) {
   const spec = VARIANTS[variant];
   if (!spec) throw new Error(`unknown variant "${variant}"`);
-  if (spec.noWebgl) process.env.TTL_NO_WEBGL = '1';
-  process.env.TTL_DETERMINISTIC = '1';
-
   const jar = sessionCookies();
-  const cookie = spec.cookie === false ? '' : [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
-  const now = spec.now ?? FIXED_NOW;
-
-  const env = createSandbox();
-  const w = env.windowTarget;
-  const quiet = () => {};
-  w.console = Object.fromEntries(['log', 'info', 'warn', 'error', 'debug', 'trace', 'dir', 'table',
-    'group', 'groupEnd', 'time', 'timeEnd', 'assert', 'count'].map((k) => [k, quiet]));
-
-  // A frozen clock. Signing embeds time, so without this every row differs for a reason that has
-  // nothing to do with the variable under test.
-  class FrozenDate extends Date {
-    constructor(...args) { super(...(args.length ? args : [now])); }
-    static now() { return now; }
-  }
-  w.Date = FrozenDate;
-  w.performance = { now: () => 1234.5, timeOrigin: now, timing: { navigationStart: now },
-    getEntriesByType: () => [] };
-  w.Math = Object.create(Math);
-  w.Math.random = () => 0.42;
-
-  const xmstLength = spec.xmst ?? 124;
-  w.localStorage = {
-    getItem: (k) => (k === 'xmst' && xmstLength > 0 ? 'x'.repeat(xmstLength) : null),
-    setItem() {}, removeItem() {}, clear() {}, key: () => null, length: 0,
-  };
-  Object.defineProperty(w.document, 'cookie', { configurable: true, get: () => cookie, set() {} });
-  if (spec.pageUrl) {
-    Object.defineProperty(w.location, 'href', { configurable: true, get: () => spec.pageUrl });
-  }
-  for (const [dotted, value] of Object.entries(spec.env || {})) {
-    const [root, key] = dotted.split('.');
-    const target = key ? w[root] : w;
-    const name = key || root;
-    try {
-      Object.defineProperty(target, name, { configurable: true, get: () => value, set() {} });
-    } catch {
-      target[name] = value;
-    }
-  }
-
-  let captured = null;
-  w.fetch = async (input) => {
-    captured = typeof input === 'string' ? input : String(input?.url);
-    return { ok: true, status: 200, headers: { get: () => null }, text: async () => '',
-      json: async () => ({}) };
-  };
-
-  if (env.load(bundle)) throw new Error('the bundle failed to load');
-  const sdk = w.byted_acrawler;
-  await Promise.resolve(sdk.init({ aid: 1988, enablePathList: ['/webcast/'] }));
-  if (spec.setters) {
-    sdk.setTTWid(jar.get('ttwid') || '');
-    sdk.setTTWebid('7300000000000000001');
-    sdk.setTTWebidV2('7300000000000000001');
-  }
-
   const base = process.env.TTL_URL || DEFAULT_URL;
-  const target = spec.queryPatch ? spec.queryPatch(base) : base;
-  await Promise.resolve(w.fetch(target, { method: 'GET' }));
-  if (!captured) throw new Error('the patched fetch did not sign the request');
 
-  const before = new URL(target).searchParams;
-  const added = {};
-  for (const [k, v] of new URL(captured).searchParams) if (!before.has(k)) added[k] = v;
-  const digest = (s) => nodeCrypto.createHash('sha256').update(s ?? '').digest('hex').slice(0, 10);
+  // Every dimension this sweep moves is a field of the shared profile, so the signature it measures
+  // is produced by exactly the code path the other tools use. A private copy of the sandbox setup
+  // is how a probe's finding stops transferring.
+  const added = await signOnce(fs.readFileSync(bundlePath, 'utf8'), {
+    userAgent: spec.env?.['navigator.userAgent'],
+    noWebgl: spec.noWebgl,
+    now: spec.now,
+    realEntropy: spec.realEntropy,
+    xmst: spec.xmst,
+    cookie: spec.cookie === false ? '' : [...jar].map(([k, v]) => `${k}=${v}`).join('; '),
+    pageUrl: spec.pageUrl,
+    url: spec.queryPatch ? spec.queryPatch(base) : base,
+    env: spec.env,
+    setters: spec.setters ? { ttwid: jar.get('ttwid') || '', webid: '7300000000000000001' } : null,
+  });
+
+  const digest = (value) => crypto.createHash('sha256').update(value ?? '').digest('hex').slice(0, 10);
   return Object.fromEntries(PARAMS.map((p) => [p,
     added[p] === undefined ? null : { digest: digest(added[p]), bytes: added[p].length }]));
 }
@@ -196,7 +128,7 @@ if (!bundlePath) {
 }
 
 if (only) {
-  const result = await sign(fs.readFileSync(bundlePath, 'utf8'), only);
+  const result = await sign(bundlePath, only);
   if (process.env.TTL_CHILD) process.stdout.write(JSON.stringify(result));
   else console.log(JSON.stringify(result, null, 1));
   process.exit(0);

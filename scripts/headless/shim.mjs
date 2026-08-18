@@ -2,6 +2,90 @@
 // No browser, no network: every global the bundle resolves comes from here.
 
 import nodeCrypto from 'node:crypto';
+import zlib from 'node:zlib';
+
+// --- the canvas fingerprint -------------------------------------------------------------------
+//
+// The SDK reads `toDataURL` and folds it into the signature: it reaches `X-Gnarly` from byte 2 and
+// moves 249 of its 332 bytes (`scripts/headless/byte-map.mjs`). It is the largest single
+// contribution after the clock, which makes its content worth getting right.
+//
+// This used to return a 20-byte string — a PNG signature followed by a truncated IHDR, undecodable
+// as an image and impossible for any real canvas to produce. Build a valid one instead: a real
+// 300×150 RGBA PNG with drawn structure on it, deterministic so differentials stay comparable, and
+// ~1.5 KB in base64, which is the order a browser's fingerprint canvas actually yields.
+//
+// Deterministic, not random: two runs must agree, or every differential in this directory breaks.
+
+const CANVAS_WIDTH = 300;
+const CANVAS_HEIGHT = 150;
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+
+function crc32(buffer) {
+  let c = 0xFFFFFFFF;
+  for (const byte of buffer) c = CRC_TABLE[(c ^ byte) & 255] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+function pngChunk(type, data) {
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length);
+  const tag = Buffer.from(type, 'ascii');
+  const checksum = Buffer.alloc(4);
+  checksum.writeUInt32BE(crc32(Buffer.concat([tag, data])));
+  return Buffer.concat([length, tag, data, checksum]);
+}
+
+/// The pixel a fingerprint canvas has at (x, y). Structured rather than uniform, so the image
+/// carries detail the way drawn text does.
+function inkAt(x, y) {
+  return (x * 7 + y * 13) % 97 < 11;
+}
+
+function fingerprintDataUrl() {
+  const stride = CANVAS_WIDTH * 4 + 1;
+  const raw = Buffer.alloc(stride * CANVAS_HEIGHT);
+  for (let y = 0; y < CANVAS_HEIGHT; y += 1) {
+    const row = y * stride;
+    raw[row] = 0; // filter: none
+    for (let x = 0; x < CANVAS_WIDTH; x += 1) {
+      const at = row + 1 + x * 4;
+      const ink = inkAt(x, y);
+      raw[at] = ink ? 34 : 250;
+      raw[at + 1] = ink ? 102 : 250;
+      raw[at + 2] = ink ? 170 : 250;
+      raw[at + 3] = 255;
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(CANVAS_WIDTH, 0);
+  ihdr.writeUInt32BE(CANVAS_HEIGHT, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 6; // colour type: RGBA
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', zlib.deflateSync(raw, { level: 9 })),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+  return `data:image/png;base64,${png.toString('base64')}`;
+}
+
+// Built once: the encode is deterministic, and every canvas in every sandbox reports the same one.
+const CANVAS_DATA_URL = fingerprintDataUrl();
+
+/// Text metrics that depend on the text, the way a real font engine's do. A constant width is
+/// another way of reporting "no canvas".
+function measureTextWidth(text) {
+  let width = 0;
+  for (const character of String(text)) width += ((character.codePointAt(0) % 7) + 4) * 0.5;
+  return width;
+}
 
 export function createSandbox() {
 const accesses = new Map();
@@ -67,17 +151,19 @@ const accesses = new Map();
       ? { UNMASKED_VENDOR_WEBGL: 37445, UNMASKED_RENDERER_WEBGL: 37446 } : null),
     getSupportedExtensions: () => ['ANGLE_instanced_arrays', 'EXT_blend_minmax', 'OES_texture_float'],
     getShaderPrecisionFormat: () => ({ rangeMin: 127, rangeMax: 127, precision: 23 }),
+    readPixels() {}, texImage2D() {}, createTexture: () => ({}), bindTexture() {},
+    getUniformLocation: () => ({}), uniform1f() {}, uniform2f() {}, deleteBuffer() {},
     createBuffer: () => ({}), bindBuffer() {}, bufferData() {}, createProgram: () => ({}),
     createShader: () => ({}), shaderSource() {}, compileShader() {}, attachShader() {},
     linkProgram() {}, useProgram() {}, getAttribLocation: () => 0, enableVertexAttribArray() {},
     vertexAttribPointer() {}, drawArrays() {}, viewport() {}, clearColor() {}, clear() {},
-    canvas: { width: 300, height: 150 },
+    canvas: { width: CANVAS_WIDTH, height: CANVAS_HEIGHT, toDataURL: () => CANVAS_DATA_URL },
   });
   const elementShim = () => ({
     style: {}, setAttribute() {}, getAttribute: () => null, appendChild: (c) => c,
     removeChild: (c) => c, addEventListener() {}, removeEventListener() {},
-    width: 300, height: 150,
-    toDataURL: () => 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAASw=',
+    width: CANVAS_WIDTH, height: CANVAS_HEIGHT,
+    toDataURL: () => CANVAS_DATA_URL,
     getContext: (kind) => {
       if (process.env.TTL_NO_WEBGL) return null;
       if (kind === 'webgl' || kind === 'experimental-webgl' || kind === 'webgl2') {
@@ -86,8 +172,25 @@ const accesses = new Map();
       if (kind === '2d') {
         return {
           fillText() {}, strokeText() {}, fillRect() {}, arc() {}, beginPath() {}, closePath() {},
-          fill() {}, stroke() {}, measureText: () => ({ width: 42 }), getImageData: () => ({ data: [] }),
-          canvas: { width: 300, height: 150, toDataURL: () => 'data:image/png;base64,iVBORw0KGgo=' },
+          fill() {}, stroke() {},
+          measureText: (text) => ({ width: measureTextWidth(text) }),
+          // Real pixels, matching the image `toDataURL` returns. An empty array is a canvas that
+          // drew nothing, which is a fingerprint no browser produces.
+          getImageData: (x = 0, y = 0, w = CANVAS_WIDTH, h = CANVAS_HEIGHT) => {
+            const data = new Uint8ClampedArray(w * h * 4);
+            for (let row = 0; row < h; row += 1) {
+              for (let column = 0; column < w; column += 1) {
+                const at = (row * w + column) * 4;
+                const ink = inkAt(x + column, y + row);
+                data[at] = ink ? 34 : 250;
+                data[at + 1] = ink ? 102 : 250;
+                data[at + 2] = ink ? 170 : 250;
+                data[at + 3] = 255;
+              }
+            }
+            return { data, width: w, height: h };
+          },
+          canvas: { width: CANVAS_WIDTH, height: CANVAS_HEIGHT, toDataURL: () => CANVAS_DATA_URL },
         };
       }
       return null;

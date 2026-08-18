@@ -10,3 +10,6 @@
 !/fixtures/events/
 !/fixtures/signing/
 !/fixtures/research/
+
+# The raw capture store: a signed URL is a replayable capability, never committed.
+/.local/
