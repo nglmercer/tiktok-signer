@@ -1,4 +1,4 @@
-// Headless equivalent of `cargo run -p ttl-sign-webview --example live-check`.
+// HTTP-level walk of the same flow as `cargo run -p ttl-live-discovery --example live-check`.
 //
 // Runs the same flow with no browser: unsigned lookup, native guest-identity bootstrap, then
 // real webcast requests signed by the bundle running under the synthetic shim.

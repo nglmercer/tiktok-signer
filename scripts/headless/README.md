@@ -53,9 +53,9 @@ sequence — so repeated runs are comparable. Real signing needs real entropy.
 
 ## Live verification (authorized use only)
 
-`native-check.mjs` is the headless equivalent of
-`cargo run -p ttl-sign-webview --example live-check`. Unlike the other probes it **sends real
-signed requests**, so point it only at a room you are authorized to test:
+`native-check.mjs` walks the same flow as `cargo run -p ttl-live-discovery --example live-check`,
+at the HTTP level. Unlike the other probes it **sends real signed requests**, so point it only at a
+room you are authorized to test:
 
 ```sh
 node scripts/headless/native-check.mjs /tmp/webmssdk.js <unique_id>
@@ -76,7 +76,7 @@ The first `im/fetch` rejection is still useful: the response issues a 124-byte `
 how a fresh client obtains one.
 
 Because `room/info` and `gift/list` succeed with the same machinery, the signature is demonstrably
-valid and `im/fetch` is blocked on something else. See `docs/11-webview-removal.md`.
+valid and `im/fetch` is gated on the account session. See `docs/11-webview-removal.md`.
 
 ## Finding live channels
 
@@ -134,12 +134,10 @@ never printed.
 
 The endpoint often answers 200 with an empty body. When it does, the WebView oracle returns
 `Rejected(EmptyBody)` for the same room at the same time — the two paths succeed together and fail
-together, so that is upstream behaviour rather than a bug here. Confirm with:
+together, so that was upstream behaviour rather than a bug here.
 
-```sh
-cargo run -p ttl-sign-webview --example fetch-dump -- <user>
-node scripts/headless/transport.mjs /tmp/webmssdk.js <user>
-```
+That comparison is no longer runnable: the WebView oracle has been deleted. It is recorded in
+`docs/11-webview-removal.md`, which is now the only evidence that the two paths agreed.
 
 ## Signing one URL (subprocess protocol)
 

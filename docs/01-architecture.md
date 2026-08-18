@@ -4,7 +4,7 @@ The system is split into nine crates:
 
 - `ttl-sign-core`: pure data types, ordered queries, cookies, presets, room lookup,
   a stable protobuf event subset, and generated schema bindings with bounded dynamic decoding.
-- `ttl-sign-webview`: Wry/WebKitGTK event loop, initialization bridge, session cookies,
+- `ttl-sign-headless`: browser-free `SignerBackend`; signs through an external signer process,
   navigation, and page-owned WebSocket relay. It implements the backend contract as the
   optional live oracle.
 - `ttl-sign-replay`: versioned fixture loader and deterministic offline backend.
@@ -58,7 +58,7 @@ The server depends only on the capability-specific `ttl_sign_core::SignerBackend
 
 ```text
 ttl-sign-server -> SignerBackend
-                     |-- WebView Signer (live oracle)
+                     |-- Headless Signer (live)
                      |-- ReplayBackend (offline integration)
                      |-- NativeBackend (headless target)
                      `-- MockBackend (unit tests)
@@ -67,12 +67,12 @@ ttl-sign-server -> SignerBackend
 The contract takes a `TransportRequest` and returns the existing three-way `SignOutcome`.
 Browser navigation, IPC, room discovery, and gift lookup are deliberately absent. The HTTP
 library therefore compiles and its contract tests run without Wry or WebKitGTK. The live
-binary enables the `webview` feature explicitly; the offline binary enables `replay`.
+binary enables the `headless` feature explicitly; the offline binary enables `replay`.
 
-Default workspace members exclude `ttl-sign-webview`. `cargo test` is the normal headless
+No workspace member depends on a browser engine, and CI asserts it. `cargo test` is the headless
 suite; live-oracle compilation and execution are separate, explicit checks.
 
-The WebView initialization script is installed before TikTok page scripts. It wraps the
+The signer's environment shim is installed before the bundle is evaluated. It wraps the
 native WebSocket constructor, leaves TikTok's connection behavior intact, and mirrors
 open/frame/close events to Rust. TikTok's page owns signing, room entry, and heartbeats.
 
@@ -86,10 +86,10 @@ registry for descriptor-driven, bounded decoding of page-owned WebSocket traffic
 field or method remains observable instead of making the listener depend on a stale recursive
 generated type. `ttl-sign-core` no longer carries a schema of its own.
 
-One WebView owns one cookie session. Sessions must not be shared between rooms because
+One signer owns one cookie session. Sessions must not be shared between rooms because
 that increases rate-limit and anti-bot risk.
 
-The main WebView event loop owns the GUI thread. Tokio runs on a worker thread and sends
+The signer runs as a subprocess. Tokio awaits it on a worker thread and sends
 requests through an event-loop proxy. The WebSocket crate does not reconnect internally:
 signed URLs expire and the orchestrator must start a fresh flow.
 
@@ -111,7 +111,7 @@ classified differences instead of a single match bit.
 Experiment plans are schema-versioned and typed. Every non-baseline case must differ from
 the baseline in exactly one declared request, signing, or environment field; zero- and
 multi-variable changes are rejected before a browser starts. Individual traces use a fresh
-incognito guest WebView. Query differentials deliberately interleave baseline and experiment
+fresh guest identity. Query differentials deliberately interleave baseline and experiment
 inside one ephemeral identity so browser-state differences do not dominate the comparison.
 Captures are create-new and contain a sanitized replay case plus a structured observation.
 Sensitive declared signing fields are represented by equality-preserving digests, not copied

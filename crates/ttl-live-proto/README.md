@@ -49,7 +49,7 @@ plan, take legal advice before shipping.
 Who actually links these schemas:
 
 ```
-ttl-sign-server → ttl-sign-webview → ttl-live-events → ttl-live-proto
+ttl-sign-server → ttl-live-events → ttl-live-proto
 ```
 
 So the **server binary contains AGPL-licensed schema material**. That is the

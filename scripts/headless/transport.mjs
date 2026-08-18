@@ -23,13 +23,12 @@
 //
 // ## Empty responses are upstream, not a defect here
 //
-// The endpoint frequently answers 200 with an empty body. When it does, **the WebView oracle
-// returns `Rejected(EmptyBody)` for the same room at the same time** — verified paired across two
-// rooms and both `sup_ws_ds_opt` values. The two paths succeed together and fail together, so an
-// empty response is a server-side condition (room state or rate limiting), not a gap in the
-// headless implementation. Check parity before debugging this script:
+// The endpoint frequently answers 200 with an empty body. When the WebView oracle still existed,
+// it returned `Rejected(EmptyBody)` for the same rooms at the same moments — verified paired
+// across two rooms and both `sup_ws_ds_opt` values. The two paths succeeded together and failed
+// together, so an empty response is a server-side condition, not a gap here. That comparison can
+// no longer be re-run; see docs/11-webview-removal.md.
 //
-//     cargo run -p ttl-sign-webview --example fetch-dump -- <user>
 //     node scripts/headless/transport.mjs /tmp/webmssdk.js <user>
 //
 // Which `sup_ws_ds_opt` value works varies, so both are tried.

@@ -25,8 +25,8 @@ operative clause for anyone hosting it for third parties. See
 `crates/ttl-live-proto/README.md` for the full account.
 
 The schemas are confined to `ttl-live-proto` (which sets `publish = false`), but that crate is
-**not** isolated from the rest of the workspace: `ttl-sign-webview` depends on it through
-`ttl-live-events` for page-message decoding, and `ttl-sign-server` depends on `ttl-sign-webview`.
+**not** isolated from the rest of the workspace: `ttl-live-events` depends on it for message
+decoding, and anything consuming decoded events depends on `ttl-live-events`.
 The shipped server binary therefore contains AGPL-licensed schema material, which is what makes
 Section 19 operative for anyone hosting it. Only `ttl-sign-core` and `ttl-live-ws` remain free of
 that dependency.

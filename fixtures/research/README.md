@@ -1,3 +1,8 @@
+> **Removed with the WebView.** The oracle and trace binaries below were driven by a real page and
+> were deleted along with `ttl-sign-webview`. `scripts/headless/` covers signing, the environment
+> surface, transport, and discovery without a browser; the paired URL and trace differentials have
+> no replacement. The commands are kept as a record of how the committed fixtures were produced.
+
 # Controlled research plans
 
 `plan.example.json` is safe configuration, not a captured live observation. Replace its
