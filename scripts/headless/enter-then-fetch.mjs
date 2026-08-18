@@ -82,6 +82,9 @@ absorb(page);
 await page.text();
 const deviceId = jar.get('tt_webid_v2') || String(Math.floor(1e18 + Math.random() * 8e18));
 console.log(`room_id=${roomId}, jar now ${jar.size}`);
+// Names only. A browser on a live room carries a wider set than a session file plus one page load,
+// and any of the missing ones could be what the origin is looking for before it answers.
+console.log(`cookies held: ${[...jar.keys()].sort().join(', ')}`);
 
 // --- the environment block both requests share ------------------------------------------------
 
@@ -238,15 +241,21 @@ console.log(`\n[2/2] im/fetch — unsigned, ${fetchQuery.length}-byte query`);
 // An empty protobuf body says nothing about why it is empty. Asking for JSON makes the service
 // explain itself: a refusal carries a status_code and a message, and reading one is worth more than
 // another round of guessing at the request.
-async function tryFetch(label, query, { host = HOST, extraHeaders = {} } = {}) {
-  const response = await fetch(`${host}/webcast/im/fetch/?${query}`, {
-    headers: {
-      'user-agent': UA, origin: 'https://www.tiktok.com', referer: ROOM_URL,
-      'accept-language': 'en-US,en;q=0.9', cookie: cookieHeader(),
-      'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-      ...extraHeaders,
-    },
-  });
+async function tryFetch(label, query, {
+  host = HOST, extraHeaders = {}, extraCookies = {}, dropHeaders = [],
+} = {}) {
+  const cookie = [
+    cookieHeader(),
+    ...Object.entries(extraCookies).map(([k, v]) => `${k}=${v}`),
+  ].filter(Boolean).join('; ');
+  const headers = {
+    'user-agent': UA, origin: 'https://www.tiktok.com', referer: ROOM_URL,
+    'accept-language': 'en-US,en;q=0.9', cookie,
+    'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+    ...extraHeaders,
+  };
+  for (const name of dropHeaders) delete headers[name];
+  const response = await fetch(`${host}/webcast/im/fetch/?${query}`, { headers });
   absorb(response);
   const buffer = Buffer.from(await response.arrayBuffer());
   const text = buffer.toString('utf8');
@@ -310,6 +319,53 @@ const routing = [
   ['tiktokv.eu', 'https://webcast.tiktokv.eu', {}],
   ['sg tiktok', 'https://webcast-sg.tiktok.com', {}],
 ];
+// The cookies a browser on a live room holds that a session file plus one page load does not. The
+// query's `device_id` is the page's webid, so a random one with no matching `tt_webid_v2` is a
+// binding the origin can check and silently decline; `s_v_web_id` (`verifyFp`) is required outright
+// by several TikTok web APIs; the `store-*` pair is what the app uses for regional routing.
+const WEBID_COOKIES = { tt_webid: deviceId, tt_webid_v2: deviceId };
+const VERIFY_FP = `verify_${Math.random().toString(36).slice(2, 10)}_${Math.random().toString(36).slice(2, 14)}`;
+const STORE_COOKIES = {
+  'store-idc': jar.get('tt-target-idc') || 'alisg',
+  'store-country-code': 'pe',
+  'store-country-code-src': 'uid',
+};
+
+// The gateway answers 200 with zero bytes for requests it considers invalid — `/api/user/detail/`
+// with an empty `uniqueId` does the same — so it is worth removing the headers we add that a
+// bodyless GET has no business carrying. `Content-Type` on a GET with no body is the obvious one: a
+// form-parsing gateway can reasonably find nothing to parse.
+const headerShapes = [
+  ['- content-type', { dropHeaders: ['content-type'] }],
+  ['- origin', { dropHeaders: ['origin'] }],
+  ['- referer', { dropHeaders: ['referer'] }],
+  ['accept json', { extraHeaders: { accept: 'application/json, text/plain, */*' } }],
+];
+for (const [label, options] of headerShapes) {
+  await new Promise((r) => setTimeout(r, 1200));
+  const result = await tryFetch(label, fetchQuery, options);
+  if (result.hasPush) {
+    console.log(`\n      push_server came back with ${label} — that is the request shape.`);
+    break;
+  }
+}
+
+const identity = [
+  ['+ webid cookies', {}, WEBID_COOKIES, fetchQuery],
+  ['+ verifyFp', {}, { s_v_web_id: VERIFY_FP }, `${fetchQuery}&verifyFp=${VERIFY_FP}`],
+  ['+ store cookies', {}, STORE_COOKIES, fetchQuery],
+  ['+ all of them', {}, { ...WEBID_COOKIES, s_v_web_id: VERIFY_FP, ...STORE_COOKIES },
+    `${fetchQuery}&verifyFp=${VERIFY_FP}`],
+];
+for (const [label, extraHeaders, extraCookies, query] of identity) {
+  await new Promise((r) => setTimeout(r, 1200));
+  const result = await tryFetch(label, query, { extraHeaders, extraCookies });
+  if (result.hasPush) {
+    console.log(`\n      push_server came back with ${label} — that is the missing identity.`);
+    break;
+  }
+}
+
 for (const [label, host, extraHeaders] of routing) {
   await new Promise((r) => setTimeout(r, 1200));
   try {

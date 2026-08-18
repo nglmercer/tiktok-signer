@@ -7,17 +7,23 @@
 //
 // ## Why this exists
 //
-// `/webcast/im/fetch/` is the only endpoint that evaluates a signature, and it refuses ours under
-// every input variation reachable from here — fifteen variants, one outcome
-// (`fixtures/research/bisect-ledger.json`). Black-box variation is finished. What it cannot supply
-// is a correct signature to compare against, and one is enough: with the field layout from
-// `byte-map.mjs`, a single genuine value turns an open-ended search into a bounded diff.
+// **What to capture has changed.** The signature is no longer the open question: `/webcast/im/fetch/`
+// is not signed by the page at all, and `/webcast/room/enter/` verifies our suffix and accepts it, so
+// signing is correct. What remains is that a well-formed unsigned request is answered 200 with zero
+// bytes, and this gateway answers 200-with-zero-bytes for requests it considers invalid without
+// saying why.
+//
+// So the useful capture is a **successful** `im/fetch` — one whose response carried a `push_server`.
+// Its query, diffed against ours parameter by parameter, names what we are missing. That diff is now
+// this tool's main output; the signature comparison is kept because it costs nothing and confirms
+// what `room/enter` already established.
 //
 // It does not have to be repeatable, and it does not have to come from this repository. Any browser
 // that plays a TikTok LIVE room makes one every few seconds. Getting it out:
 //
 //   1. Open a live room in Chrome, with devtools Network open.
-//   2. Filter for `im/fetch`.
+//   2. Filter for `im/fetch`. Pick one whose response is **not empty** — the Size column shows it,
+//      and an empty one reproduces the problem rather than explaining it.
 //   3. Right-click the request → Copy → Copy as cURL, save it to a file. Or "Save all as HAR".
 //   4. Point this script at that file.
 //
@@ -37,7 +43,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { signOnce, sessionCookies, SIGNED_PARAMS } from './lib/sign.mjs';
+import { signOnce, sessionCookies, SIGNED_PARAMS, DEFAULT_URL } from './lib/sign.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..', '..');
@@ -56,14 +62,19 @@ const flag = (name) => {
 
 function fromHar(file) {
   const har = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const entries = har?.log?.entries || [];
-  const matches = entries
-    .map((entry) => entry?.request?.url)
-    .filter((url) => typeof url === 'string' && url.includes('/webcast/im/fetch/'));
-  if (!matches.length) throw new Error('no /webcast/im/fetch/ request in that HAR');
-  // The last one is the most likely to be a steady-state poll rather than a first attempt with an
-  // empty token.
-  return matches.at(-1);
+  const entries = (har?.log?.entries || []).filter((entry) => {
+    const url = entry?.request?.url;
+    return typeof url === 'string' && url.includes('/webcast/im/fetch/');
+  });
+  if (!entries.length) throw new Error('no /webcast/im/fetch/ request in that HAR');
+  // A request whose response was empty is the failure being investigated, not the answer to it, so
+  // prefer one that actually carried a body.
+  const answered = entries.filter((entry) => Number(entry?.response?.content?.size || 0) > 0);
+  if (!answered.length) {
+    console.log(`warning: all ${entries.length} im/fetch entries in that HAR have empty responses.`);
+    console.log('         Their queries are still worth diffing, but none of them succeeded either.');
+  }
+  return (answered.at(-1) || entries.at(-1)).request.url;
 }
 
 function fromCurl(file) {
@@ -195,6 +206,43 @@ const ours = await signOnce(fs.readFileSync(bundlePath, 'utf8'), {
   xmst: (stored.signature.msToken || '').length || 0,
 });
 
+// --- the query diff, which is the open question ------------------------------------------------
+
+const theirParams = new Map(capturedQuery.split('&').map((pair) => {
+  const [k, ...rest] = pair.split('=');
+  return [k, rest.join('=')];
+}));
+const ourUnsigned = new URL(DEFAULT_URL);
+// Compare like for like: the captured room, not the placeholder in the default query.
+if (theirParams.get('room_id')) ourUnsigned.searchParams.set('room_id', theirParams.get('room_id'));
+const ourParams = new Map([...ourUnsigned.searchParams]);
+
+const onlyTheirs = [...theirParams.keys()].filter((k) => !ourParams.has(k) && !SIGNED_PARAMS.includes(k));
+const onlyOurs = [...ourParams.keys()].filter((k) => !theirParams.has(k));
+const shared = [...theirParams.keys()].filter((k) => ourParams.has(k));
+
+console.log('\nquery parameters');
+console.log(`  only in the capture (${onlyTheirs.length}): ${onlyTheirs.join(', ') || 'none'}`);
+console.log(`  only in ours (${onlyOurs.length}): ${onlyOurs.join(', ') || 'none'}`);
+const differing = shared.filter((k) => theirParams.get(k) !== ourParams.get(k));
+console.log(`  present in both but differing (${differing.length}):`);
+for (const name of differing) {
+  // Values are printed only for parameters that carry no identity. The rest are compared by length.
+  const safe = /^(aid|app_name|app_language|browser_|cookie_enabled|cursor|device_platform|did_rule|fetch_rule|identity|internal_ext|last_rtt|live_id|os|priority_region|region|resp_content_type|screen_|sup_ws_ds_opt|tz_name|version_code|webcast_language|update_version_code|compress|debug|history_comment)/.test(name);
+  const theirs = theirParams.get(name);
+  const mine = ourParams.get(name);
+  console.log(safe
+    ? `    ${name.padEnd(24)} theirs=${JSON.stringify(theirs)} ours=${JSON.stringify(mine)}`
+    : `    ${name.padEnd(24)} theirs=${theirs.length}B ours=${mine.length}B (value withheld)`);
+}
+if (!onlyTheirs.length && !differing.length) {
+  console.log('\n  The queries agree. Whatever makes their request answer and ours not is outside');
+  console.log('  the query — cookies, headers, or the account the capture came from.');
+} else {
+  console.log('\n  Start with the parameters only the capture has: this gateway answers 200 with an');
+  console.log('  empty body for a request it considers invalid, and says nothing about which part.');
+}
+
 console.log(`\n${'parameter'.padEnd(12)}${'theirs'.padEnd(30)}${'ours'.padEnd(30)}verdict`);
 console.log('-'.repeat(84));
 const report = {};
@@ -258,6 +306,11 @@ fs.writeFileSync(FIXTURE, `${JSON.stringify({
     }),
   },
   comparison: report,
+  query_diff: {
+    only_in_capture: onlyTheirs,
+    only_in_ours: onlyOurs,
+    differing: differing,
+  },
   bundle_sha256: crypto.createHash('sha256').update(fs.readFileSync(bundlePath)).digest('hex'),
 }, null, 2)}\n`);
 console.log(`\nwrote ${path.relative(ROOT, FIXTURE)} — structure only, safe to commit`);
