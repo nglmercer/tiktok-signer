@@ -1,4 +1,4 @@
-//! Flow step 1, without a webview or display: `unique_id` → `room_id` + status.
+//! Flow step 1, without a browser or display: `unique_id` → `room_id` + status.
 //!
 //! Obtain a `room_id` **from a room that is actually live** before trying anything else.
 //! Signing an offline room returns a protobuf without `push_server`, indistinguishable from
@@ -10,7 +10,7 @@
 //!
 //! To discover *who* is live, use the rendered DOM from
 //! `https://www.tiktok.com/live`, which requires the WebView:
-//! `cargo run -p ttl-sign-webview --example live-check`.
+//! `cargo run -p ttl-live-discovery --example live-check`.
 
 use anyhow::{Context, Result};
 use ttl_sign_core::room::{room_lookup_url, RoomLookup};

@@ -20,42 +20,12 @@ name = "ttl-sign-observation-diff"
 path = "src/observation_diff_main.rs"
 
 [[bin]]
-name = "ttl-sign-oracle"
-path = "src/oracle_main.rs"
-required-features = ["webview"]
-
-[[bin]]
-name = "ttl-sign-oracle-replay"
-path = "src/oracle_replay_main.rs"
-required-features = ["webview"]
-
-[[bin]]
-name = "ttl-sign-url-oracle"
-path = "src/url_oracle_main.rs"
-required-features = ["webview"]
-
-[[bin]]
 name = "ttl-sign-url-diff"
 path = "src/url_diff_main.rs"
 
 [[bin]]
-name = "ttl-sign-trace"
-path = "src/signing_trace_main.rs"
-required-features = ["webview"]
-
-[[bin]]
 name = "ttl-sign-trace-diff"
 path = "src/signing_trace_diff_main.rs"
-
-[[bin]]
-name = "ttl-sign-paired-trace"
-path = "src/paired_trace_main.rs"
-required-features = ["webview"]
-
-[[bin]]
-name = "ttl-sign-env-surface"
-path = "src/environment_surface_main.rs"
-required-features = ["webview"]
 
 [[bin]]
 name = "ttl-sign-subgraph"
@@ -65,25 +35,16 @@ path = "src/subgraph_main.rs"
 name = "ttl-sign-subgraph-diff"
 path = "src/subgraph_diff_main.rs"
 
-[[bin]]
-name = "ttl-sign-vm-trace"
-path = "src/vm_trace_main.rs"
-required-features = ["webview"]
-
 [features]
 default = []
-webview = ["dep:reqwest", "dep:ttl-sign-webview", "dep:tracing-subscriber"]
 
 [dependencies]
 ttl-sign-core = { workspace = true }
 ttl-sign-replay = { workspace = true }
-ttl-sign-webview = { workspace = true, optional = true }
 
 anyhow = { workspace = true }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"], optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
-tracing-subscriber = { workspace = true, optional = true }

@@ -135,6 +135,12 @@ pub enum DiscoveryError {
 #[derive(Debug, Clone)]
 pub struct DiscoveryClient {
     http: reqwest::Client,
+    /// Cookie header sent with signed requests.
+    ///
+    /// Signing and requesting must present the same identity: the signer sees these cookies, so
+    /// the request has to carry them too, or the service is asked to validate a signature made
+    /// under a different identity.
+    session: String,
 }
 
 impl DiscoveryClient {
@@ -152,7 +158,18 @@ impl DiscoveryClient {
             .timeout(timeout)
             .build()
             .map_err(|error| DiscoveryError::Transport(error.to_string()))?;
-        Ok(Self { http })
+        Ok(Self {
+            http,
+            session: String::new(),
+        })
+    }
+
+    /// Attach the session presented with signed requests.
+    ///
+    /// The same jar must be given to the signer, so that what is signed and what is sent agree.
+    pub fn with_session(mut self, cookie_header: impl Into<String>) -> Self {
+        self.session = cookie_header.into();
+        self
     }
 
     /// Resolve `unique_id` → `room_id`. Unsigned, no cookies, no browser.
@@ -608,7 +625,157 @@ impl UrlSigner for CommandSigner {
     }
 }
 
+/// URL of the live search endpoint, which lists rooms that are broadcasting now.
+///
+/// The `/live` page renders its list client-side, so its HTML carries nothing. This endpoint
+/// returns the same rooms as JSON and is merely signed, which is why listing live channels needs
+/// no rendering engine.
+pub fn live_search_url(keyword: &str, offset: usize) -> String {
+    // Built from pairs rather than one long literal: a line-continued string silently keeps the
+    // indentation as spaces inside the query, which TikTok answers with a body that has no data.
+    let mut url = String::from("https://www.tiktok.com/api/search/live/full/?");
+    let offset = offset.to_string();
+    let pairs: [(&str, &str); 24] = [
+        ("aid", "1988"),
+        ("app_language", "en"),
+        ("app_name", "tiktok_web"),
+        ("browser_language", "en-US"),
+        ("browser_name", "Mozilla"),
+        ("browser_platform", "Linux x86_64"),
+        ("browser_version", "5.0 (X11)"),
+        ("cookie_enabled", "true"),
+        ("count", "20"),
+        ("device_platform", "web_pc"),
+        ("focus_state", "true"),
+        ("from_page", "search"),
+        ("history_len", "4"),
+        ("is_fullscreen", "false"),
+        ("is_page_visible", "true"),
+        ("keyword", keyword),
+        ("offset", &offset),
+        ("os", "linux"),
+        ("priority_region", ""),
+        ("referer", ""),
+        ("region", "US"),
+        ("screen_height", "1080"),
+        ("screen_width", "1920"),
+        ("search_id", ""),
+    ];
+    for (index, (name, value)) in pairs.iter().enumerate() {
+        if index > 0 {
+            url.push('&');
+        }
+        url.push_str(name);
+        url.push('=');
+        url.push_str(&percent_encode(value));
+    }
+    url.push_str("&tz_name=America%2FNew_York&webcast_language=en");
+    url
+}
+
+/// Percent-encode a query value, leaving only the unreserved set intact.
+fn percent_encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect()
+}
+
+/// One room returned by the live search.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveRoom {
+    pub unique_id: String,
+    pub room_id: String,
+    pub nickname: String,
+    pub title: String,
+    pub viewers: u64,
+}
+
+/// Extract broadcasting rooms from a live-search response.
+///
+/// Each item nests the room as a JSON *string* under `live_info.raw_data`. Only `status == 2`
+/// counts as live: an unrecognized status is skipped rather than assumed to be broadcasting.
+pub fn interpret_live_search(body: &str) -> Result<Vec<LiveRoom>, DiscoveryError> {
+    let value: serde_json::Value =
+        serde_json::from_str(body).map_err(|error| DiscoveryError::Decode(error.to_string()))?;
+    let items = value
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| DiscoveryError::Decode("live search has no data array".into()))?;
+
+    let mut rooms = Vec::new();
+    for item in items {
+        let Some(raw) = item
+            .get("live_info")
+            .and_then(|info| info.get("raw_data"))
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let Ok(room) = serde_json::from_str::<serde_json::Value>(raw) else {
+            continue;
+        };
+        if room.get("status").and_then(serde_json::Value::as_i64) != Some(2) {
+            continue;
+        }
+        let owner = room.get("owner");
+        let unique_id = owner
+            .and_then(|owner| owner.get("display_id"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let room_id = room
+            .get("id_str")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if unique_id.is_empty() || !room::is_usable_room_id(&room_id) {
+            continue;
+        }
+        rooms.push(LiveRoom {
+            unique_id,
+            room_id,
+            nickname: owner
+                .and_then(|owner| owner.get("nickname"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            title: room
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            viewers: room
+                .get("user_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default(),
+        });
+    }
+    Ok(rooms)
+}
+
 impl DiscoveryClient {
+    /// Rooms broadcasting right now, most watched first. Signed.
+    ///
+    /// Results depend on the keyword, so this samples live rooms rather than enumerating them.
+    pub async fn live_channels(
+        &self,
+        keyword: &str,
+        signer: &dyn UrlSigner,
+    ) -> Result<Vec<LiveRoom>, DiscoveryError> {
+        let body = self
+            .signed_get(&live_search_url(keyword, 0), signer)
+            .await?;
+        let mut rooms = interpret_live_search(&body)?;
+        rooms.sort_by(|a, b| b.viewers.cmp(&a.viewers));
+        Ok(rooms)
+    }
+
     /// Full room metadata. Signed.
     pub async fn room_info(
         &self,
@@ -641,13 +808,17 @@ impl DiscoveryClient {
         signer: &dyn UrlSigner,
     ) -> Result<String, DiscoveryError> {
         let signed = signer.sign(unsigned).await?;
-        let response = self
+        let mut request = self
             .http
             .get(&signed)
             // These endpoints are read from the web app, and reject a request that does not look
             // like it came from one.
             .header("referer", "https://www.tiktok.com/")
-            .header("origin", "https://www.tiktok.com")
+            .header("origin", "https://www.tiktok.com");
+        if !self.session.is_empty() {
+            request = request.header("cookie", self.session.clone());
+        }
+        let response = request
             .send()
             .await
             .map_err(|error| DiscoveryError::Transport(error.to_string()))?;

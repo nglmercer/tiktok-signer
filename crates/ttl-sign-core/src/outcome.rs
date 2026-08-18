@@ -59,8 +59,8 @@ pub enum SignError {
     #[error("page error: {0}")]
     Bridge(String),
 
-    /// The WebView engine closed or stopped responding.
-    #[error("WebView engine is unavailable: {0}")]
+    /// The signing engine closed or stopped responding.
+    #[error("signing engine is unavailable: {0}")]
     EngineGone(String),
 
     /// Nobody signed in before the login deadline.

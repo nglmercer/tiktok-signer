@@ -19,7 +19,7 @@
 //! output types, so no future edit can leak them by forgetting to sanitize.
 //!
 //! The extractor is a pure function over an already-sanitized artifact: it needs no WebView and
-//! builds without the `webview` feature.
+//! needs no browser.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 

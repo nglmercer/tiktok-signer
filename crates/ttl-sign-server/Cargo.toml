@@ -7,11 +7,6 @@ rust-version.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "ttl-sign-server"
-path = "src/main.rs"
-required-features = ["webview"]
-
-[[bin]]
 name = "ttl-sign-headless-server"
 path = "src/headless_main.rs"
 required-features = ["headless"]
@@ -23,13 +18,11 @@ required-features = ["replay"]
 
 [features]
 default = []
-webview = ["dep:ttl-sign-webview"]
 replay = ["dep:ttl-sign-replay"]
 headless = ["dep:ttl-sign-headless", "dep:ttl-live-discovery"]
 
 [dependencies]
 ttl-sign-core = { workspace = true }
-ttl-sign-webview = { workspace = true, optional = true }
 ttl-sign-replay = { workspace = true, optional = true }
 ttl-sign-headless = { workspace = true, optional = true }
 ttl-live-discovery = { workspace = true, optional = true }

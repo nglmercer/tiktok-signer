@@ -2,7 +2,7 @@
 //!
 //! These types describe the artifact produced by `ttl-sign-vm-trace`. They live in the library
 //! rather than in that binary so tooling which only *reads* a trace — notably the route
-//! subgraph extractor — needs neither a WebView nor the `webview` feature.
+//! subgraph extractor — needs no browser.
 //!
 //! The model is already sanitized at capture time: it carries shapes, byte lengths, opcode
 //! slots, and call edges, never signature bytes, cookie values, or bundle source.

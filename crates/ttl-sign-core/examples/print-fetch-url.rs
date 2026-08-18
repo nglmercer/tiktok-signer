@@ -1,5 +1,5 @@
 //! Print the unsigned `/webcast/im/fetch/` URL this crate builds, for cross-checking the
-//! headless signer against the parameter set the WebView path already uses.
+//! headless signer against the parameter set this crate builds.
 fn main() {
     let preset = ttl_sign_core::Preset::new(
         ttl_sign_core::DevicePreset::chrome_linux(),

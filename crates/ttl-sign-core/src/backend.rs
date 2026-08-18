@@ -1,7 +1,7 @@
 //! Backend contract shared by the HTTP server and signing implementations.
 //!
 //! The contract deliberately describes the observable transport result rather than how it
-//! is produced. A backend may use the WebView oracle, deterministic fixtures, or a native
+//! is produced. A backend may use a headless signer, deterministic fixtures, or a native
 //! pipeline without exposing those implementation details to its consumers.
 
 use std::collections::HashMap;

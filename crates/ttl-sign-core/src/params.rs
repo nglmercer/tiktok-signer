@@ -193,7 +193,7 @@ pub fn random_last_rtt() -> u32 {
 /// Query for `/webcast/im/fetch/`.
 ///
 /// `X-Bogus` / `X-Gnarly` / `msToken` are **not** added here; `webmssdk.js` adds them.
-/// inside the WebView when intercepting `fetch` (`docs/01-architecture.md` §D2).
+/// when intercepting `fetch` (`docs/01-architecture.md` §D2).
 #[derive(Debug, Clone)]
 pub struct FetchParams {
     pub room_id: String,
@@ -270,7 +270,7 @@ impl FetchParams {
         q
     }
 
-    /// Absolute URL ready for the WebView's patched `fetch`.
+    /// Absolute URL ready to be signed.
     pub fn url(&self, preset: &Preset) -> String {
         format!("{}?{}", FETCH_ENDPOINT, self.build(preset).encode())
     }

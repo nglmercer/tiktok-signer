@@ -8,8 +8,9 @@
 //! | Who is live now | **Rendered** DOM from `https://www.tiktok.com/live` | no |
 //!
 //! `/live` does not include the data in HTML; the client renders it. Therefore
-//! [`extract_live_channels`] operates on the WebView DOM, not a raw `GET` that returns only
-//! the shell.
+//! [`extract_live_channels`] operates on a rendered DOM, not a raw `GET` that returns only the
+//! shell. For a browser-free listing use `ttl_live_discovery::DiscoveryClient::live_channels`,
+//! which reads the signed search endpoint instead.
 //!
 //! There is no I/O here: all functions are pure operations over caller-provided text.
 

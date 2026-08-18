@@ -1,4 +1,4 @@
-//! F1 — Validate the connection model **without a webview** (`docs/02-roadmap.md`).
+//! F1 — Validate the connection model **without a browser** (`docs/02-roadmap.md`).
 //!
 //! Replays the F0 capture manually: repeats the fixture request with `reqwest`, extracts
 //! `push_server` / `route_params` / `cursor` / `internal_ext`, builds the WebSocket URI,

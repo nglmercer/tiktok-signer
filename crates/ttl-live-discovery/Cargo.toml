@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 ttl-sign-core = { workspace = true }
 
+serde_json = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["process"] }
@@ -17,3 +18,6 @@ tracing = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 ttl-sign-core = { workspace = true }
+ttl-sign-headless = { workspace = true }
+ttl-live-ws = { workspace = true }
+ttl-live-events = { workspace = true }

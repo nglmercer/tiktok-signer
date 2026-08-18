@@ -3,7 +3,6 @@ resolver = "2"
 exclude = ["fuzz"]
 members = [
     "crates/ttl-sign-core",
-    "crates/ttl-sign-webview",
     "crates/ttl-sign-server",
     "crates/ttl-sign-replay",
     "crates/ttl-sign-lab",
@@ -38,7 +37,6 @@ repository = "https://github.com/nglmercer/tiktok-signer"
 
 [workspace.dependencies]
 ttl-sign-core = { path = "crates/ttl-sign-core" }
-ttl-sign-webview = { path = "crates/ttl-sign-webview" }
 ttl-sign-replay = { path = "crates/ttl-sign-replay" }
 ttl-sign-lab = { path = "crates/ttl-sign-lab" }
 ttl-sign-native = { path = "crates/ttl-sign-native" }

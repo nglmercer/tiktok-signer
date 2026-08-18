@@ -13,18 +13,14 @@ jobs:
         run: |
           rustup toolchain install 1.86 --profile minimal --component rustfmt --component clippy
           rustup default 1.86
-      - name: Verify default dependency graph is browser-free
+      - name: Verify the workspace is browser-free
         run: |
-          if cargo tree -p ttl-sign-server --no-default-features | grep -q 'wry v'; then
-            echo 'default sign-server unexpectedly depends on Wry'
-            exit 1
-          fi
-          if cargo tree -p ttl-live-discovery | grep -q 'wry v'; then
-            echo 'native discovery unexpectedly depends on Wry'
-            exit 1
-          fi
-          if cargo tree -p ttl-sign-server --no-default-features --features headless | grep -q 'wry v'; then
-            echo 'headless sign server unexpectedly depends on Wry'
+          # The WebView is gone; nothing may reintroduce it. This checks the whole workspace
+          # with every feature enabled, not just one target, so a new optional dependency
+          # cannot slip a browser back in.
+          if cargo tree --workspace --all-features | grep -qE 'wry v|webkit2gtk'; then
+            echo 'the workspace unexpectedly depends on a browser engine'
+            cargo tree --workspace --all-features | grep -E 'wry v|webkit2gtk'
             exit 1
           fi
       - run: cargo fmt --all -- --check

@@ -24,7 +24,6 @@ it does not mean the native signer is live-compatible.
 cargo +1.86.0 fmt --all -- --check
 cargo +1.86.0 clippy --all-targets -- -D warnings
 cargo +1.86.0 test
-cargo check -p ttl-sign-webview --all-targets
 cargo check -p ttl-sign-server --all-features --all-targets
 cargo check -p ttl-sign-lab --all-features --all-targets
 cargo check --manifest-path fuzz/Cargo.toml --bins

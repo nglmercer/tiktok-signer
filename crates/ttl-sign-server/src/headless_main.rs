@@ -70,7 +70,8 @@ async fn main() -> Result<()> {
     anyhow::ensure!(
         session.get("sessionid").is_some_and(|v| !v.is_empty()),
         "no account session found. /webcast/im/fetch/ refuses guests, so every request would \
-         return an empty body. Log in with: cargo run -p ttl-sign-webview --example login"
+         return an empty body. Create it as a cookie header (name=value; ...) containing at \
+         least sessionid, exported from a browser where you are logged in."
     );
 
     let preset = Preset::new(

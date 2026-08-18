@@ -20,9 +20,6 @@ mod subgraph;
 mod subgraph_diff;
 mod vm_trace;
 
-#[cfg(feature = "webview")]
-pub mod webview_support;
-
 pub use capture::{
     capture_experiment_outcome, capture_outcome, write_capture, CaptureBundle, CaptureError,
     ObservationArtifact,
@@ -52,8 +49,6 @@ pub use signing_trace::{
     SIGNING_TRACE_VERSION,
 };
 
-#[cfg(feature = "webview")]
-pub use signing_trace::collect_sdk_evidence;
 pub use subgraph::{
     classify_dependencies, default_routes, extract_subgraphs, read_subgraph_document,
     subgraph_document_json, ArgumentShape, CallEdge, ControlledObservation, DependencyEvidence,

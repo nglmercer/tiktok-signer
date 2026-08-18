@@ -231,7 +231,20 @@ corpus; unsupported opcodes fail explicitly.
 
 ### Phase 6 — Decommission
 
-**Done for the production path.** `ttl-sign-headless` implements `SignerBackend` with no browser:
+**Done. The `ttl-sign-webview` crate is deleted** and CI asserts no workspace target pulls in a
+browser engine under any feature combination.
+
+What went with it: the interactive `login` example (provide the session file directly instead),
+the browser probes (`endpoint-probe`, `ws-probe`, `page-probe`, `limit-probe`, `fetch-dump`,
+`schema-check`), and the six page-driven lab binaries (`ttl-sign-oracle`, `ttl-sign-oracle-replay`,
+`ttl-sign-url-oracle`, `ttl-sign-trace`, `ttl-sign-paired-trace`, `ttl-sign-vm-trace`,
+`ttl-sign-env-surface`). `scripts/headless/` covers signing, the environment surface, transport,
+and discovery; the paired URL and trace differentials have no replacement, so the oracle-vs-oracle
+comparisons that produced this document can no longer be re-run.
+
+`cargo run -p ttl-live-discovery --example live-check` is the replacement end-to-end check.
+
+**Original plan for this phase, kept for the record:** `ttl-sign-headless` implements `SignerBackend` with no browser:
 it builds the transport query with `ttl_sign_core::params`, has a `UrlSigner` sign it, and decodes
 the response into the same `SignedFetch` every other backend returns. The sign server, the
 connector, and the contract tests are unchanged.
@@ -259,7 +272,7 @@ Two limits on the production path, both properties of the endpoint rather than o
 
 ## Verified against the live service
 
-The WebView example `cargo run -p ttl-sign-webview --example live-check` is the reference flow.
+The WebView example `cargo run -p ttl-live-discovery --example live-check` is the reference flow.
 `scripts/headless/native-check.mjs` runs the same steps with no browser. Measured against a live
 room on 2026-08-18:
 
@@ -338,7 +351,7 @@ implementation. Which `sup_ws_ds_opt` value works also varies, so both are tried
 That parity check is the right first step whenever this looks broken:
 
 ```sh
-cargo run -p ttl-sign-webview --example fetch-dump -- <user>
+node scripts/headless/transport.mjs /tmp/webmssdk.js -- <user>
 node scripts/headless/transport.mjs /tmp/webmssdk.js <user>
 ```
 
