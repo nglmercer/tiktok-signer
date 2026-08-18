@@ -1,0 +1,14 @@
+[package]
+name = "ttl-fixture-hygiene"
+description = "Enforced hygiene gate: refuses committed fixtures that contain live secrets."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ttl-fixture-hygiene"
+path = "src/main.rs"
+
+[dependencies]
+regex = { workspace = true }

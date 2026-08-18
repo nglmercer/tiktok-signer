@@ -1,13 +1,13 @@
 //! Trace the public signer VM entry points without retaining source or signature values.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
-use ttl_sign_core::Preset;
 use ttl_sign_lab::webview_support::{engine_config, load_selected_case};
-use ttl_sign_lab::{collect_sdk_evidence, ValueDigest};
+use ttl_sign_lab::{
+    collect_sdk_evidence, TraceProduct, ValueDigest, VmEnvironmentEvidence, VmTrace, VmTraceReport,
+    VM_TRACE_VERSION,
+};
 use ttl_sign_webview::run;
 
 const VM_EXPORT_NEEDLE: &str = "L(0,void 0,y,[],0,14)}()}();})();";
@@ -114,7 +114,7 @@ fn main() -> ! {
                 serde_json::from_str(&raw).context("invalid sanitized VM trace")?;
             let effective_environment = VmEnvironmentEvidence::from(&signer.preset());
             let report = VmTraceReport {
-                trace_version: 2,
+                trace_version: VM_TRACE_VERSION,
                 case_id: selected.id,
                 bundle_endpoint: endpoint,
                 bundle: source_digest,
@@ -612,303 +612,6 @@ fn vm_trace_script(source: &str, unsigned_url: &str, product: TraceProduct) -> R
     ))
 }
 
-#[derive(Debug, Serialize)]
-struct VmTraceReport {
-    trace_version: u32,
-    case_id: String,
-    bundle_endpoint: String,
-    bundle: ValueDigest,
-    effective_environment: VmEnvironmentEvidence,
-    trace: VmTrace,
-}
-
-#[derive(Debug, Serialize)]
-struct VmEnvironmentEvidence {
-    language: String,
-    browser_language: String,
-    browser_platform: String,
-    tz_name: String,
-    region: String,
-    screen_width: u32,
-    screen_height: u32,
-}
-
-impl From<&Preset> for VmEnvironmentEvidence {
-    fn from(preset: &Preset) -> Self {
-        Self {
-            language: preset.location.language.clone(),
-            browser_language: preset.location.browser_language.clone(),
-            browser_platform: preset.device.browser_platform.clone(),
-            tz_name: preset.location.tz_name.clone(),
-            region: preset.location.region.clone(),
-            screen_width: preset.screen.width,
-            screen_height: preset.screen.height,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmTrace {
-    product: TraceProduct,
-    clock_ms: u64,
-    bytecode_bytes: usize,
-    opcode_table_slots: usize,
-    string_table_slots: usize,
-    numeric_constant_slots: usize,
-    opcode_executions: usize,
-    distinct_opcodes: usize,
-    distinct_opcode_counts: BTreeMap<String, usize>,
-    top_transitions: Vec<VmTransition>,
-    function_invocations: usize,
-    top_function_entries: Vec<VmFunctionEntry>,
-    top_call_edges: Vec<VmTransition>,
-    opcode_catalog: BTreeMap<String, VmOpcodeCatalogEntry>,
-    vm_call_entries: BTreeMap<String, VmCallEntry>,
-    vm_call_delta: BTreeMap<String, usize>,
-    vm_call_sequence: Vec<VmCallReturn>,
-    vm_call_invocation_sequence: Vec<VmCallReturn>,
-    vm_call_inputs: Vec<VmCallInput>,
-    vm_string_returns: Vec<VmStringReturn>,
-    decoded_string_slots: BTreeMap<String, Vec<usize>>,
-    decoded_string_uses: BTreeMap<String, Vec<VmDecodedStringUse>>,
-    function_steps: Vec<VmFunctionStep>,
-    register_trace: Vec<VmRegisterEvent>,
-    sdk_call_returns: Vec<VmSdkCallReturn>,
-    known_string_slots: BTreeMap<String, Vec<usize>>,
-    mssdk_keys: Vec<String>,
-    mssdk_functions: Vec<String>,
-    mssdk_function_paths: Vec<String>,
-    mssdk_own_function_paths: Vec<String>,
-    mssdk_accessor_paths: Vec<String>,
-    fetch_descriptor_installed: bool,
-    fetch_assignments: Vec<VmFetchAssignment>,
-    fetch_metadata_after_init: Option<VmFetchMetadata>,
-    min_visited_offset: Option<usize>,
-    max_visited_offset: Option<usize>,
-    rolling_trace_hash: String,
-    first_steps: Vec<VmStep>,
-    last_steps: Vec<VmStep>,
-    result_parameters: Vec<VmResultParameter>,
-    field_events: Vec<VmFieldEvent>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmTransition {
-    edge: String,
-    count: usize,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmFunctionEntry {
-    offset: usize,
-    count: usize,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmOpcodeCatalogEntry {
-    source_bytes: usize,
-    helper_reads: VmHelperReads,
-    calls_vm: bool,
-    reads_window: bool,
-    reads_document: bool,
-    reads_storage: bool,
-    reads_crypto: bool,
-    reads_fetch: bool,
-    handler_tags: Vec<String>,
-    visited: usize,
-    operand_widths: BTreeMap<String, usize>,
-    examples: Vec<VmOperandExample>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmCallEntry {
-    calls: usize,
-    types: BTreeMap<String, usize>,
-    byte_lengths: BTreeMap<String, usize>,
-    object_keys: Vec<String>,
-    parents: BTreeMap<String, usize>,
-    phases: BTreeMap<String, usize>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmCallReturn {
-    entry: String,
-    parent: String,
-    #[serde(rename = "type")]
-    value_type: String,
-    bytes: usize,
-    phase: String,
-    object_keys: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmCallInput {
-    entry: usize,
-    parent: String,
-    args: Vec<VmValueShape>,
-    this_value: VmValueShape,
-    context_value: VmValueShape,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmValueShape {
-    #[serde(rename = "type")]
-    value_type: String,
-    bytes: usize,
-    value_class: Option<String>,
-    object_keys: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmStringReturn {
-    entry: String,
-    parent: String,
-    bytes: usize,
-    phase: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmDecodedStringUse {
-    slot: usize,
-    function_entry: Option<usize>,
-    entry: Option<usize>,
-    opcode: Option<usize>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmFunctionStep {
-    function_entry: usize,
-    offset: usize,
-    opcode: usize,
-    width: usize,
-    bytes: String,
-    operands: Vec<VmOperandValue>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmOperandValue {
-    kind: String,
-    value: u32,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmRegisterEvent {
-    function_entry: usize,
-    op: String,
-    register: usize,
-    #[serde(rename = "type")]
-    value_type: String,
-    bytes: usize,
-    value_class: Option<String>,
-    object_keys: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmSdkCallReturn {
-    name: String,
-    fields: Vec<VmSdkField>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmSdkField {
-    name: String,
-    #[serde(rename = "type")]
-    value_type: String,
-    bytes: usize,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmFetchAssignment {
-    assignment: usize,
-    #[serde(flatten)]
-    metadata: VmFetchMetadata,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmFetchMetadata {
-    #[serde(rename = "type")]
-    value_type: String,
-    name: String,
-    length: Option<usize>,
-    phase: String,
-    source_bytes: usize,
-    contains_fetch: bool,
-    contains_l: bool,
-    contains_apply: bool,
-    contains_call: bool,
-    contains_arguments: bool,
-    contains_new: bool,
-    contains_window: bool,
-    contains_url: bool,
-    contains_search: bool,
-    contains_query: bool,
-    contains_header: bool,
-    contains_set: bool,
-    contains_append: bool,
-    contains_crypto: bool,
-    contains_bogus: bool,
-    contains_gnarly: bool,
-    contains_dynosaur: bool,
-    contains_ms_token: bool,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmHelperReads {
-    #[serde(rename = "N")]
-    n: usize,
-    j: usize,
-    x: usize,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmOperandExample {
-    offset: usize,
-    width: usize,
-    bytes: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmStep {
-    offset: usize,
-    opcode: usize,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmResultParameter {
-    name: String,
-    bytes: usize,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct VmFieldEvent {
-    action: String,
-    name: String,
-    bytes: usize,
-    opcode: Option<usize>,
-}
-
 fn arguments() -> Result<(PathBuf, String, TraceProduct)> {
     let usage = "usage: ttl-sign-vm-trace <plan.json> <case-id> [frontier|fetch]";
     let mut args = std::env::args_os().skip(1);
@@ -923,13 +626,6 @@ fn arguments() -> Result<(PathBuf, String, TraceProduct)> {
         anyhow::bail!(usage);
     }
     Ok((plan, case_id, product))
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum TraceProduct {
-    Frontier,
-    Fetch,
 }
 
 fn error_class(error: &ttl_sign_core::SignError) -> &'static str {

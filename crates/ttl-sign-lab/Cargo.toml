@@ -53,6 +53,14 @@ path = "src/paired_trace_main.rs"
 required-features = ["webview"]
 
 [[bin]]
+name = "ttl-sign-subgraph"
+path = "src/subgraph_main.rs"
+
+[[bin]]
+name = "ttl-sign-subgraph-diff"
+path = "src/subgraph_diff_main.rs"
+
+[[bin]]
 name = "ttl-sign-vm-trace"
 path = "src/vm_trace_main.rs"
 required-features = ["webview"]

@@ -122,3 +122,56 @@ default and should be preferred whenever it can answer the research question.
 
 `webmssdk-profile-2026-08-13.json` is the sanitized, machine-readable baseline for the
 confirmed SDK bundle, VM offsets, and output shapes. It contains no captured values.
+
+## Route subgraph extraction
+
+A VM trace describes everything the bundle executed. Reduce it to the reachable subgraph of the
+confirmed signing routes:
+
+```sh
+cargo run -p ttl-sign-lab --bin ttl-sign-subgraph -- \
+  /tmp/ttl-vm-trace.json \
+  --controlled fixtures/research/controlled-observations-2026-08-13.json \
+  --output fixtures/research/signing-subgraph-v1.json
+```
+
+This binary reads an artifact: it needs no WebView, no `webview` feature, and never signs. Pass
+`--route <name>` (repeatable) to extract a single route; the names are `fetch_composition`,
+`ms_token`, `x_dynosaur`, `x_gnarly`, and `frontier_x_bogus`.
+
+The output retains frame entries and parents, call edges, handler slots, operand *widths* and
+helper kinds, sanitized argument and return shape classes, register read/write counts, and
+environment capability flags. It never retains operand values or operand byte strings (they index
+the VM string and numeric constant tables), the string table, bundle source, or any signing
+material. `ttl-fixture-hygiene` enforces this with the `vm-operand-value` rule.
+
+Ordering never depends on hash-map iteration or discovery order: every collection is sorted by a
+total key, so two equivalent traces serialize to identical bytes.
+
+Detect structural Oracle-vs-Oracle regressions between two extractions:
+
+```sh
+cargo run -p ttl-sign-lab --bin ttl-sign-subgraph-diff -- \
+  fixtures/research/signing-subgraph-v1.json /tmp/candidate-subgraph.json
+```
+
+Exit code 2 signals a structural difference — a changed reachable frame set, call edge, handler
+set, operand shape, argument/return shape class, or environment flag. Entropy never produces one:
+signed-value byte lengths, call/step/execution counts, and digests are deliberately excluded, so a
+run that differs only in random values reports zero differences.
+
+### Controlled observations
+
+`controlled-observations-2026-08-13.json` is the paired, one-dimension experiment corpus that
+dependency classification consumes. Each entry names a route, one dimension from the bounded
+vocabulary, and whether the route's sanitized shape moved. Structural capability flags can only
+ever produce `candidate_dependency`; only an entry in this corpus can produce
+`observed_dependency` or `no_observed_effect`.
+
+### Committed subgraph fixture
+
+`signing-subgraph-v1.json` currently carries `"provenance": "derived_from_profile_v1"`: it was
+transcribed from the sanitized `route_frame_map` of the v1 research profile, which records frames,
+edges, step counts, and shapes but no per-opcode attribution. Re-running `ttl-sign-subgraph` over
+a fresh authorized VM trace replaces it with `extracted_from_vm_trace` and fills in the handler
+sets; `ttl-sign-subgraph-diff` then shows exactly what the real extraction added.

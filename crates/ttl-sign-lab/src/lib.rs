@@ -15,6 +15,9 @@ mod capture;
 mod experiment;
 mod signing_observation;
 mod signing_trace;
+mod subgraph;
+mod subgraph_diff;
+mod vm_trace;
 
 #[cfg(feature = "webview")]
 pub mod webview_support;
@@ -44,6 +47,24 @@ pub use signing_trace::{
 
 #[cfg(feature = "webview")]
 pub use signing_trace::collect_sdk_evidence;
+pub use subgraph::{
+    classify_dependencies, default_routes, extract_subgraphs, read_subgraph_document,
+    subgraph_document_json, ArgumentShape, CallEdge, ControlledObservation, DependencyEvidence,
+    DependencyKind, DependencySource, EnvironmentFlags, HandlerUse, HelperReads, ObservedEffect,
+    Provenance, RegisterOps, RouteDependency, RouteName, RouteSpec, RouteSubgraph, ShapeClass,
+    SigningSubgraphDocument, SubgraphError, SubgraphFrame, SubgraphSource, TracePhase, ValueType,
+    SIGNING_SUBGRAPH_VERSION,
+};
+pub use subgraph_diff::{
+    compare_subgraphs, SubgraphDifference, SubgraphDifferenceKind, SubgraphDifferentialResult,
+};
+pub use vm_trace::{
+    read_vm_trace, TraceProduct, VmCallEntry, VmCallInput, VmCallReturn, VmDecodedStringUse,
+    VmEnvironmentEvidence, VmFetchAssignment, VmFetchMetadata, VmFieldEvent, VmFunctionEntry,
+    VmFunctionStep, VmHelperReads, VmOpcodeCatalogEntry, VmOperandExample, VmOperandValue,
+    VmRegisterEvent, VmResultParameter, VmSdkCallReturn, VmSdkField, VmStep, VmStringReturn,
+    VmTrace, VmTraceError, VmTraceReport, VmTransition, VmValueShape, VM_TRACE_VERSION,
+};
 
 pub const OBSERVATION_VERSION: u32 = 1;
 
