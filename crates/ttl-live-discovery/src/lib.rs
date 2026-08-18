@@ -5,15 +5,20 @@
 //! works natively today; some of it needs a signature; one part needs a renderer and cannot be
 //! made native at all.
 //!
-//! This crate implements the part that is already native, and makes the rest of the boundary
-//! explicit rather than leaving a caller to discover it by failing:
+//! All of it is implemented here. The unsigned lookup needs nothing; the signed calls take a
+//! [`UrlSigner`], so this crate never signs and the choice of signer stays with the caller:
 //!
-//! | Operation | Requirement | Native today |
+//! | Operation | Requirement | Implemented |
 //! |---|---|---|
-//! | `unique_id` → `room_id` | none | **yes** |
-//! | `/webcast/room/info/` | a signature | no |
-//! | `/webcast/gift/list/` | a signature | no |
-//! | who is live now | a signature | no |
+//! | `unique_id` → `room_id` | none | [`DiscoveryClient::room_lookup`] |
+//! | `/webcast/room/info/` | a signature | [`DiscoveryClient::room_info`] |
+//! | `/webcast/gift/list/` | a signature | [`DiscoveryClient::gift_list`] |
+//! | who is live now | a signature | `scripts/headless/find-live.mjs` |
+//!
+//! [`CommandSigner`] drives an external signer process, so a browser-free build works today:
+//! `scripts/headless/sign-url.mjs` runs the real bundle under a synthetic environment. Verified
+//! against live rooms on 2026-08-18 — `room/info` returned live viewer counts and `gift/list`
+//! returned 668 gifts, matching what the WebView reports for the same room.
 //!
 //! "Who is live now" was previously believed to need a rendering engine, because the `/live` page
 //! ships no channel data in its HTML. It does not: `/api/search/live/full/` returns the same
@@ -89,7 +94,9 @@ pub fn requirement(operation: DiscoveryOperation) -> Requirement {
     }
 }
 
-/// Operations this crate can perform without a browser.
+/// Operations that need no signer at all.
+///
+/// The rest are implemented too, but require a [`UrlSigner`]; see the crate documentation.
 pub fn native_operations() -> Vec<DiscoveryOperation> {
     DiscoveryOperation::ALL
         .into_iter()
@@ -111,6 +118,15 @@ pub enum DiscoveryError {
     NoRoom(String),
     #[error("response exceeded the {0} byte discovery limit")]
     TooLarge(usize),
+    /// The signer could not produce a signed URL.
+    #[error("signing failed: {0}")]
+    Signer(String),
+    /// TikTok refused the request with a webcast status code.
+    #[error("webcast refused the request: {0}")]
+    Refused(String),
+    /// Accepted but answered with an empty body — the identity was not sufficient.
+    #[error("endpoint accepted the request but returned nothing")]
+    EmptyResponse,
 }
 
 /// Native discovery client.
@@ -237,6 +253,7 @@ mod tests {
             requirement(DiscoveryOperation::LiveChannels),
             Requirement::Signature
         );
+        // Only the lookup needs no signer; the others are implemented but require one.
         assert_eq!(native_operations(), vec![DiscoveryOperation::RoomLookup]);
     }
 
@@ -342,4 +359,332 @@ mod tests {
     fn a_custom_timeout_is_accepted() {
         assert!(DiscoveryClient::with_timeout(&preset(), Duration::from_millis(250)).is_ok());
     }
+
+    // --- signed discovery -----------------------------------------------------------------
+
+    fn gift_body() -> &'static str {
+        r#"{"data":{"gifts":[
+            {"id":5655,"name":"Rose","describe":"sent Rose","diamond_count":1,"combo":true,
+             "type":1,"icon":{"url_list":["https://example.invalid/rose.png"]}},
+            {"id":6064,"name":"TikTok","describe":"sent TikTok","diamond_count":5,"combo":false,
+             "type":2,"icon":{"url_list":["https://example.invalid/tt.png"]}}
+        ]},"status_code":0}"#
+    }
+
+    #[test]
+    fn a_gift_list_is_parsed_with_its_diamond_costs() {
+        let gifts = interpret_gift_list("7300000000000000001", gift_body()).unwrap();
+        assert_eq!(gifts.len(), 2);
+        assert_eq!(gifts[0].name, "Rose");
+        assert_eq!(gifts[0].diamond_count, 1);
+        assert!(gifts[0].combo);
+        assert_eq!(gifts[1].diamond_count, 5);
+    }
+
+    /// A refusal must not be read as an empty gift table: one means "ask again", the other
+    /// means "this room offers no gifts".
+    #[test]
+    fn a_refusal_is_not_an_empty_gift_list() {
+        let refusal = r#"{"status_code":10041,"data":{"message":"room has finished"}}"#;
+        assert!(matches!(
+            interpret_gift_list("7300000000000000001", refusal),
+            Err(DiscoveryError::Refused(_))
+        ));
+        // An genuinely empty table is still a success.
+        let empty = r#"{"data":{"gifts":[]},"status_code":0}"#;
+        assert_eq!(
+            interpret_gift_list("7300000000000000001", empty)
+                .unwrap()
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn malformed_gift_json_is_a_decode_error() {
+        assert!(matches!(
+            interpret_gift_list("7300000000000000001", "not json"),
+            Err(DiscoveryError::Decode(_))
+        ));
+    }
+
+    #[test]
+    fn a_refused_room_info_is_not_parsed_as_an_empty_room() {
+        let refusal = r#"{"status_code":10041,"data":{"message":"room has finished"}}"#;
+        assert!(matches!(
+            interpret_room_info("7300000000000000001", refusal),
+            Err(DiscoveryError::Refused(_))
+        ));
+    }
+
+    /// Records the per-route rule as an executable fact, since sending the wrong product yields a
+    /// 403 indistinguishable from a broken signer.
+    #[test]
+    fn signing_products_map_to_the_signer_argument() {
+        assert_eq!(SigningProduct::FetchPatch.as_arg(), "fetch");
+        assert_eq!(SigningProduct::FrontierSign.as_arg(), "frontier");
+    }
+
+    struct StubSigner;
+
+    impl UrlSigner for StubSigner {
+        fn sign<'a>(&'a self, url: &'a str) -> SignFuture<'a> {
+            Box::pin(async move { Ok(format!("{url}&X-Bogus=1")) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_signer_is_invoked_for_signed_routes() {
+        let signed = StubSigner
+            .sign("https://example.invalid/webcast/gift/list/?room_id=1")
+            .await;
+        assert_eq!(
+            signed.unwrap(),
+            "https://example.invalid/webcast/gift/list/?room_id=1&X-Bogus=1"
+        );
+    }
+
+    /// A signer that cannot run must surface as a signing failure, never as a discovery result.
+    #[tokio::test]
+    async fn a_missing_signer_binary_is_a_signing_error() {
+        let signer = CommandSigner::node("no-such-script.mjs", "no-such-bundle.js");
+        let outcome = signer
+            .sign("https://example.invalid/webcast/gift/list/")
+            .await;
+        assert!(matches!(outcome, Err(DiscoveryError::Signer(_))));
+    }
+
+    /// Cookies must travel in the environment, not in the argument list where the process table
+    /// would expose them.
+    #[test]
+    fn signer_credentials_are_not_command_arguments() {
+        let signer = CommandSigner::node("script.mjs", "bundle.js")
+            .with_cookie("sessionid=secret-value")
+            .with_stored_token("stored-secret");
+        assert!(!signer.args.iter().any(|a| a.contains("secret")));
+        assert_eq!(signer.cookie.as_deref(), Some("sessionid=secret-value"));
+    }
+}
+
+// --- Signed discovery ---------------------------------------------------------------------
+//
+// `room/info` and `gift/list` need a webmssdk signature. This crate does not sign: it takes a
+// [`UrlSigner`], so the same code works against the WebView, the headless signer, or a future
+// native one, and the choice stays with the caller.
+
+use std::future::Future;
+use std::pin::Pin;
+
+use ttl_sign_core::room::{Gift, RoomInfo};
+
+pub type SignFuture<'a> = Pin<Box<dyn Future<Output = Result<String, DiscoveryError>> + Send + 'a>>;
+
+/// Something that can turn an unsigned webcast URL into a signed one.
+pub trait UrlSigner: Send + Sync {
+    fn sign<'a>(&'a self, url: &'a str) -> SignFuture<'a>;
+}
+
+/// Which signing product to request.
+///
+/// These are not interchangeable. The patched-fetch suffix is what `room/info` and `gift/list`
+/// accept; `im/fetch` rejects it with 403 and wants the public `frontierSign` product instead.
+/// Sending the wrong one looks exactly like a broken signer, so it is chosen explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigningProduct {
+    /// Patched-fetch suffix: `X-Dynosaur`, `msToken`, `X-Bogus=1`, `X-Gnarly`.
+    FetchPatch,
+    /// Public `frontierSign`: a real 16-byte `X-Bogus`.
+    FrontierSign,
+}
+
+impl SigningProduct {
+    fn as_arg(self) -> &'static str {
+        match self {
+            SigningProduct::FetchPatch => "fetch",
+            SigningProduct::FrontierSign => "frontier",
+        }
+    }
+}
+
+/// A [`UrlSigner`] that shells out to an external signer process.
+///
+/// This is how a browser-free build reaches the signer today: `scripts/headless/sign-url.mjs`
+/// runs the real bundle under a synthetic environment and prints the signed URL. Cookies travel
+/// in the environment rather than in the argument list, so they do not appear in the process
+/// table.
+#[derive(Debug, Clone)]
+pub struct CommandSigner {
+    program: String,
+    args: Vec<String>,
+    product: SigningProduct,
+    cookie: Option<String>,
+    stored_token: Option<String>,
+    user_agent: Option<String>,
+}
+
+impl CommandSigner {
+    /// Drive `node <script> <bundle> <url> <product>`.
+    pub fn node(script: impl Into<String>, bundle: impl Into<String>) -> Self {
+        Self {
+            program: "node".into(),
+            args: vec![script.into(), bundle.into()],
+            product: SigningProduct::FetchPatch,
+            cookie: None,
+            stored_token: None,
+            user_agent: None,
+        }
+    }
+
+    pub fn with_product(mut self, product: SigningProduct) -> Self {
+        self.product = product;
+        self
+    }
+
+    /// Cookie header presented to the signer. Passed through the environment, never as an
+    /// argument.
+    pub fn with_cookie(mut self, cookie: impl Into<String>) -> Self {
+        self.cookie = Some(cookie.into());
+        self
+    }
+
+    /// The stored `xmst` token. `msToken` is a verbatim passthrough of it.
+    pub fn with_stored_token(mut self, token: impl Into<String>) -> Self {
+        self.stored_token = Some(token.into());
+        self
+    }
+
+    pub fn with_user_agent(mut self, user_agent: impl Into<String>) -> Self {
+        self.user_agent = Some(user_agent.into());
+        self
+    }
+}
+
+impl UrlSigner for CommandSigner {
+    fn sign<'a>(&'a self, url: &'a str) -> SignFuture<'a> {
+        Box::pin(async move {
+            let mut command = tokio::process::Command::new(&self.program);
+            command.args(&self.args).arg(url).arg(self.product.as_arg());
+            if let Some(cookie) = &self.cookie {
+                command.env("TTL_COOKIE", cookie);
+            }
+            if let Some(token) = &self.stored_token {
+                command.env("TTL_XMST", token);
+            }
+            if let Some(agent) = &self.user_agent {
+                command.env("TTL_USER_AGENT", agent);
+            }
+            let output = command
+                .output()
+                .await
+                .map_err(|error| DiscoveryError::Signer(error.to_string()))?;
+            if !output.status.success() {
+                // The signer prints diagnostics on stderr and the URL on stdout, so a failure
+                // message never carries a signed URL.
+                let reason = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                return Err(DiscoveryError::Signer(if reason.is_empty() {
+                    format!("signer exited with {}", output.status)
+                } else {
+                    reason
+                }));
+            }
+            // The signed URL is the last non-empty line: a signer that leaks stray output on
+            // stdout should not corrupt the result, and the bundle is known to print while it
+            // loads.
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let signed = stdout
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .next_back()
+                .unwrap_or_default()
+                .to_string();
+            if !signed.starts_with("http") {
+                return Err(DiscoveryError::Signer(
+                    "signer produced no URL on stdout".into(),
+                ));
+            }
+            Ok(signed)
+        })
+    }
+}
+
+impl DiscoveryClient {
+    /// Full room metadata. Signed.
+    pub async fn room_info(
+        &self,
+        room_id: &str,
+        signer: &dyn UrlSigner,
+    ) -> Result<RoomInfo, DiscoveryError> {
+        let body = self
+            .signed_get(&room::room_info_url(room_id), signer)
+            .await?;
+        interpret_room_info(room_id, &body)
+    }
+
+    /// Every gift the room offers, with its diamond cost. Signed.
+    ///
+    /// The response is several megabytes; the client's timeout applies to it.
+    pub async fn gift_list(
+        &self,
+        room_id: &str,
+        signer: &dyn UrlSigner,
+    ) -> Result<Vec<Gift>, DiscoveryError> {
+        let body = self
+            .signed_get(&room::gift_list_url(room_id), signer)
+            .await?;
+        interpret_gift_list(room_id, &body)
+    }
+
+    async fn signed_get(
+        &self,
+        unsigned: &str,
+        signer: &dyn UrlSigner,
+    ) -> Result<String, DiscoveryError> {
+        let signed = signer.sign(unsigned).await?;
+        let response = self
+            .http
+            .get(&signed)
+            // These endpoints are read from the web app, and reject a request that does not look
+            // like it came from one.
+            .header("referer", "https://www.tiktok.com/")
+            .header("origin", "https://www.tiktok.com")
+            .send()
+            .await
+            .map_err(|error| DiscoveryError::Transport(error.to_string()))?;
+        let status = response.status().as_u16();
+        if !(200..300).contains(&status) {
+            return Err(DiscoveryError::Status { status });
+        }
+        let body = response
+            .text()
+            .await
+            .map_err(|error| DiscoveryError::Transport(error.to_string()))?;
+        if body.is_empty() {
+            // A signed request that is accepted but answered with nothing means the identity was
+            // insufficient, not that the room is empty. Reported distinctly so a caller does not
+            // read it as "no gifts".
+            return Err(DiscoveryError::EmptyResponse);
+        }
+        Ok(body)
+    }
+}
+
+/// Classify a `room/info` response. Separated from the request so every branch is testable.
+pub fn interpret_room_info(room_id: &str, body: &str) -> Result<RoomInfo, DiscoveryError> {
+    if let Some(refusal) = room::webcast_refusal(body) {
+        return Err(DiscoveryError::Refused(refusal.to_string()));
+    }
+    RoomInfo::from_json(body).ok_or_else(|| {
+        DiscoveryError::Decode(format!("unexpected room/info response for room {room_id}"))
+    })
+}
+
+/// Classify a `gift/list` response.
+pub fn interpret_gift_list(room_id: &str, body: &str) -> Result<Vec<Gift>, DiscoveryError> {
+    if let Some(refusal) = room::webcast_refusal(body) {
+        return Err(DiscoveryError::Refused(refusal.to_string()));
+    }
+    room::parse_gift_list(body).ok_or_else(|| {
+        DiscoveryError::Decode(format!("unexpected gift/list response for room {room_id}"))
+    })
 }

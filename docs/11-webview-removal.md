@@ -248,8 +248,8 @@ room on 2026-08-18:
 | `unique_id` → `room_id` | page fetch | plain HTTP | **200**, same room id |
 | guest identity | page navigation | `GET /@user/live` | **issues `ttwid`, `tt_csrf_token`, `tt_chain_token`** |
 | `msToken` | page state | `im/fetch` 403 response | **issues a 124-byte token** |
-| `/webcast/room/info/` | page-signed | headless-signed | **200, `status_code=0`**, live viewer counts |
-| `/webcast/gift/list/` | page-signed | headless-signed | **200, 673 gifts** — identical to the WebView run |
+| `/webcast/room/info/` | page-signed | `ttl-live-discovery` + headless signer | **live title and viewer counts, from Rust** |
+| `/webcast/gift/list/` | page-signed | `ttl-live-discovery` + headless signer | **668 gifts, from Rust** — same cheapest gift as the WebView run |
 | `/webcast/im/fetch/` | signed by the page | headless-signed + session | **74,670-byte protobuf with a `wss://` push_server** |
 | event stream | page WebSocket relay | — | blocked on the above |
 
@@ -272,6 +272,27 @@ This corrects a working assumption in [09](09-signing-research.md): the two prod
 routes to the same signature, and the transport endpoint wants the *public* one. Sending the wrong
 product produces a 403 that is indistinguishable from a broken signer, which is why this went
 unnoticed while the suffix was assumed to be the transport signature.
+
+### Signed discovery runs from Rust
+
+`ttl-live-discovery` now implements the signed calls as well as the unsigned lookup. It never
+signs: `room_info` and `gift_list` take a `UrlSigner`, and `CommandSigner` drives
+`scripts/headless/sign-url.mjs` as a subprocess, so Rust reaches the signer without embedding a
+JavaScript engine and without a WebView.
+
+```sh
+cargo run -p ttl-live-discovery --example discover -- <unique_id>
+```
+
+```text
+@andygarcia.pesca room_id=7675336599840393991 live=true
+room/info  title="¿Llegamos a 30K de seguidores?" viewers=3284 likes=0
+gift/list  668 gifts
+           Welcome Dallah (1 diamonds, id=919346)
+```
+
+That is the same cheapest gift the WebView `live-check` reports for the same room. When an
+embedded engine replaces the subprocess, only the `UrlSigner` implementation changes.
 
 ### The transport bootstraps headlessly
 

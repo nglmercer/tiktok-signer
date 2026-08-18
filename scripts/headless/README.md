@@ -140,3 +140,22 @@ together, so that is upstream behaviour rather than a bug here. Confirm with:
 cargo run -p ttl-sign-webview --example fetch-dump -- <user>
 node scripts/headless/transport.mjs /tmp/webmssdk.js <user>
 ```
+
+## Signing one URL (subprocess protocol)
+
+`sign-url.mjs` signs a single URL and prints it on stdout, so Rust can reach the signer without
+embedding a JavaScript engine:
+
+```sh
+node scripts/headless/sign-url.mjs /tmp/webmssdk.js "<url>" fetch      # room/info, gift/list
+node scripts/headless/sign-url.mjs /tmp/webmssdk.js "<url>" frontier   # im/fetch
+```
+
+The product argument is explicit because the two are **not** interchangeable — see
+`im-fetch-probe.mjs`. Credentials travel in the environment (`TTL_COOKIE`, `TTL_XMST`,
+`TTL_USER_AGENT`) so they never appear in the process table.
+
+stdout carries the signed URL and nothing else: the bundle prints while it loads, so its console
+is redirected to stderr. `ttl_live_discovery::CommandSigner` drives this, and
+`cargo run -p ttl-live-discovery --example discover -- <unique_id>` is the end-to-end path from
+Rust with no browser.

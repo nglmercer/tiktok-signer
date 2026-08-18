@@ -11,7 +11,9 @@ ttl-sign-core = { workspace = true }
 
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["process"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+ttl-sign-core = { workspace = true }
