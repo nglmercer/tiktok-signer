@@ -139,7 +139,8 @@ pub enum ValueType {
 }
 
 impl ValueType {
-    fn parse(raw: &str) -> Self {
+    /// Map a JavaScript `typeof` string onto the bounded vocabulary.
+    pub fn from_js(raw: &str) -> Self {
         match raw {
             "string" => ValueType::String,
             "number" => ValueType::Number,
@@ -172,7 +173,7 @@ impl ShapeClass {
         keys.sort();
         keys.dedup();
         (
-            ValueType::parse(&shape.value_type),
+            ValueType::from_js(&shape.value_type),
             shape.value_class.clone(),
             keys,
         )

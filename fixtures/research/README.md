@@ -175,3 +175,37 @@ transcribed from the sanitized `route_frame_map` of the v1 research profile, whi
 edges, step counts, and shapes but no per-opcode attribution. Re-running `ttl-sign-subgraph` over
 a fresh authorized VM trace replaces it with `extracted_from_vm_trace` and fills in the handler
 sets; `ttl-sign-subgraph-diff` then shows exactly what the real extraction added.
+
+## Environment surface fingerprint
+
+Phase 0 of `docs/11-webview-removal.md`: record which browser properties the bundle touches while
+it signs. Both routes to a browser-free build need this list — an embedded JS engine has to shim
+these properties, and a native VM interpreter has to resolve them.
+
+```sh
+cargo run -p ttl-sign-lab --bin ttl-sign-env-surface --features webview -- \
+  fixtures/research/plan.example.json baseline > /tmp/environment-surface.json
+```
+
+The recorder installs proxies over `navigator`, `screen`, `location`, `crypto`, `localStorage`,
+`sessionStorage`, and `document` inside an offscreen iframe, instruments a fixed list of global
+properties (the global object cannot be proxied), then evaluates the **unmodified** bundle and
+drives the patched-fetch path against a stubbed transport. No signed request is sent.
+
+Only shapes are recorded: property path, operation counts (`get`/`set`/`call`/`has`), `typeof`
+class, and byte length. `PropertyAccess` has nowhere to put a value, so `document.cookie` is
+recorded as a length and the cookie never crosses the bridge.
+
+Recording covers bundle evaluation **and** signing, because a shim has to satisfy the SDK at load
+time as well as at sign time.
+
+### Reading the result
+
+Check `instrumentation` before trusting `properties`. A root whose trap failed to install produces
+an empty surface, which is indistinguishable from a root the bundle never touched — so failures
+are recorded explicitly and the binary warns on stderr. A surface with any uninstrumented root is
+incomplete and must not be used as a shim specification.
+
+`missing_shim_coverage` is the gate this artifact exists for: given a surface and the list of paths
+a shim implements, it names every property still missing. A shim is complete when that list is
+empty.

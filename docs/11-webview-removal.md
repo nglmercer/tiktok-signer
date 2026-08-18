@@ -107,8 +107,14 @@ This is cheap, needs one authorized run, and it is the single artifact that deci
 is a week or a quarter. It also resolves the `sdk_state` and `randomness` dependency candidates
 that the subgraph currently cannot distinguish.
 
-**Gate:** the fixture lists every touched property; a test asserts the shim in Phase 2 covers all of
-them, so a missing shim is a test failure rather than a runtime mystery.
+**Gate:** the fixture lists every touched property; `missing_shim_coverage` asserts the Phase 2
+shim covers all of them, so a missing shim is a test failure with a property name attached rather
+than a runtime mystery.
+
+**Status: tooling complete, awaiting one authorized run.** `ttl-sign-env-surface` records the
+surface and `ttl_sign_lab::environment_surface` owns the sanitized model, the coverage gate, and
+the drift comparison. The recorder has not yet been executed against a live page, so no surface
+fixture is committed; the model and script generation are covered by tests that need no browser.
 
 ### Phase 1 — Per-opcode attribution *(already the stated next blocker in [09](09-signing-research.md))*
 

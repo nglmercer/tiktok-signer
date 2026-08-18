@@ -53,6 +53,11 @@ path = "src/paired_trace_main.rs"
 required-features = ["webview"]
 
 [[bin]]
+name = "ttl-sign-env-surface"
+path = "src/environment_surface_main.rs"
+required-features = ["webview"]
+
+[[bin]]
 name = "ttl-sign-subgraph"
 path = "src/subgraph_main.rs"
 

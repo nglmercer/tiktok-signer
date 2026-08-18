@@ -8,6 +8,36 @@ use ttl_sign_webview::{session, EngineConfig, PageEnvironmentOverride};
 
 use crate::{ExperimentCase, ExperimentPlan, SessionMode, TimestampMode};
 
+/// Ceiling on the inspected bundle. The served bundle is ~230 KB; anything near this limit is a
+/// different resource and should fail rather than be parsed.
+const MAX_BUNDLE_BYTES: usize = 2 * 1024 * 1024;
+
+/// Download the signing bundle with the page's own User-Agent.
+///
+/// Shared by every research binary that has to read the bundle: they must all fetch the same
+/// bytes the page did, or the digest they pin is meaningless.
+pub async fn download_bundle(endpoint: &str, user_agent: &str) -> Result<Vec<u8>> {
+    let response = reqwest::Client::builder()
+        .user_agent(user_agent)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?
+        .get(endpoint)
+        .send()
+        .await?
+        .error_for_status()?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_BUNDLE_BYTES as u64)
+    {
+        anyhow::bail!("webmssdk bundle exceeds the inspection limit");
+    }
+    let bytes = response.bytes().await?;
+    if bytes.len() > MAX_BUNDLE_BYTES {
+        anyhow::bail!("webmssdk bundle exceeds the inspection limit");
+    }
+    Ok(bytes.to_vec())
+}
+
 pub fn load_selected_case(path: &Path, id: &str) -> Result<ExperimentCase> {
     let plan = load_plan(path)?;
     Ok(plan

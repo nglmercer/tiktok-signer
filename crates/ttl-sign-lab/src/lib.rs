@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use ttl_sign_core::{FetchResult, SignError, SignOutcome, SignerBackend, TransportRequest};
 
 mod capture;
+mod environment_surface;
 mod experiment;
 mod signing_observation;
 mod signing_trace;
@@ -25,6 +26,12 @@ pub mod webview_support;
 pub use capture::{
     capture_experiment_outcome, capture_outcome, write_capture, CaptureBundle, CaptureError,
     ObservationArtifact,
+};
+pub use environment_surface::{
+    build_environment_surface, compare_environment_surfaces, environment_surface_json,
+    missing_shim_coverage, read_environment_surface, AccessOps, EnvironmentSurfaceDocument,
+    EnvironmentSurfaceError, InstrumentationCoverage, PropertyAccess, SurfaceDifference,
+    SurfaceRoot, SurfaceSource, ENVIRONMENT_SURFACE_VERSION,
 };
 pub use experiment::{
     CookieMutation, CookieProbeValue, EnvironmentProfile, ExperimentCase, ExperimentDimension,

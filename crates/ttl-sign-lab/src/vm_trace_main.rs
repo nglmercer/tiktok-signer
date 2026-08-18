@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use ttl_sign_lab::webview_support::{engine_config, load_selected_case};
+use ttl_sign_lab::webview_support::{download_bundle, engine_config, load_selected_case};
 use ttl_sign_lab::{
     collect_sdk_evidence, TraceProduct, ValueDigest, VmEnvironmentEvidence, VmTrace, VmTraceReport,
     VM_TRACE_VERSION,
@@ -47,7 +47,6 @@ const STRING_DECODE_NEEDLE: &str =
     "function m(n,t){n=new E(\"utf-8\").decode(D(n));for(var r=\"\",i=0;i<n.length;i++)r+=String.fromCharCode(n.charCodeAt(i)^t.charCodeAt(i%t.length));return r}";
 const STRING_DECODE_REPLACEMENT: &str =
     "function m(n,t){var __ttlEncoded=n;n=new E(\"utf-8\").decode(D(n));for(var r=\"\",i=0;i<n.length;i++)r+=String.fromCharCode(n.charCodeAt(i)^t.charCodeAt(i%t.length));if(y.__ttlDecodedTargets){var __ttlSlot=M.indexOf(__ttlEncoded),__ttlTargets=['X-Bogus','X-Gnarly','X-Dynosaur','msToken','1'];for(var __ttlTargetIndex=0;__ttlTargetIndex<__ttlTargets.length;__ttlTargetIndex++)if(r===__ttlTargets[__ttlTargetIndex]&&__ttlSlot>=0){var __ttlTarget=__ttlTargets[__ttlTargetIndex];if(y.__ttlDecodedTargets[__ttlTarget].length<32)y.__ttlDecodedTargets[__ttlTarget].push(__ttlSlot);if(y.__ttlDecodedUses&&y.__ttlDecodedUses[__ttlTarget].length<128)y.__ttlDecodedUses[__ttlTarget].push({slot:__ttlSlot,function_entry:y.__ttlVmFunctionEntry===void 0?null:y.__ttlVmFunctionEntry,entry:y.__ttlVmActiveEntry===void 0?null:y.__ttlVmActiveEntry,opcode:y.__ttlVmActiveOpcode===void 0?null:y.__ttlVmActiveOpcode})}}return r}";
-const MAX_BUNDLE_BYTES: usize = 2 * 1024 * 1024;
 
 fn main() -> ! {
     tracing_subscriber::fmt()
@@ -132,28 +131,6 @@ fn main() -> ! {
             }
         }
     })
-}
-
-async fn download_bundle(endpoint: &str, user_agent: &str) -> Result<Vec<u8>> {
-    let response = reqwest::Client::builder()
-        .user_agent(user_agent)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?
-        .get(endpoint)
-        .send()
-        .await?
-        .error_for_status()?;
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_BUNDLE_BYTES as u64)
-    {
-        anyhow::bail!("webmssdk bundle exceeds the inspection limit");
-    }
-    let bytes = response.bytes().await?;
-    if bytes.len() > MAX_BUNDLE_BYTES {
-        anyhow::bail!("webmssdk bundle exceeds the inspection limit");
-    }
-    Ok(bytes.to_vec())
 }
 
 fn patch_vm_export(source: &str) -> Result<String> {
