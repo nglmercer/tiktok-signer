@@ -195,6 +195,13 @@ const query = serialize(withDefaults({
   ...strip(rest),
 }));
 
+// The Rust builder in `ttl-sign-core` has to produce these bytes exactly, since the signature
+// covers them. `TTL_PRINT_QUERY=1` prints them and stops, which is what its parity test compares.
+if (process.env.TTL_PRINT_QUERY) {
+  console.log(query);
+  process.exit(0);
+}
+
 // --- the signature: `registerWsSigner`, over the query bytes --------------------------------------
 
 const env = createSandbox();

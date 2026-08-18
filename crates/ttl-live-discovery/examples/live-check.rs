@@ -10,9 +10,10 @@
 //! cargo run -p ttl-live-discovery --example live-check -- <user>    # or name one
 //! ```
 //!
-//! Every step is signed by `scripts/headless/sign-url.mjs` running the real bundle under a
-//! synthetic environment. Step 4 needs an account session, because `/webcast/im/fetch/` answers a
-//! guest with an empty body; the earlier steps work as a guest.
+//! Discovery is unsigned. The last step signs the socket query with
+//! `scripts/headless/sign-url.mjs`, which runs the real bundle under a synthetic environment, and
+//! then opens the message socket directly — the same thing the web player does, with no
+//! `/webcast/im/fetch/` in front of it.
 //!
 //! AUTHORIZED USE ONLY: this sends real signed requests.
 
@@ -23,12 +24,10 @@ use std::time::Duration;
 use ttl_live_events::{decode_batch, LiveEvent};
 use ttl_live_ws::{ConnectConfig, LiveConnection};
 
-use ttl_live_discovery::{CommandSigner, DiscoveryClient, DiscoveryError};
+use ttl_live_discovery::{CommandSigner, DiscoveryClient, DiscoveryError, SigningProduct, UrlSigner};
 use ttl_sign_core::{
-    CookieJar, DevicePreset, LocationPreset, Preset, RejectReason, ScreenPreset, SignOutcome,
-    SignerBackend, TransportRequest,
+    CookieJar, DevicePreset, DirectSocketParams, LocationPreset, Preset, ScreenPreset,
 };
-use ttl_sign_headless::{HeadlessBackend, HeadlessConfig, TRANSPORT_PRODUCT};
 
 fn session() -> CookieJar {
     let path = std::env::var_os("TTL_SESSION_FILE")
@@ -147,79 +146,45 @@ async fn main() {
         Err(error) => println!("      gifts: unavailable ({error})"),
     }
 
-    // [4/5] transport bootstrap.
-    println!("\n[4/5] bootstrapping the transport…");
-    if !authenticated {
-        println!("      skipped: /webcast/im/fetch/ refuses guests. Provide a session to try it.");
-        return;
+    // [4/5] the transport. The socket is opened directly — there is no `im/fetch` on this path.
+    //
+    // The live room page configures its IM SDK with `wsDirect: "1"` and a `socketHost`, and the SDK
+    // then builds and signs the socket URL itself rather than asking `im/fetch` for a
+    // `push_server`. Reading that out of the player's transport chunk is what ended a long search
+    // for a request shape `im/fetch` would answer: it answers 200 with zero bytes because nothing
+    // depends on its answer any more.
+    println!("\n[4/5] building and signing the socket URL…");
+    let mut params = DirectSocketParams::new(&lookup.room_id);
+    if let Some(webid) = jar.get("tt_webid_v2").filter(|value| !value.is_empty()) {
+        // The device id in the query is the page's own webid when it has one.
+        params.device_id = webid.to_string();
     }
-    let transport_signer = CommandSigner::node(script, bundle)
-        .with_product(TRANSPORT_PRODUCT)
+    let unsigned = params.url(&preset);
+    let socket_signer = CommandSigner::node(script, bundle)
+        .with_product(SigningProduct::WsDirect)
         .with_user_agent(preset.user_agent())
         .with_cookie(jar.to_cookie_string());
-    let backend = HeadlessBackend::new(
-        HeadlessConfig::new(preset.clone(), jar),
-        Box::new(transport_signer),
-    )
-    .expect("headless backend");
-
-    let signed = match backend
-        .transport(TransportRequest::new(&lookup.room_id))
-        .await
-    {
-        SignOutcome::Ok(signed) => {
-            println!(
-                "      push_server obtained ({} bytes)",
-                signed.protobuf.len()
-            );
-            signed
-        }
-        SignOutcome::Rejected(RejectReason::EmptyBody) => {
-            println!("      rejected: empty body (silent rejection)");
-            println!();
-            println!("      The request itself is now the one a browser makes. Two things were");
-            println!("      wrong until 2026-08-18, and both are fixed:");
-            println!();
-            println!("      1. This request was signed. The page's own signing allowlist covers 7");
-            println!("         GET and 22 POST webcast paths — wallet, KYC, room/chat, room/enter —");
-            println!("         and /webcast/im/fetch/ is on neither, so a browser sends it");
-            println!("         unsigned. Signed it answers 403 whatever the signature contains;");
-            println!("         unsigned it answers 200. It now goes out unsigned.");
-            println!("      2. The query was ours, not the player's. version_code is 180800, and");
-            println!("         the first fetch sends cursor=0, internal_ext=0, last_rtt=-1 — the");
-            println!("         chunk deletes empty values, so cursor= is a request no player");
-            println!("         makes. FetchParams builds the chunk's query now.");
-            println!();
-            println!("      The signature was never wrong. /webcast/room/enter/ is on the POST");
-            println!("      allowlist and does verify one: unsigned 403, X-Bogus alone 403, our");
-            println!("      full computed suffix 200. Check it yourself:");
-            println!();
-            println!("        node scripts/headless/enter-then-fetch.mjs /tmp/webmssdk.js {}", user);
-            println!();
-            println!("      What remains is this empty body, and it is not a signing problem. A");
-            println!("      zero-byte 200 carries no status_code, so it is an edge answering");
-            println!("      nothing rather than the service objecting. Ruled out: signature");
-            println!("      present or absent, three parameter sets, protobuf versus JSON, the");
-            println!("      hosts webcast.us and webcast.tiktokv.com, the x-tt-target-idc header,");
-            println!("      identity from a full session down to no cookies, and the room.");
-            println!();
-            println!("      Standing hypothesis: cross-data-centre routing. This account is");
-            println!("      pinned to one idc and the rooms tested report another. A session in a");
-            println!("      different location would settle it in one request. See docs/12.");
-            return;
-        }
-        SignOutcome::Rejected(reason) => {
-            println!("      rejected: {reason}");
-            return;
-        }
-        SignOutcome::Transport(error) => {
-            println!("      transport error: {error}");
-            return;
+    let signed_uri = match socket_signer.sign(&unsigned).await {
+        Ok(uri) => uri,
+        Err(error) => {
+            eprintln!("\nFAILED: could not sign the socket URL: {error}");
+            std::process::exit(1);
         }
     };
+    println!(
+        "      {} query parameters, signed with registerWsSigner",
+        params.build(&preset).len()
+    );
 
     listen(
-        LiveConnection::open(&signed, &preset, &lookup.room_id, &ConnectConfig::default()).await,
+        LiveConnection::open_uri(
+            &signed_uri,
+            &jar,
+            &preset.user_agent(),
+            "",
+            &ConnectConfig::default(),
+        )
+        .await,
     )
     .await;
 }

@@ -37,6 +37,8 @@ const WS_VERSION_CODE: &str = "180800";
 /// `270000` regardless of what the transport request carries.
 const TRAILING_VERSION_CODE: &str = "270000";
 const HEARTBEAT_DURATION_MS: &str = "10000";
+/// The IM SDK's own version, sent alongside the two `version_code` values.
+const UPDATE_VERSION_CODE: &str = "2.0.0";
 
 /// Query string under construction: ordered pairs with duplicates allowed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -94,6 +96,24 @@ impl Query {
             out.push_str(&percent_encode(k));
             out.push('=');
             out.push_str(&percent_encode(v));
+        }
+        out
+    }
+
+    /// Serialize as `k=v&k=v` with **no** encoding at all.
+    ///
+    /// The direct-socket query is signed over its own bytes, and the player's serializer does not
+    /// percent-encode: `browser_version` keeps its spaces and `tz_name` its slash. Encoding here
+    /// would sign different bytes than the ones sent.
+    pub fn encode_raw(&self) -> String {
+        let mut out = String::new();
+        for (k, v) in &self.0 {
+            if !out.is_empty() {
+                out.push('&');
+            }
+            out.push_str(k);
+            out.push('=');
+            out.push_str(v);
         }
         out
     }
@@ -396,6 +416,109 @@ impl WsParams {
     }
 }
 
+/// Query for the socket the current web player opens directly, with no `im/fetch` in front of it.
+///
+/// The live room page configures its IM SDK with `wsDirect: "1"` and a `socketHost`, and the SDK
+/// then builds the socket URL itself instead of waiting for a `push_server`:
+///
+/// ```text
+/// wss://webcast-ws.tiktok.com/webcast/im/ws_proxy/ws_reuse_supplement/?<query>&X-Gnarly=<sig>
+/// ```
+///
+/// The query below reproduces the SDK's serializer parameter for parameter, in its order, because
+/// `registerWsSigner` signs the query string verbatim. Two properties of it look like mistakes and
+/// are not:
+///
+/// - **Nothing is percent-encoded.** `browser_version` carries raw spaces and parentheses, and
+///   `tz_name` a raw slash. [`Query::encode_raw`] preserves them; the URI is repaired for
+///   `http::Uri` afterwards by `sanitize_uri`, which does not disturb the signed bytes.
+/// - **`version_code` appears twice**, `180800` then `270000`. The SDK's browser block supplies the
+///   first under a snake_case key and the page config the second under a camelCase one, so its
+///   serializer emits both.
+///
+/// Read out of `static/js/async/9894.*.js` on 2026-08-18, and verified against a live room:
+/// the socket opens and pushes frames.
+#[derive(Debug, Clone)]
+pub struct DirectSocketParams {
+    pub room_id: String,
+    pub device_id: String,
+    /// `gzip`, or empty for uncompressed frames.
+    pub compress: String,
+    /// `audience`, unless connecting as the broadcaster.
+    pub identity: String,
+    /// Milliseconds between application heartbeats; echoed to the server in the query.
+    pub heartbeat_duration: String,
+}
+
+impl DirectSocketParams {
+    pub fn new(room_id: impl Into<String>) -> Self {
+        Self {
+            room_id: room_id.into(),
+            device_id: random_device_id(),
+            compress: "gzip".into(),
+            identity: "audience".into(),
+            heartbeat_duration: HEARTBEAT_DURATION_MS.into(),
+        }
+    }
+
+    /// The query, in the SDK's order. Serialize it with [`Query::encode_raw`].
+    pub fn build(&self, preset: &Preset) -> Query {
+        let d = &preset.device;
+        let l = &preset.location;
+        let s = &preset.screen;
+
+        let mut q = Query::new();
+        // The SDK's browser block comes first, carrying its own `version_code`.
+        q.push_raw("version_code", WS_VERSION_CODE);
+        q.push_raw("device_platform", "web");
+        q.push_raw("cookie_enabled", "true");
+        q.push_raw("screen_width", s.width.to_string());
+        q.push_raw("screen_height", s.height.to_string());
+        q.push_raw("browser_language", &l.browser_language);
+        q.push_raw("browser_platform", &d.browser_platform);
+        q.push_raw("browser_name", &d.browser_name);
+        q.push_raw("browser_version", &d.browser_version);
+        q.push_raw("browser_online", "true");
+        q.push_raw("tz_name", &l.tz_name);
+        // Then the SDK's own fixed fields, then the page's config.
+        q.push_raw("app_name", "tiktok_web");
+        q.push_raw("sup_ws_ds_opt", "1");
+        q.push_raw("update_version_code", UPDATE_VERSION_CODE);
+        if !self.compress.is_empty() {
+            q.push_raw("compress", &self.compress);
+        }
+        q.push_raw("webcast_language", &l.language);
+        q.push_raw("aid", APP_ID);
+        q.push_raw("live_id", LIVE_ID);
+        q.push_raw("version_code", TRAILING_VERSION_CODE);
+        q.push_raw("app_language", &l.language);
+        q.push_raw("ws_direct", "1");
+        q.push_raw("client_enter", "1");
+        q.push_raw("room_id", &self.room_id);
+        q.push_raw("identity", &self.identity);
+        // `-1` because no round trip has been measured yet; the SDK sends the same on a cold start.
+        q.push_raw("last_rtt", "-1");
+        q.push_raw("heartbeat_duration", &self.heartbeat_duration);
+        // The tail the SDK appends after the config, in this order.
+        q.push_raw("resp_content_type", "protobuf");
+        // `did_rule` is 3 only when there is no device id; with one it is 0.
+        q.push_raw("did_rule", if self.device_id.is_empty() { "3" } else { "0" });
+        q.push_raw("device_id", &self.device_id);
+        q
+    }
+
+    /// The unsigned socket URL. Append the signature as `&X-Gnarly=<percent-encoded>`.
+    pub fn url(&self, preset: &Preset) -> String {
+        format!("{DIRECT_SOCKET_HOST}{WS_REUSE_PATH}?{}", self.build(preset).encode_raw())
+    }
+}
+
+/// Default socket host. The player picks `webcast-ws.us` / `.eu` by cluster region; this is the
+/// value it uses everywhere else.
+pub const DIRECT_SOCKET_HOST: &str = "wss://webcast-ws.tiktok.com";
+/// The path the SDK opens when `wsDirect` is on.
+pub const WS_REUSE_PATH: &str = "/webcast/im/ws_proxy/ws_reuse_supplement/";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,4 +661,45 @@ mod tests {
         assert_eq!(query.get("X-Gnarly"), Some("abc/def+ghi="));
         assert_eq!(query.encode(), "X-Gnarly=abc%2Fdef%2Bghi%3D&empty=");
     }
+    /// The bytes the signature covers, compared against what the real SDK emits.
+    ///
+    /// `TTL_PRINT_QUERY=1 node scripts/headless/ws-direct.mjs <bundle> <room>` prints exactly this
+    /// string for the same preset, room, and device id. If this test starts failing, the player's
+    /// serializer changed and the signature will be computed over bytes the server did not receive.
+    #[test]
+    fn direct_socket_query_matches_the_player() {
+        let mut params = DirectSocketParams::new("7675481361573382932");
+        params.device_id = "7300000000000000001".into();
+        // The JavaScript probe reports a Chrome-on-Linux browser block; compare like for like.
+        let preset = Preset::new(
+            crate::DevicePreset::chrome_linux(),
+            crate::LocationPreset::us_east(),
+            crate::ScreenPreset::FHD,
+        );
+
+        let expected = concat!(
+            "version_code=180800&device_platform=web&cookie_enabled=true",
+            "&screen_width=1920&screen_height=1080&browser_language=en-US",
+            "&browser_platform=Linux x86_64&browser_name=Mozilla",
+            "&browser_version=5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ",
+            "Chrome/131.0.0.0 Safari/537.36",
+            "&browser_online=true&tz_name=America/New_York",
+            "&app_name=tiktok_web&sup_ws_ds_opt=1&update_version_code=2.0.0&compress=gzip",
+            "&webcast_language=en&aid=1988&live_id=12&version_code=270000&app_language=en",
+            "&ws_direct=1&client_enter=1&room_id=7675481361573382932&identity=audience",
+            "&last_rtt=-1&heartbeat_duration=10000&resp_content_type=protobuf&did_rule=0",
+            "&device_id=7300000000000000001",
+        );
+        assert_eq!(params.build(&preset).encode_raw(), expected);
+    }
+
+    #[test]
+    fn direct_socket_url_is_the_reuse_supplement_path() {
+        let params = DirectSocketParams::new("7000000000000000000");
+        let url = params.url(&preset());
+        assert!(url.starts_with("wss://webcast-ws.tiktok.com/webcast/im/ws_proxy/ws_reuse_supplement/?"));
+        // Unencoded, because the signature covers these bytes.
+        assert!(url.contains("tz_name=America/New_York"));
+    }
+
 }

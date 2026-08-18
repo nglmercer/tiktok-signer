@@ -9,8 +9,10 @@
 //
 //   fetch     — the patched-fetch suffix (X-Dynosaur, msToken, X-Bogus=1, X-Gnarly). Correct for
 //               /webcast/room/info/ and /webcast/gift/list/.
-//   frontier  — the public frontierSign product (a real 16-byte X-Bogus). Correct for
-//               /webcast/im/fetch/, which rejects the suffix with 403.
+//   frontier  — the public frontierSign product (a real 16-byte X-Bogus).
+//   ws        — registerWsSigner over the query bytes, appending X-Gnarly. Correct for the direct
+//               message socket, wss://webcast-ws.tiktok.com/webcast/im/ws_proxy/
+//               ws_reuse_supplement/, which is the transport the current web player opens.
 //
 // Picking the wrong product yields a 403 that looks exactly like a broken signer, which is why it
 // is an explicit argument rather than a guess.
@@ -29,8 +31,8 @@ if (!bundlePath || !url) {
   console.error('usage: node scripts/headless/sign-url.mjs <webmssdk.js> <url> [fetch|frontier]');
   process.exit(2);
 }
-if (product !== 'fetch' && product !== 'frontier') {
-  console.error(`unknown signing product "${product}"; expected fetch or frontier`);
+if (!['fetch', 'frontier', 'ws'].includes(product)) {
+  console.error(`unknown signing product "${product}"; expected fetch, frontier or ws`);
   process.exit(2);
 }
 
@@ -73,6 +75,31 @@ const sdk = w.byted_acrawler;
 if (!sdk) {
   console.error('the bundle did not expose byted_acrawler');
   process.exit(1);
+}
+
+if (product === 'ws') {
+  // The socket signature covers the query string exactly as it is sent, so the bytes are taken
+  // from the URL verbatim rather than through URL/URLSearchParams, which would re-encode them.
+  const query = url.slice(url.indexOf('?') + 1);
+  if (!query || query === url) {
+    console.error('a socket URL must carry the query the signature covers');
+    process.exit(1);
+  }
+  await Promise.resolve(sdk.init({ aid: 1988, enablePathList: ['/webcast/'] }));
+  if (typeof sdk.registerWsSigner !== 'function') {
+    console.error('this bundle exposes no registerWsSigner');
+    process.exit(1);
+  }
+  const wsSigner = sdk.registerWsSigner();
+  const gnarly = typeof wsSigner === 'function'
+    ? wsSigner({ 'X-MS-Q': query, 'X-MS-STUB': '' })?.['X-Gnarly']
+    : null;
+  if (!gnarly) {
+    console.error('registerWsSigner produced no X-Gnarly');
+    process.exit(1);
+  }
+  process.stdout.write(`${url}&X-Gnarly=${encodeURIComponent(gnarly)}`);
+  process.exit(0);
 }
 
 if (product === 'frontier') {

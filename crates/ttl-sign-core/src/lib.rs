@@ -29,7 +29,7 @@ pub use backend::{BackendFuture, ClientIdentity, MockBackend, SignerBackend, Tra
 pub use cookie::CookieJar;
 pub use gift_streak::{CompletedGift, GiftStreaks};
 pub use outcome::{RejectReason, SignError, SignOutcome, SignedFetch};
-pub use params::{FetchParams, Query, WsParams};
+pub use params::{DirectSocketParams, FetchParams, Query, WsParams, DIRECT_SOCKET_HOST, WS_REUSE_PATH};
 pub use preset::{DevicePreset, LocationPreset, Preset, ScreenPreset};
 pub use proto::FetchResult;
 pub use room::{

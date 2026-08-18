@@ -441,6 +441,7 @@ mod tests {
     fn signing_products_map_to_the_signer_argument() {
         assert_eq!(SigningProduct::FetchPatch.as_arg(), "fetch");
         assert_eq!(SigningProduct::FrontierSign.as_arg(), "frontier");
+        assert_eq!(SigningProduct::WsDirect.as_arg(), "ws");
     }
 
     struct StubSigner;
@@ -513,6 +514,10 @@ pub enum SigningProduct {
     FetchPatch,
     /// Public `frontierSign`: a real 16-byte `X-Bogus`.
     FrontierSign,
+    /// `registerWsSigner` over the query bytes, appended as `X-Gnarly`. This is what the direct
+    /// message socket verifies; it signs the query exactly as sent, so the URL must not be
+    /// re-encoded on the way in or out.
+    WsDirect,
 }
 
 impl SigningProduct {
@@ -520,6 +525,7 @@ impl SigningProduct {
         match self {
             SigningProduct::FetchPatch => "fetch",
             SigningProduct::FrontierSign => "frontier",
+            SigningProduct::WsDirect => "ws",
         }
     }
 }
@@ -616,7 +622,8 @@ impl UrlSigner for CommandSigner {
                 .next_back()
                 .unwrap_or_default()
                 .to_string();
-            if !signed.starts_with("http") {
+            // `http` for the request signers, `ws` for the socket one.
+            if !(signed.starts_with("http") || signed.starts_with("ws")) {
                 return Err(DiscoveryError::Signer(
                     "signer produced no URL on stdout".into(),
                 ));
