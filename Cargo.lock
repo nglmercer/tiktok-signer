@@ -3283,6 +3283,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ttl-live-discovery"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "ttl-sign-core",
+]
+
+[[package]]
 name = "ttl-live-events"
 version = "0.1.0"
 dependencies = [

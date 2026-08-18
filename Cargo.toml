@@ -9,6 +9,7 @@ members = [
     "crates/ttl-sign-lab",
     "crates/ttl-sign-native",
     "crates/ttl-fixture-hygiene",
+    "crates/ttl-live-discovery",
     "crates/ttl-live-ws",
     "crates/ttl-live-proto",
     "crates/ttl-live-events",
@@ -20,6 +21,7 @@ default-members = [
     "crates/ttl-sign-lab",
     "crates/ttl-sign-native",
     "crates/ttl-fixture-hygiene",
+    "crates/ttl-live-discovery",
     "crates/ttl-live-ws",
     "crates/ttl-live-proto",
     "crates/ttl-live-events",
@@ -38,6 +40,7 @@ ttl-sign-webview = { path = "crates/ttl-sign-webview" }
 ttl-sign-replay = { path = "crates/ttl-sign-replay" }
 ttl-sign-lab = { path = "crates/ttl-sign-lab" }
 ttl-sign-native = { path = "crates/ttl-sign-native" }
+ttl-live-discovery = { path = "crates/ttl-live-discovery" }
 ttl-live-ws = { path = "crates/ttl-live-ws" }
 ttl-live-proto = { path = "crates/ttl-live-proto" }
 ttl-live-events = { path = "crates/ttl-live-events" }

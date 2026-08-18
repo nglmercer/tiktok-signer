@@ -174,6 +174,16 @@ challenge produces a distinct, testable error rather than a timeout.
 tree. The existing dependency-tree gate from [08](08-headless-migration.md) already enforces this
 shape.
 
+**Status: option 1 implemented.** `ttl-live-discovery` performs the unsigned `unique_id` →
+`room_id` lookup natively, sharing [`ttl_sign_core::room`] with the WebView path so the two cannot
+disagree about what "live" means. The crate states the boundary as data — `requirement()` maps each
+discovery operation to `None`, `Signature`, or `Renderer` — so "signing progress does not make
+`live_channels` native" is a test rather than a paragraph. CI asserts the crate's dependency tree
+contains no `wry`.
+
+Options 2 and 3 remain open. Nothing in the browser-free path needs them: a caller that knows which
+creator it wants is fully served today.
+
 ### Phase 5 — Track B: native VM interpreter
 
 With Phase 1's handler set and Phase 0's environment surface in hand, implement the reachable

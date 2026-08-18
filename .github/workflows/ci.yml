@@ -19,6 +19,10 @@ jobs:
             echo 'default sign-server unexpectedly depends on Wry'
             exit 1
           fi
+          if cargo tree -p ttl-live-discovery | grep -q 'wry v'; then
+            echo 'native discovery unexpectedly depends on Wry'
+            exit 1
+          fi
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test

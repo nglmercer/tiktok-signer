@@ -23,6 +23,15 @@ use std::collections::BTreeMap;
 const ROOM_STATUS_LIVE: i64 = 2;
 const EMPTY_ROOM_ID: &str = "0";
 
+/// Does this room id refer to an actual room?
+///
+/// The lookup endpoint reports an absent room as an empty string or the literal `0` rather than
+/// by omitting the field. Both mean "no room", and callers that check only for emptiness sign a
+/// request for room `0`.
+pub fn is_usable_room_id(room_id: &str) -> bool {
+    !room_id.is_empty() && room_id != EMPTY_ROOM_ID
+}
+
 /// Is this the `status` of a room that is broadcasting right now?
 ///
 /// Deliberately an allowlist: an unrecognised status means "not known to be live", which
@@ -71,7 +80,7 @@ impl RoomLookup {
     /// an offline room returns a protobuf without `push_server`, indistinguishable from a
     /// rejection.
     pub fn is_live(&self) -> bool {
-        is_live_status(self.status) && !self.room_id.is_empty() && self.room_id != EMPTY_ROOM_ID
+        is_live_status(self.status) && is_usable_room_id(&self.room_id)
     }
 
     /// Parse the response from [`room_lookup_url`].

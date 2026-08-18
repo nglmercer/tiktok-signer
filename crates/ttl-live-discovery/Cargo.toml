@@ -1,0 +1,17 @@
+[package]
+name = "ttl-live-discovery"
+description = "Native, browser-free discovery for the unsigned TikTok LIVE endpoints."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+ttl-sign-core = { workspace = true }
+
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
