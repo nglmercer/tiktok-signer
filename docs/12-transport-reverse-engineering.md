@@ -44,8 +44,11 @@ Every signing route has been tried against `/webcast/im/fetch/`, with an authent
 | public `frontierSign` X-Bogus | 200, empty body |
 | any of the above, `room_id=1` (nonexistent) | identical |
 
-The XHR route adds the same four parameters as the fetch route and no extra headers, so
-fetch-versus-XHR is not the difference. Feeding back the `msToken` the service issues on rejection
+The XHR route adds the same four parameters as the fetch route and — confirmed directly, by pointing
+the hooked XHR at a dead local port and reading back what it set — **no headers of its own at all**.
+So a browser's `im/fetch` request differs from ours in the query and the four signature values, and
+in nothing else; there is no header we are failing to send. fetch-versus-XHR is not the difference
+either. Feeding back the `msToken` the service issues on rejection
 (a real 124-byte token, confirmed non-empty in the signed query) does not change it.
 
 ## What the length work established, and what it was worth
