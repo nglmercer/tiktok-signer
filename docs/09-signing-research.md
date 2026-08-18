@@ -266,7 +266,12 @@ algorithm from output-length coincidences is explicitly disallowed.
    shapes, then against an authorized oracle value held outside the repository.
 
 Only opcode semantics reachable from a confirmed route are to be implemented, and an unsupported
-handler must fail explicitly rather than approximate. Until an L2 result exists for at least one
+handler must fail explicitly rather than approximate.
+
+Note that recovering a deterministic function is only one of three routes to a browser-free build,
+and it is the hardest; [11](11-webview-removal.md) lays out the alternatives and argues for
+executing the bundle in an embedded JS engine first. The blockers above remain correct for the
+native-interpreter track. Until an L2 result exists for at least one
 route, the native backend remains `UnsupportedAlgorithm` and must not be presented as
 live-compatible.
 
