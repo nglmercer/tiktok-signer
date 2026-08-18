@@ -299,8 +299,10 @@ and `/webcast/gift/list/` were accepted by the live service on 2026-08-18, retur
 and the same 673-gift table the WebView run reported. Signing is no longer what blocks a
 browser-free build; see [11](11-webview-removal.md) for the measured comparison.
 
-`/webcast/im/fetch/` still answers 403 under the same signature and a full guest identity, so the
-remaining problem is transport bootstrap rather than signature generation.
+`/webcast/im/fetch/` answers 403 under that suffix — but **200 under the public `frontierSign`
+product**. The two signing products are per-route rather than interchangeable, and the transport
+endpoint wants the public one. One guest run returned a full protobuf with a `wss://` push_server;
+most return an empty 200. See [11](11-webview-removal.md) for the measured table.
 
 **Exact next blocker, in order:**
 

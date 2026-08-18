@@ -250,13 +250,38 @@ room on 2026-08-18:
 | `msToken` | page state | `im/fetch` 403 response | **issues a 124-byte token** |
 | `/webcast/room/info/` | page-signed | headless-signed | **200, `status_code=0`**, live viewer counts |
 | `/webcast/gift/list/` | page-signed | headless-signed | **200, 673 gifts** — identical to the WebView run |
-| `/webcast/im/fetch/` | not used (page relays its own socket) | headless-signed | **403**, with full identity |
+| `/webcast/im/fetch/` | not used (page relays its own socket) | headless-signed | **403** under the patched suffix; **200** under `frontierSign` — payload intermittent |
 | event stream | page WebSocket relay | — | blocked on the above |
 
 **This is L5 for the signed REST endpoints.** A native, browser-free, headlessly-signed request was
 accepted by the live service and returned real room data. Signing is no longer the obstacle.
 
-### The remaining obstacle is not signing
+### The two signing products are per-route, and this route needs the other one
+
+The patched-fetch suffix is not universally correct. Measured on 2026-08-18:
+
+| Endpoint | patched-fetch suffix | `frontierSign` X-Bogus |
+|---|---|---|
+| `/webcast/room/info/` | **200** with data | — |
+| `/webcast/gift/list/` | **200** with data | — |
+| `/webcast/im/fetch/` | **403** | **200** |
+| `/webcast/room/enter/` | **403** | **403** |
+| `/webcast/room/ping/audience/` | 200 | 200, `"User doesn't login"` |
+
+This corrects a working assumption in [09](09-signing-research.md): the two products are not two
+routes to the same signature, and the transport endpoint wants the *public* one. Sending the wrong
+product produces a 403 that is indistinguishable from a broken signer, which is why this went
+unnoticed while the suffix was assumed to be the transport signature.
+
+One guest run returned a complete 56,724-byte protobuf from `im/fetch` **including a `wss://`
+push_server** — a usable transport bootstrap obtained with no browser. Roughly a dozen subsequent
+runs returned an empty 200. So the payload is reachable headlessly but not yet on demand, and two
+explanations remain open: rate limiting (the success came before the endpoint had been hit
+repeatedly from one address) or session gating (`room/enter` 403s under both products and
+`room/ping` reports `"User doesn't login"`). `scripts/headless/im-fetch-probe.mjs` reproduces the
+comparison.
+
+### What is settled, and what is not
 
 `room/info` and `gift/list` succeed with the same signature machinery that `im/fetch` rejects, so
 the signature is demonstrably valid. `im/fetch` returns 403 even holding `ttwid`, `tt_csrf_token`,

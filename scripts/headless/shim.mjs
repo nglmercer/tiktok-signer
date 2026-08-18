@@ -95,7 +95,26 @@ const accesses = new Map();
     CustomEvent: function (t) { return { type: t }; },
     Blob: function () { return {}; },
     FormData: function () { return { append() {} }; },
-    Headers: function () { return { append() {}, get: () => null, set() {} }; },
+    // A working Headers implementation. A stub that discarded writes would silently drop any
+    // header the SDK adds to a signed request, which is indistinguishable from the SDK adding
+    // none — and header names are part of what a shim has to reproduce.
+    Headers: function (init) {
+      const map = new Map();
+      const norm = (k) => String(k).toLowerCase();
+      const self = {
+        append(k, v) { const n = norm(k); map.set(n, map.has(n) ? `${map.get(n)}, ${v}` : String(v)); },
+        set(k, v) { map.set(norm(k), String(v)); },
+        get(k) { const n = norm(k); return map.has(n) ? map.get(n) : null; },
+        has(k) { return map.has(norm(k)); },
+        delete(k) { map.delete(norm(k)); },
+        forEach(fn) { map.forEach((v, k) => fn(v, k, self)); },
+        keys: () => map.keys(), values: () => map.values(), entries: () => map.entries(),
+        [Symbol.iterator]: () => map.entries(),
+      };
+      if (init) for (const [k, v] of (typeof init.forEach === 'function' && !Array.isArray(init)
+        ? [...init] : Object.entries(init))) self.set(k, v);
+      return self;
+    },
     Response: function (b, i) { return { ok: true, status: (i && i.status) || 200,
       text: async () => String(b || ''), json: async () => ({}) }; },
     Request: function (u) { return { url: String(u) }; },
