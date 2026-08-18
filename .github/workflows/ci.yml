@@ -23,6 +23,10 @@ jobs:
             echo 'native discovery unexpectedly depends on Wry'
             exit 1
           fi
+          if cargo tree -p ttl-sign-server --no-default-features --features headless | grep -q 'wry v'; then
+            echo 'headless sign server unexpectedly depends on Wry'
+            exit 1
+          fi
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test

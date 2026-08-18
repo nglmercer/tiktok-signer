@@ -21,7 +21,8 @@ received room-entry, heartbeat, and `msg` frames without Euler and without calli
 | `ttl-sign-native` | Deterministic staged native pipeline with an isolated signing-algorithm boundary. |
 | `ttl-sign-lab` | Safe structured observations and classified backend differential reports. |
 | `ttl-sign-webview` | Wry engine, JS bridge, session bootstrap, navigation, and page-WebSocket relay. |
-| `ttl-live-discovery` | Browser-free client for the unsigned discovery endpoints, with the native/signed/renderer boundary stated explicitly. |
+| `ttl-live-discovery` | Browser-free discovery: unsigned room lookup, plus signed `room/info` and `gift/list` through a `UrlSigner`. |
+| `ttl-sign-headless` | Browser-free `SignerBackend`: signs the transport through an external signer process. |
 | `ttl-live-ws` | WebSocket client with heartbeat, acknowledgements, and typed rejection handling. |
 | `ttl-sign-server` | `GET /webcast/fetch`, `GET /webcast/rooms/{room_id}/connect` (Node client), and `GET /healthz`. |
 

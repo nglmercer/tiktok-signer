@@ -16,7 +16,7 @@ it does not mean the native signer is live-compatible.
 | Oracle/native comparisons are automated | Infrastructure complete | `DifferentialRunner` accepts any two `SignerBackend` implementations and classifies differences; `ttl-sign-oracle-replay` supplies the explicit live-oracle command. A controlled live corpus and compatible native algorithm are still missing. |
 | Discovered behavior has regression tests | Partial | Query encoding/mutation, URI reconstruction, transport protobuf, preset consistency, event goldens, replay cases, trace stability, entropy-aware comparison, and the first sanitized SDK/VM profile are covered. A broad authorized oracle corpus is still missing. |
 | Browser dependencies are optional | Complete for normal build/test/server library | Default members and replay server contain no Wry edge; the live server explicitly enables `webview`. |
-| Production can operate headlessly | Not complete | The replay server operates headlessly but is non-live. The native algorithm has not converged to live-compatible signing. |
+| Production can operate headlessly | Complete for the transport path | `ttl-sign-headless` implements `SignerBackend` with no browser, and `ttl-sign-server --features headless` runs live with no `wry` in its dependency tree. Signing runs through an external signer process; an account session is required because `/webcast/im/fetch/` refuses guests. Behaviour matches the WebView case for case, including `EmptyBody` on the same rooms at the same time. |
 
 ## Reproducible gates
 

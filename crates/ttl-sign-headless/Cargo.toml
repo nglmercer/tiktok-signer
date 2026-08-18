@@ -1,0 +1,17 @@
+[package]
+name = "ttl-sign-headless"
+description = "Browser-free SignerBackend: signs the transport with an external signer process."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+ttl-sign-core = { workspace = true }
+ttl-live-discovery = { workspace = true }
+
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

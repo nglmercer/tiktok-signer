@@ -231,10 +231,31 @@ corpus; unsupported opcodes fail explicitly.
 
 ### Phase 6 — Decommission
 
-The WebView becomes research-only: the reference oracle in `ttl-sign-lab`, not a production
-backend. Flip the server default, keep `--features webview` for oracle work, and update
-[08](08-headless-migration.md)'s "Production can operate headlessly" row to Complete with the L5
-evidence that justifies it.
+**Done for the production path.** `ttl-sign-headless` implements `SignerBackend` with no browser:
+it builds the transport query with `ttl_sign_core::params`, has a `UrlSigner` sign it, and decodes
+the response into the same `SignedFetch` every other backend returns. The sign server, the
+connector, and the contract tests are unchanged.
+
+```sh
+cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless
+```
+
+CI asserts that binary's dependency tree contains no `wry`.
+
+The WebView is now **research-only**, and deliberately not deleted. It is the reference oracle the
+whole method depends on: the parity checks in this document — including the one that proved an
+empty transport response is upstream rather than a defect — are only possible because a known-good
+signer is available to compare against. `ttl-sign-lab`'s oracle binaries still require
+`--features webview`.
+
+Two limits on the production path, both properties of the endpoint rather than of the signer:
+
+- **An account session is required.** `/webcast/im/fetch/` answers a guest with an empty 200. The
+  server refuses to start without a session rather than serving requests that would all come back
+  empty.
+- **Empty responses happen**, and the WebView sees them on the same rooms at the same moments.
+  Verified again while writing this: room `7675358679254649620` returned `EmptyBody` from both the
+  headless server and `fetch-dump` within a minute of each other.
 
 ## Verified against the live service
 

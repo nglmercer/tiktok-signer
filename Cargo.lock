@@ -3344,6 +3344,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ttl-sign-headless"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "tokio",
+ "tracing",
+ "ttl-live-discovery",
+ "ttl-sign-core",
+]
+
+[[package]]
 name = "ttl-sign-lab"
 version = "0.1.0"
 dependencies = [
@@ -3391,7 +3402,9 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+ "ttl-live-discovery",
  "ttl-sign-core",
+ "ttl-sign-headless",
  "ttl-sign-native",
  "ttl-sign-replay",
  "ttl-sign-webview",
