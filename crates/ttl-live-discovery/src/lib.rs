@@ -618,8 +618,7 @@ impl UrlSigner for CommandSigner {
             let signed = stdout
                 .lines()
                 .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .next_back()
+                .rfind(|line| !line.is_empty())
                 .unwrap_or_default()
                 .to_string();
             // `http` for the request signers, `ws` for the socket one.
@@ -774,7 +773,7 @@ impl DiscoveryClient {
     pub async fn live_channels(&self, keyword: &str) -> Result<Vec<LiveRoom>, DiscoveryError> {
         let body = self.read(&live_search_url(keyword, 0)).await?;
         let mut rooms = interpret_live_search(&body)?;
-        rooms.sort_by(|a, b| b.viewers.cmp(&a.viewers));
+        rooms.sort_by_key(|room| std::cmp::Reverse(room.viewers));
         Ok(rooms)
     }
 
