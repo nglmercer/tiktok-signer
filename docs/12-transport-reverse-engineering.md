@@ -142,6 +142,7 @@ Removing parameters one at a time locates it exactly:
 | `X-Dynosaur` + `X-Bogus` | **403** |
 | `X-Gnarly` + `X-Bogus` | **403** |
 | full suffix, with or without a real `X-Bogus` | **403** |
+| full suffix with `notice=CUSTOM_SIGN_SERVER` removed | **403** |
 
 **Either computed signature present flips an empty 200 into a 403.** The service verifies
 `X-Dynosaur` and `X-Gnarly` and rejects ours. An absent signature is merely unauthenticated —

@@ -215,15 +215,20 @@ async fn main() {
         SignOutcome::Rejected(RejectReason::EmptyBody) => {
             println!("      rejected: empty body (silent rejection)");
             println!();
-            println!("      This is not a retry situation and not a property of this room: the");
-            println!("      endpoint answers an empty 200 for any input from this client — even a");
-            println!("      nonexistent room id — so it is not evaluating the request at all.");
-            println!("      `ttl_sign_core::ws_uri` has recorded the same behaviour since");
-            println!("      2026-08-10, before any of the headless work.");
+            println!("      Why: the service verifies the two computed signatures and rejects");
+            println!("      ours. Sending only X-Bogus gets an empty 200; adding either X-Gnarly");
+            println!("      or X-Dynosaur turns that into a 403. An absent signature is merely");
+            println!("      unauthenticated, a wrong one is refused — and this backend sends the");
+            println!("      X-Bogus-only form, hence the empty body rather than the 403.");
             println!();
-            println!("      It is not the signature either. The signing input now matches the");
-            println!("      oracle exactly — X-Gnarly is 332 bytes, the recorded value — which is");
-            println!("      checkable without a browser or a network:");
+            println!("      Already ruled out, so do not spend time on them: identity (a request");
+            println!("      with no cookies at all is refused the same as an authenticated one),");
+            println!("      fetch versus XMLHttpRequest, browser client hints, msToken freshness,");
+            println!("      the sup_ws_ds_opt value, and the room itself.");
+            println!();
+            println!("      Also not the signature *shape*: the signing input matches the oracle");
+            println!("      exactly — X-Gnarly is 332 bytes, the recorded value — checkable with");
+            println!("      no browser and no network:");
             println!();
             println!(
                 "        TTL_URL=\"$(cargo run -q -p ttl-sign-core --example print-fetch-url \\"
@@ -231,10 +236,8 @@ async fn main() {
             println!("          -- {})\" \\", lookup.room_id);
             println!("          node scripts/headless/canonical-input.mjs /tmp/webmssdk.js 124");
             println!();
-            println!("      The open suspects are identity, not signing: how `ttwid` was issued,");
-            println!("      whether `device_id` must be bound to it, and whether this account or");
-            println!("      address is refused on this endpoint. See docs/12 for the evidence and");
-            println!("      what has already been ruled out.");
+            println!("      What remains is the signature *value*, which needs one known-good");
+            println!("      signed request to differential against. See docs/12.");
             println!();
             println!("      `--ws-uri <wss://…>` accepts a push_server URI from any source and");
             println!("      runs the rest of this check against it.");
