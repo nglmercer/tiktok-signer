@@ -400,6 +400,86 @@
         "X-Gnarly": 332
       },
       "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "8a7610a7fb22",
+      "shim": "9957f0e3",
+      "variant": "baseline",
+      "what": "the current signer, unchanged — the reference row",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 392,
+        "msToken": 0,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "8a7610a7fb22",
+      "shim": "9957f0e3",
+      "variant": "baseline",
+      "what": "the current signer, unchanged — the reference row",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 392,
+        "msToken": 0,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "8a7610a7fb22",
+      "shim": "9957f0e3",
+      "variant": "baseline",
+      "what": "the current signer, unchanged — the reference row",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 392,
+        "msToken": 0,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "8a7610a7fb22",
+      "shim": "9957f0e3",
+      "variant": "baseline",
+      "what": "the current signer, unchanged — the reference row",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 392,
+        "msToken": 0,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "8a7610a7fb22",
+      "shim": "9957f0e3",
+      "variant": "baseline",
+      "what": "the current signer, unchanged — the reference row",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 392,
+        "msToken": 0,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
     }
   ]
 }

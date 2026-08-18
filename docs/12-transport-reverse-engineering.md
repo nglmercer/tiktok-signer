@@ -94,6 +94,11 @@ a signed request — it did once — but nothing about the request explains when
 reproducible from here. The row is in `fixtures/research/bisect-ledger.json` rather than in a memory,
 which is the point of the ledger.
 
+Sampled again the same day, five consecutive `baseline` attempts against a live room: **5 × 403**,
+identical signature lengths each time. So the acceptance rate is one in eight-plus, not one in two,
+and nothing in the request distinguishes the accepted attempt from the refused ones. It is recorded
+rather than explained.
+
 It changes nothing operationally: the direct socket does not need that response.
 
 Everything below is the record of the search that preceded this, kept because its measurements stand

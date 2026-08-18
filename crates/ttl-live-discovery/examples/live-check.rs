@@ -19,15 +19,18 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use ttl_live_events::{decode_batch, LiveEvent};
-use ttl_live_ws::{ConnectConfig, LiveConnection};
+use ttl_live_ws::{ConnectConfig, ReconnectPolicy, ReconnectingConnection};
 
-use ttl_live_discovery::{CommandSigner, DiscoveryClient, DiscoveryError, SigningProduct, UrlSigner};
+use ttl_live_discovery::{CommandSigner, DiscoveryClient, DiscoveryError};
 use ttl_sign_core::{
-    CookieJar, DevicePreset, DirectSocketParams, LocationPreset, Preset, ScreenPreset,
+    CookieJar, DevicePreset, LocationPreset, Preset, ScreenPreset, DIRECT_SOCKET_HOST as SOCKET_HOST,
+    WS_REUSE_PATH,
 };
+use ttl_sign_headless::{HeadlessBackend, HeadlessConfig, TRANSPORT_PRODUCT};
 
 fn session() -> CookieJar {
     let path = std::env::var_os("TTL_SESSION_FILE")
@@ -159,47 +162,42 @@ async fn main() {
         println!("      immediate 1006, before a frame is exchanged. Store a session and re-run.");
         return;
     }
-    let mut params = DirectSocketParams::new(&lookup.room_id);
-    if let Some(webid) = jar.get("tt_webid_v2").filter(|value| !value.is_empty()) {
-        // The device id in the query is the page's own webid when it has one.
-        params.device_id = webid.to_string();
-    }
-    let unsigned = params.url(&preset);
-    let socket_signer = CommandSigner::node(script, bundle)
-        .with_product(SigningProduct::WsDirect)
+    // Through the same backend the sign server uses, so this example exercises the production path
+    // rather than a parallel copy of it. It builds the socket URL, has it signed, and describes it.
+    let signer = CommandSigner::node(script, bundle)
+        .with_product(TRANSPORT_PRODUCT)
         .with_user_agent(preset.user_agent())
         .with_cookie(jar.to_cookie_string());
-    let signed_uri = match socket_signer.sign(&unsigned).await {
-        Ok(uri) => uri,
+    let backend = match HeadlessBackend::new(
+        HeadlessConfig::new(preset.clone(), jar.clone()),
+        Box::new(signer),
+    ) {
+        Ok(backend) => backend,
         Err(error) => {
-            eprintln!("\nFAILED: could not sign the socket URL: {error}");
+            eprintln!("\nFAILED: could not build the signing backend: {error}");
             std::process::exit(1);
         }
     };
-    println!(
-        "      {} query parameters, signed with registerWsSigner",
-        params.build(&preset).len()
-    );
 
-    listen(
-        LiveConnection::open_uri(
-            &signed_uri,
-            &jar,
-            &preset.user_agent(),
-            "",
-            &ConnectConfig::default(),
-        )
-        .await,
+    // A reconnecting stream, because a signature ages out and a room can restart its push server.
+    // Five attempts with a doubling backoff; a refusal is reported rather than retried.
+    let opened = ReconnectingConnection::open(
+        Arc::new(backend),
+        &lookup.room_id,
+        ConnectConfig::default(),
+        ReconnectPolicy::default(),
     )
     .await;
+    listen(opened).await;
 }
 
-/// Connect, decode [`LISTEN_SECONDS`] of events, and report what arrived.
-///
-/// Shared by both transport routes: the signed `im/fetch` result and a URI captured from a
-/// browser. Once a `FetchResult` exists, nothing downstream cares where it came from.
-async fn listen(opened: Result<LiveConnection, ttl_live_ws::WsError>) {
-    println!("\n[5/5] listening for {LISTEN_SECONDS}s of live events…");
+/// Decode [`LISTEN_SECONDS`] of events, and report what arrived.
+async fn listen(opened: Result<ReconnectingConnection, ttl_live_ws::StreamError>) {
+    let seconds = std::env::var("TTL_LISTEN_SECONDS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(LISTEN_SECONDS);
+    println!("\n[5/5] listening for {seconds}s of live events…");
     let mut connection = match opened {
         Ok(connection) => connection,
         Err(error) => {
@@ -207,12 +205,9 @@ async fn listen(opened: Result<LiveConnection, ttl_live_ws::WsError>) {
             std::process::exit(1);
         }
     };
-    println!(
-        "      connected to {}",
-        connection.uri().split('?').next().unwrap_or_default()
-    );
+    println!("      connected to {SOCKET_HOST}{WS_REUSE_PATH}");
 
-    let deadline = tokio::time::sleep(Duration::from_secs(LISTEN_SECONDS));
+    let deadline = tokio::time::sleep(Duration::from_secs(seconds));
     tokio::pin!(deadline);
     let mut frames = 0usize;
     let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
@@ -250,9 +245,13 @@ async fn listen(opened: Result<LiveConnection, ttl_live_ws::WsError>) {
             },
         }
     }
+    let reconnects = connection.reconnects();
     connection.close().await;
 
     println!("      {frames} frames decoded");
+    if reconnects > 0 {
+        println!("      {reconnects} reconnect(s) along the way");
+    }
     if counts.is_empty() {
         println!("      no events in this window — a quiet room still proves the transport");
     } else {
@@ -266,6 +265,8 @@ async fn listen(opened: Result<LiveConnection, ttl_live_ws::WsError>) {
 }
 
 /// Listening window. Long enough for a busy room to produce chat, short enough to stay a check.
+/// Default listening window. `TTL_LISTEN_SECONDS` overrides it, which is how a soak run long
+/// enough to see the stream reconnect is driven.
 const LISTEN_SECONDS: u64 = 5;
 
 /// Event label plus a short human-readable sample, for the few kinds worth showing.

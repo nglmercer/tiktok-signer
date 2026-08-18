@@ -30,7 +30,7 @@ empty body and it no longer matters — nothing depends on its answer. See
 | `ttl-sign-lab` | Safe structured observations and classified backend differential reports. |
 | `ttl-live-discovery` | Browser-free discovery, entirely unsigned: room lookup, `room/info`, `gift/list`, and live channels. |
 | `ttl-sign-headless` | Browser-free `SignerBackend`: signs the transport through an external signer process. |
-| `ttl-live-ws` | WebSocket client with heartbeat, acknowledgements, and typed rejection handling. |
+| `ttl-live-ws` | WebSocket client with heartbeat, acknowledgements, typed rejection handling, and a reconnecting stream that re-signs each attempt. |
 | `ttl-sign-server` | `GET /webcast/fetch`, `GET /webcast/rooms/{room_id}/connect` (Node client), and `GET /healthz`. |
 
 Default tests are offline and deterministic. Run the offline server with:
@@ -324,10 +324,15 @@ Three claims in [docs/12](docs/12-transport-reverse-engineering.md) were withdra
 all. The transport request was believed to need a signature; the page's allowlist excludes that path.
 And the signature was believed to be wrong in its value; `room/enter` verifies one and accepts ours.
 
-Everything downstream is built and tested: `ttl-live-ws` connects,
-heartbeats, and acknowledges, `sanitize_uri` escapes the raw spaces a browser emits in
-`browser_version` (which no Rust HTTP client will parse) without disturbing the signature, and
-`ttl-live-events` decodes the frames.
+Everything downstream is built and tested: `ttl-live-ws` connects, heartbeats, and acknowledges,
+`sanitize_uri` escapes the raw spaces the player emits in `browser_version` (which no Rust HTTP
+client will parse) without disturbing the signature, and `ttl-live-events` decodes the frames.
+
+A socket signature ages out, so `ReconnectingConnection` owns what happens on a close: it re-signs
+and reopens, five attempts by default with a doubling backoff, and reports a refusal rather than
+retrying it — a rejection is a verdict about the request, and a retry loop around one looks like a
+network problem while being a signing one. `live-check` runs on it; `TTL_LISTEN_SECONDS` makes the
+window long enough to watch it work.
 
 ### Discovery is guest-only-friendly; the socket is not
 

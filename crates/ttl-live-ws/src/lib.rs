@@ -13,9 +13,9 @@
 //!
 //! Two things this crate deliberately **does not** do:
 //!
-//! - **It does not reconnect.** The signature ages out, so a reconnect means re-signing the URI.
-//!   That is cheap on the direct path — build, sign, `open_uri` again — but the orchestrator owns
-//!   the policy, and it is the one that sees the close reason.
+//! - **[`LiveConnection`] does not reconnect.** The signature ages out, so a reconnect means
+//!   re-signing the URI. [`ReconnectingConnection`] is that policy, made once, over any
+//!   `SignerBackend`; this type stays a single socket that reports its close reason and stops.
 //! - **It does not parse events.** It returns decompressed `msg` payloads; event schemas
 //!   belong to the consumer.
 //!
@@ -23,6 +23,9 @@
 //! why [`WsError::EmptyCookies`] is checked before anything is sent.
 
 use std::time::Duration;
+
+pub mod reconnect;
+pub use reconnect::{ReconnectPolicy, ReconnectingConnection, StreamError};
 
 use flate2::read::GzDecoder;
 use futures_util::{SinkExt, StreamExt};
