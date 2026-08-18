@@ -1,6 +1,14 @@
 /target
+/spikes/*/target
+/spikes/*/Cargo.lock
+# Generated from shim.mjs by scripts/headless/tools/build-bootstrap.mjs.
+/spikes/*/bootstrap.js
 /fuzz/Cargo.lock
 /fuzz/target
+/spikes/*/target
+/spikes/*/Cargo.lock
+# Generated from shim.mjs by scripts/headless/tools/build-bootstrap.mjs.
+/spikes/*/bootstrap.js
 **/node_modules
 # fixtures and NOTES.md.
 /fixtures/*

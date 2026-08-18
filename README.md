@@ -400,6 +400,7 @@ variables, and sessions in production.
 | [10 — Authorized API feasibility](docs/10-authorized-api-feasibility.md) | Whether the official APIs can do this instead |
 | [11 — WebView removal](docs/11-webview-removal.md) | What the browser did, what replaced it, and what was lost |
 | [12 — Transport reverse engineering](docs/12-transport-reverse-engineering.md) | **How the socket is built and signed**, and the search that preceded it |
+| [13 — Embedded runtime](docs/13-embedded-runtime.md) | Which JS engine can run the signer in-process, measured |
 
 ## Summary
 

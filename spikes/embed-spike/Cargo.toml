@@ -1,0 +1,25 @@
+# Throwaway: measures three engines against one acceptance test. Not a workspace member, and
+# nothing here is meant to be merged — the result is a table, not code.
+[package]
+name = "embed-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Detached from the workspace on purpose: these dependencies are heavy and must not enter the
+# lockfile of anything that ships.
+[workspace]
+
+[features]
+quickjs = ["dep:rquickjs"]
+boa = ["dep:boa_engine"]
+deno = ["dep:deno_core"]
+
+[dependencies]
+rquickjs = { version = "0.12", optional = true }
+boa_engine = { version = "0.21", optional = true }
+deno_core = { version = "0.410", optional = true }
+
+[[bin]]
+name = "embed-spike"
+path = "main.rs"
