@@ -1,90 +1,73 @@
 // Synthetic browser shim for webmssdk, with per-path access recording.
 // No browser, no network: every global the bundle resolves comes from here.
 
-import nodeCrypto from 'node:crypto';
-import zlib from 'node:zlib';
+import { CANVAS_DATA_URL, CANVAS_HEIGHT, CANVAS_WIDTH, inkAt, measureTextWidth }
+  from './lib/canvas.mjs';
 
-// --- the canvas fingerprint -------------------------------------------------------------------
+// --- what this shim needs from its host -----------------------------------------------------------
 //
-// The SDK reads `toDataURL` and folds it into the signature: it reaches `X-Gnarly` from byte 2 and
-// moves 249 of its 332 bytes (`scripts/headless/byte-map.mjs`). It is the largest single
-// contribution after the clock, which makes its content worth getting right.
+// Everything below runs unchanged in Node, Deno, a browser, and an embedded engine. That is
+// deliberate: the signer is meant to move into a Rust process with QuickJS or Boa inside it, and a
+// sandbox that reaches for `node:zlib` cannot go there. So the two things a bare engine does not
+// have are named here and nowhere else:
 //
-// This used to return a 20-byte string — a PNG signature followed by a truncated IHDR, undecodable
-// as an image and impossible for any real canvas to produce. Build a valid one instead: a real
-// 300×150 RGBA PNG with drawn structure on it, deterministic so differentials stay comparable, and
-// ~1.5 KB in base64, which is the order a browser's fingerprint canvas actually yields.
+//   - randomness, injected as `TTL_RANDOM_SOURCE` or taken from the engine's own `crypto`
+//   - base64, implemented below in plain JavaScript rather than through `Buffer`
 //
-// Deterministic, not random: two runs must agree, or every differential in this directory breaks.
+// The canvas fingerprint used to need a third — DEFLATE, to build its PNG — and is now a generated
+// constant in `lib/canvas.mjs`. The engine contract that remains is in `scripts/headless/README.md`.
 
-const CANVAS_WIDTH = 300;
-const CANVAS_HEIGHT = 150;
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
-const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
-  let c = n;
-  for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
-  return c >>> 0;
-});
-
-function crc32(buffer) {
-  let c = 0xFFFFFFFF;
-  for (const byte of buffer) c = CRC_TABLE[(c ^ byte) & 255] ^ (c >>> 8);
-  return (c ^ 0xFFFFFFFF) >>> 0;
-}
-
-function pngChunk(type, data) {
-  const length = Buffer.alloc(4);
-  length.writeUInt32BE(data.length);
-  const tag = Buffer.from(type, 'ascii');
-  const checksum = Buffer.alloc(4);
-  checksum.writeUInt32BE(crc32(Buffer.concat([tag, data])));
-  return Buffer.concat([length, tag, data, checksum]);
-}
-
-/// The pixel a fingerprint canvas has at (x, y). Structured rather than uniform, so the image
-/// carries detail the way drawn text does.
-function inkAt(x, y) {
-  return (x * 7 + y * 13) % 97 < 11;
-}
-
-function fingerprintDataUrl() {
-  const stride = CANVAS_WIDTH * 4 + 1;
-  const raw = Buffer.alloc(stride * CANVAS_HEIGHT);
-  for (let y = 0; y < CANVAS_HEIGHT; y += 1) {
-    const row = y * stride;
-    raw[row] = 0; // filter: none
-    for (let x = 0; x < CANVAS_WIDTH; x += 1) {
-      const at = row + 1 + x * 4;
-      const ink = inkAt(x, y);
-      raw[at] = ink ? 34 : 250;
-      raw[at + 1] = ink ? 102 : 250;
-      raw[at + 2] = ink ? 170 : 250;
-      raw[at + 3] = 255;
-    }
+/// `btoa`: binary string in, base64 out. No `Buffer`, so it runs anywhere.
+function encodeBase64(input) {
+  const text = String(input);
+  let out = '';
+  for (let at = 0; at < text.length; at += 3) {
+    const a = text.charCodeAt(at) & 255;
+    const hasB = at + 1 < text.length;
+    const hasC = at + 2 < text.length;
+    const b = hasB ? text.charCodeAt(at + 1) & 255 : 0;
+    const c = hasC ? text.charCodeAt(at + 2) & 255 : 0;
+    out += BASE64_ALPHABET[a >> 2];
+    out += BASE64_ALPHABET[((a & 3) << 4) | (b >> 4)];
+    out += hasB ? BASE64_ALPHABET[((b & 15) << 2) | (c >> 6)] : '=';
+    out += hasC ? BASE64_ALPHABET[c & 63] : '=';
   }
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(CANVAS_WIDTH, 0);
-  ihdr.writeUInt32BE(CANVAS_HEIGHT, 4);
-  ihdr[8] = 8; // bit depth
-  ihdr[9] = 6; // colour type: RGBA
-  const png = Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    pngChunk('IHDR', ihdr),
-    pngChunk('IDAT', zlib.deflateSync(raw, { level: 9 })),
-    pngChunk('IEND', Buffer.alloc(0)),
-  ]);
-  return `data:image/png;base64,${png.toString('base64')}`;
+  return out;
 }
 
-// Built once: the encode is deterministic, and every canvas in every sandbox reports the same one.
-const CANVAS_DATA_URL = fingerprintDataUrl();
+/// `atob`: base64 in, binary string out.
+function decodeBase64(input) {
+  const text = String(input).replace(/[^A-Za-z0-9+/]/g, '');
+  let out = '';
+  for (let at = 0; at < text.length; at += 4) {
+    const chunk = [0, 1, 2, 3].map((offset) => BASE64_ALPHABET.indexOf(text[at + offset] ?? 'A'));
+    const bits = (chunk[0] << 18) | (chunk[1] << 12) | (chunk[2] << 6) | chunk[3];
+    out += String.fromCharCode((bits >> 16) & 255);
+    if (text[at + 2] !== undefined) out += String.fromCharCode((bits >> 8) & 255);
+    if (text[at + 3] !== undefined) out += String.fromCharCode(bits & 255);
+  }
+  return out;
+}
 
-/// Text metrics that depend on the text, the way a real font engine's do. A constant width is
-/// another way of reporting "no canvas".
-function measureTextWidth(text) {
-  let width = 0;
-  for (const character of String(text)) width += ((character.codePointAt(0) % 7) + 4) * 0.5;
-  return width;
+/// A switch the caller sets, from `globalThis.TTL_SHIM_OPTIONS` or from the environment when the
+/// host has one. Read at access time rather than at construction, so a probe can flip it per run.
+function flag(name) {
+  const options = globalThis.TTL_SHIM_OPTIONS;
+  if (options && name in options) return Boolean(options[name]);
+  return Boolean(globalThis.process?.env?.[name]);
+}
+
+/// Where randomness comes from, in order of preference: a host-injected source, then the engine's
+/// own `crypto`. An engine with neither cannot sign — the SDK's entropy is not decoration, and a
+/// counter dressed up as randomness would produce signatures outside the distribution a browser
+/// makes, which is measurable (`X-Dynosaur` came out short when that was tried).
+function hostRandomValues(array) {
+  const injected = globalThis.TTL_RANDOM_SOURCE;
+  if (typeof injected === 'function') return injected(array);
+  if (globalThis.crypto?.getRandomValues) return globalThis.crypto.getRandomValues(array);
+  throw new Error('no random source: set globalThis.TTL_RANDOM_SOURCE or provide crypto');
 }
 
 export function createSandbox() {
@@ -165,7 +148,7 @@ const accesses = new Map();
     width: CANVAS_WIDTH, height: CANVAS_HEIGHT,
     toDataURL: () => CANVAS_DATA_URL,
     getContext: (kind) => {
-      if (process.env.TTL_NO_WEBGL) return null;
+      if (flag('TTL_NO_WEBGL')) return null;
       if (kind === 'webgl' || kind === 'experimental-webgl' || kind === 'webgl2') {
         return webglContext();
       }
@@ -212,11 +195,11 @@ const accesses = new Map();
   // 388/392/444 the oracle recorded, and `X-Gnarly` signs over it, so both were short.
   // TTL_DETERMINISTIC restores the fixed sequence for differential work.
   getRandomValues: (a) => {
-    if (process.env.TTL_DETERMINISTIC) {
+    if (flag('TTL_DETERMINISTIC')) {
       for (let i = 0; i < a.length; i++) a[i] = (i * 7 + 13) & 255;
       return a;
     }
-    return nodeCrypto.getRandomValues(a);
+    return hostRandomValues(a);
   },
     randomUUID: () => '00000000-0000-4000-8000-000000000000',
     subtle: {},
@@ -238,8 +221,8 @@ const accesses = new Map();
     requestAnimationFrame: (cb) => setTimeout(cb, 0), cancelAnimationFrame: clearTimeout,
     fetch: async () => ({ ok: true, status: 200, text: async () => '', json: async () => ({}) }),
     XMLHttpRequest: function () { return { open() {}, send() {}, setRequestHeader() {}, addEventListener() {} }; },
-    atob: (s) => Buffer.from(s, 'base64').toString('binary'),
-    btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
+    atob: decodeBase64,
+    btoa: encodeBase64,
     Image: function () { return {}; }, WebSocket: function () { return {}; },
     PerformanceObserver: function (cb) { return { observe() {}, disconnect() {}, takeRecords: () => [] }; },
     MutationObserver: function (cb) { return { observe() {}, disconnect() {}, takeRecords: () => [] }; },

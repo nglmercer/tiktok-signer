@@ -159,6 +159,32 @@ Note that `/webcast/feed/` — the endpoint the `/live` page itself uses — ans
 empty body for a guest identity, both on `webcast.tiktok.com` and `webcast.us.tiktok.com`, even
 when the issued `x-ms-token` is fed back. The search endpoint is the working route.
 
+## What the sandbox needs from its host
+
+The shim is the browser the bundle thinks it is running in, and it is deliberately portable: it runs
+unchanged in Node, in Deno, in a browser, and — the point of keeping it this way — in an engine
+embedded in a Rust process. The whole contract is:
+
+| Needs | Why |
+|---|---|
+| `Proxy` with a `has` trap, `Reflect`, `Symbol.unscopables` | the sandbox intercepts every global lookup |
+| `new Function` and the `with` statement | how the bundle is evaluated against that sandbox |
+| `TextEncoder` / `TextDecoder`, `URL` / `URLSearchParams` | the bundle reads them directly |
+| `setTimeout`, `queueMicrotask` | the SDK schedules its own work |
+| a random source | `globalThis.TTL_RANDOM_SOURCE`, else the engine's `crypto.getRandomValues` |
+
+That is all. Base64 is implemented in plain JavaScript rather than through `Buffer`, the canvas
+fingerprint is a generated constant rather than a PNG built with `zlib` (`lib/canvas.mjs`, from
+`tools/gen-canvas.mjs`), and the two switches are read through `globalThis.TTL_SHIM_OPTIONS` when
+there is no `process.env`. Nothing in the signing path imports a `node:` module.
+
+Regenerate the canvas after changing `inkAt` — the PNG and `getImageData` are emitted together
+precisely so they cannot disagree:
+
+```sh
+node scripts/headless/tools/gen-canvas.mjs
+```
+
 ## Shared modules
 
 Three files under `lib/`, and everything else imports them rather than re-deriving them:
@@ -169,6 +195,7 @@ Three files under `lib/`, and everything else imports them rather than re-derivi
 | `lib/player.mjs` | the player's transport constants, its query serializer, and the socket frames |
 | `lib/sign.mjs` | signing one URL under a described, reproducible environment |
 | `lib/xhr.mjs` | the real `XMLHttpRequest` the SDK's hooks operate on |
+| `lib/canvas.mjs` | **generated** — the canvas fingerprint as data, from `tools/gen-canvas.mjs` |
 
 The first two exist because the same twenty lines had been copy-pasted into ten probes, which is how
 two of them ended up reading a different session path than the rest. Protobuf field numbers and query
