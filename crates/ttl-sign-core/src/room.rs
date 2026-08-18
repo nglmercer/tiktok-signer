@@ -8,8 +8,9 @@
 //! | Who is live now | **Rendered** DOM from `https://www.tiktok.com/live` | no |
 //!
 //! `/live` does not include the data in HTML; the client renders it. Therefore
-//! [`extract_live_channels`] operates on the WebView DOM, not a raw `GET` that returns only
-//! the shell.
+//! [`extract_live_channels`] operates on a rendered DOM, not a raw `GET` that returns only the
+//! shell. For a browser-free listing use `ttl_live_discovery::DiscoveryClient::live_channels`,
+//! which reads the signed search endpoint instead.
 //!
 //! There is no I/O here: all functions are pure operations over caller-provided text.
 
@@ -22,6 +23,15 @@ use std::collections::BTreeMap;
 /// value — so the same room could be live by one and offline by the other.
 const ROOM_STATUS_LIVE: i64 = 2;
 const EMPTY_ROOM_ID: &str = "0";
+
+/// Does this room id refer to an actual room?
+///
+/// The lookup endpoint reports an absent room as an empty string or the literal `0` rather than
+/// by omitting the field. Both mean "no room", and callers that check only for emptiness sign a
+/// request for room `0`.
+pub fn is_usable_room_id(room_id: &str) -> bool {
+    !room_id.is_empty() && room_id != EMPTY_ROOM_ID
+}
 
 /// Is this the `status` of a room that is broadcasting right now?
 ///
@@ -71,7 +81,7 @@ impl RoomLookup {
     /// an offline room returns a protobuf without `push_server`, indistinguishable from a
     /// rejection.
     pub fn is_live(&self) -> bool {
-        is_live_status(self.status) && !self.room_id.is_empty() && self.room_id != EMPTY_ROOM_ID
+        is_live_status(self.status) && is_usable_room_id(&self.room_id)
     }
 
     /// Parse the response from [`room_lookup_url`].

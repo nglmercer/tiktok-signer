@@ -8,12 +8,11 @@ services:
     environment:
       TTL_BIND: "0.0.0.0:8080"
       TTL_MAX_CONCURRENT: "2"
-      RUST_LOG: "ttl_sign_server=info,ttl_sign_webview=info"
-    # Guests need no session. To use an account instead, log in on a workstation and mount
-    # the resulting file read-only:
-    # volumes:
-    #   - ./session:/home/signer/.config/ttl-signer/session:ro
+      RUST_LOG: "ttl_sign_server=info,ttl_sign_headless=info"
+    # Required, not optional: `/webcast/im/fetch/` answers a guest with an empty body, so the
+    # server refuses to start without an account session. Provide it as a cookie header
+    # (`name=value; ...`) containing at least `sessionid`, exported from a logged-in browser.
+    volumes:
+      - ./session:/home/signer/.config/ttl-signer/session:ro
     restart: unless-stopped
-    # WebKit spawns subprocesses and leaves zombies behind without a real init.
     init: true
-    shm_size: "512m"

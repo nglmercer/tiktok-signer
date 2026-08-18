@@ -24,8 +24,9 @@ contains real session cookies.
 `fetch-dump` captures the response through the WebView with an authenticated session:
 
 ```sh
-cargo run -p ttl-sign-webview --example login
-cargo run -p ttl-sign-webview --example fetch-dump -- <user> fixtures/f0/im_fetch.pb
+# provide ~/.config/ttl-signer/session as a cookie header containing sessionid
+TTL_TRANSPORT_OUT=fixtures/f0/im_fetch.pb \
+  node scripts/headless/transport.mjs /tmp/webmssdk.js <user>
 ```
 
 - **webmssdk version:** `window.byted_acrawler.version` is `undefined) in the current

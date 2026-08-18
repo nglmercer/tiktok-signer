@@ -9,6 +9,14 @@ use ttl_sign_core::{
 use ttl_sign_native::{
     FixedClock, NativeBackend, NativeConfig, SignatureMaterial, StaticAlgorithm,
 };
+
+fn native_preset() -> ttl_sign_core::Preset {
+    ttl_sign_core::Preset::new(
+        ttl_sign_core::DevicePreset::chrome_linux(),
+        ttl_sign_core::LocationPreset::us_east(),
+        ttl_sign_core::ScreenPreset::FHD,
+    )
+}
 use ttl_sign_replay::ReplayBackend;
 
 const ROOM: &str = "7300000000000000001";
@@ -63,11 +71,7 @@ async fn replay_backend_contract() {
 
 #[tokio::test]
 async fn native_backend_contract() {
-    let preset = ttl_sign_core::Preset::new(
-        ttl_sign_core::DevicePreset::chrome_linux(),
-        ttl_sign_core::LocationPreset::us_east(),
-        ttl_sign_core::ScreenPreset::FHD,
-    );
+    let preset = native_preset();
     let material = SignatureMaterial {
         push_server: "wss://fixture.invalid/ws/".into(),
         route_params: vec![("wrss".into(), "fixture-route".into())],
@@ -87,4 +91,27 @@ async fn native_backend_contract() {
         StaticAlgorithm::new().with_response(ROOM, Ok(material)),
     );
     backend_contract(&backend).await;
+}
+
+/// Guard the production boundary: the default (unsupported) native backend must not be
+/// presentable as a live signer. If someone wires `NativeBackend::unsupported` into the
+/// server, every signing request fails explicitly instead of returning a fabricated or
+/// silently-rejected transport.
+#[tokio::test]
+async fn unsupported_native_backend_is_not_live_compatible() {
+    let backend = NativeBackend::unsupported(NativeConfig::new(
+        native_preset(),
+        "7123456789012345678",
+        CookieJar::parse("msToken=fixture-token"),
+        FixedClock(1_700_000_000_000),
+    ));
+
+    let outcome = backend.transport(TransportRequest::new(ROOM)).await;
+    assert!(
+        matches!(
+            outcome,
+            SignOutcome::Transport(SignError::BackendUnavailable(_))
+        ),
+        "unsupported native backend must fail loudly, not sign or reject"
+    );
 }

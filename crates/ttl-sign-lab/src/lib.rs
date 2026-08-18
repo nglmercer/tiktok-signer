@@ -12,16 +12,23 @@ use sha2::{Digest, Sha256};
 use ttl_sign_core::{FetchResult, SignError, SignOutcome, SignerBackend, TransportRequest};
 
 mod capture;
+mod environment_surface;
 mod experiment;
 mod signing_observation;
 mod signing_trace;
-
-#[cfg(feature = "webview")]
-pub mod webview_support;
+mod subgraph;
+mod subgraph_diff;
+mod vm_trace;
 
 pub use capture::{
     capture_experiment_outcome, capture_outcome, write_capture, CaptureBundle, CaptureError,
     ObservationArtifact,
+};
+pub use environment_surface::{
+    build_environment_surface, compare_environment_surfaces, environment_surface_json,
+    missing_shim_coverage, read_environment_surface, AccessOps, EnvironmentSurfaceDocument,
+    EnvironmentSurfaceError, InstrumentationCoverage, PropertyAccess, SurfaceDifference,
+    SurfaceRoot, SurfaceSource, ENVIRONMENT_SURFACE_VERSION,
 };
 pub use experiment::{
     CookieMutation, CookieProbeValue, EnvironmentProfile, ExperimentCase, ExperimentDimension,
@@ -42,8 +49,24 @@ pub use signing_trace::{
     SIGNING_TRACE_VERSION,
 };
 
-#[cfg(feature = "webview")]
-pub use signing_trace::collect_sdk_evidence;
+pub use subgraph::{
+    classify_dependencies, default_routes, extract_subgraphs, read_subgraph_document,
+    subgraph_document_json, ArgumentShape, CallEdge, ControlledObservation, DependencyEvidence,
+    DependencyKind, DependencySource, EnvironmentFlags, HandlerUse, HelperReads, ObservedEffect,
+    Provenance, RegisterOps, RouteDependency, RouteName, RouteSpec, RouteSubgraph, ShapeClass,
+    SigningSubgraphDocument, SubgraphError, SubgraphFrame, SubgraphSource, TracePhase, ValueType,
+    SIGNING_SUBGRAPH_VERSION,
+};
+pub use subgraph_diff::{
+    compare_subgraphs, SubgraphDifference, SubgraphDifferenceKind, SubgraphDifferentialResult,
+};
+pub use vm_trace::{
+    read_vm_trace, TraceProduct, VmCallEntry, VmCallInput, VmCallReturn, VmDecodedStringUse,
+    VmEnvironmentEvidence, VmFetchAssignment, VmFetchMetadata, VmFieldEvent, VmFunctionEntry,
+    VmFunctionStep, VmHelperReads, VmOpcodeCatalogEntry, VmOperandExample, VmOperandValue,
+    VmRegisterEvent, VmResultParameter, VmSdkCallReturn, VmSdkField, VmStep, VmStringReturn,
+    VmTrace, VmTraceError, VmTraceReport, VmTransition, VmValueShape, VM_TRACE_VERSION,
+};
 
 pub const OBSERVATION_VERSION: u32 = 1;
 

@@ -463,6 +463,118 @@ mod tests {
         ));
     }
 
+    /// The default production constructor must fail loudly rather than silently degrade.
+    ///
+    /// A silent degradation would be any of: an `Ok` with fabricated transport, or a
+    /// `Rejected` outcome (which a caller reasonably reads as "the server refused a valid
+    /// request", e.g. room closed). Neither is acceptable while the algorithm is unimplemented:
+    /// the only correct outcome is an explicit backend error.
+    #[tokio::test]
+    async fn unsupported_backend_never_produces_signed_or_rejected_output() {
+        // A spread of room ids: the failure must not depend on the specific input.
+        let rooms = [
+            "7300000000000000001",
+            "7300000000000000002",
+            "7000000000000000000",
+            "7999999999999999999",
+        ];
+        for room in rooms {
+            let outcome = NativeBackend::unsupported(NativeConfig::new(
+                preset(),
+                DEVICE_ID,
+                CookieJar::parse("msToken=fixture-token"),
+                FixedClock(1_700_000_000_000),
+            ))
+            .transport(TransportRequest::new(room))
+            .await;
+
+            match outcome {
+                SignOutcome::Transport(SignError::BackendUnavailable(_)) => {}
+                SignOutcome::Ok(_) => {
+                    panic!("unsupported native backend fabricated a signed transport for {room}")
+                }
+                SignOutcome::Rejected(reason) => panic!(
+                    "unsupported native backend silently degraded to a rejection ({reason:?}) \
+                     for {room}; callers would mistake this for a legitimate server refusal"
+                ),
+                SignOutcome::Transport(other) => {
+                    panic!("unexpected error class for {room}: {other:?}")
+                }
+            }
+        }
+    }
+
+    /// The confirmed-constant surface must stay minimal: only the one assembly-stage fact
+    /// (`X-Bogus=1`) is encoded. If a future edit tries to hardcode a guessed `msToken`,
+    /// `X-Dynosaur`, or `X-Gnarly` value as a "confirmed" constant, this fails.
+    #[test]
+    fn confirmed_parameters_encode_no_dynamic_signing_fields() {
+        let context = backend(UnsupportedAlgorithm)
+            .prepare(TransportRequest::new(ROOM))
+            .unwrap();
+
+        assert_eq!(
+            context.confirmed_parameters(),
+            &[ConfirmedParameter {
+                name: "X-Bogus",
+                value: "1"
+            }],
+            "only the confirmed X-Bogus=1 assembly constant may be encoded"
+        );
+
+        // The dynamic fields are known to exist in the suffix order, but must never appear as
+        // confirmed constants until they converge against authorized oracle observations.
+        for dynamic in ["msToken", "X-Dynosaur", "X-Gnarly"] {
+            assert!(
+                FETCH_PATCH_PARAMETER_ORDER.contains(&dynamic),
+                "{dynamic} should remain a documented suffix field"
+            );
+            assert!(
+                !FETCH_CONFIRMED_PARAMETERS.iter().any(|p| p.name == dynamic),
+                "{dynamic} must not be encoded as a confirmed constant"
+            );
+        }
+
+        // The public frontier route has no confirmed constants at all.
+        let mut frontier = context;
+        frontier.product = SigningProduct::FrontierSign;
+        assert_eq!(
+            frontier.confirmed_parameters(),
+            &[],
+            "the public frontierSign route must expose no confirmed constants"
+        );
+    }
+
+    /// Deterministic pre-signing stages are allowed to succeed; only the algorithm is
+    /// unsupported. This documents exactly where the boundary sits: preparation is real work,
+    /// signing is the unimplemented step.
+    #[tokio::test]
+    async fn preparation_succeeds_but_signing_is_the_unsupported_boundary() {
+        let native = backend(UnsupportedAlgorithm);
+        // L0/L1 preparation is deterministic and does not fail.
+        let context = native.prepare(TransportRequest::new(ROOM)).unwrap();
+        assert_eq!(context.product, SigningProduct::FetchPatch);
+        // The algorithm boundary is what refuses.
+        let outcome = native.transport(TransportRequest::new(ROOM)).await;
+        assert!(matches!(
+            outcome,
+            SignOutcome::Transport(SignError::BackendUnavailable(_))
+        ));
+    }
+
+    /// A malformed request fails at the deterministic stage as a transport error, never as a
+    /// success or a silent rejection.
+    #[tokio::test]
+    async fn invalid_request_fails_loudly_before_signing() {
+        let native = backend(StaticAlgorithm::new().with_response(ROOM, Ok(material())));
+        // Non-numeric room id is rejected by the request builder.
+        let outcome = native.transport(TransportRequest::new("not-a-room")).await;
+        assert!(matches!(
+            outcome,
+            SignOutcome::Transport(SignError::Decode(_))
+        ));
+    }
+
     #[tokio::test]
     async fn incomplete_transport_is_a_rejection_not_a_success() {
         let mut incomplete = material();

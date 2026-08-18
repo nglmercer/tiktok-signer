@@ -1,0 +1,142 @@
+[
+  {
+    "route": "fetch_composition",
+    "dimension": "query",
+    "effect": "shape_changed"
+  },
+  {
+    "route": "fetch_composition",
+    "dimension": "cookie",
+    "effect": "no_change"
+  },
+  {
+    "route": "fetch_composition",
+    "dimension": "clock",
+    "effect": "no_change"
+  },
+  {
+    "route": "fetch_composition",
+    "dimension": "timezone",
+    "effect": "shape_changed"
+  },
+  {
+    "route": "fetch_composition",
+    "dimension": "language",
+    "effect": "no_change"
+  },
+  {
+    "route": "fetch_composition",
+    "dimension": "platform",
+    "effect": "shape_changed"
+  },
+  {
+    "route": "fetch_composition",
+    "dimension": "screen",
+    "effect": "no_change"
+  },
+  {
+    "route": "ms_token",
+    "dimension": "query",
+    "effect": "no_change"
+  },
+  {
+    "route": "ms_token",
+    "dimension": "cookie",
+    "effect": "shape_changed"
+  },
+  {
+    "route": "ms_token",
+    "dimension": "clock",
+    "effect": "no_change"
+  },
+  {
+    "route": "ms_token",
+    "dimension": "timezone",
+    "effect": "no_change"
+  },
+  {
+    "route": "ms_token",
+    "dimension": "language",
+    "effect": "no_change"
+  },
+  {
+    "route": "ms_token",
+    "dimension": "platform",
+    "effect": "no_change"
+  },
+  {
+    "route": "ms_token",
+    "dimension": "screen",
+    "effect": "no_change"
+  },
+  {
+    "route": "x_dynosaur",
+    "dimension": "query",
+    "effect": "no_change"
+  },
+  {
+    "route": "x_dynosaur",
+    "dimension": "cookie",
+    "effect": "no_change"
+  },
+  {
+    "route": "x_dynosaur",
+    "dimension": "clock",
+    "effect": "no_change"
+  },
+  {
+    "route": "x_dynosaur",
+    "dimension": "timezone",
+    "effect": "no_change"
+  },
+  {
+    "route": "x_dynosaur",
+    "dimension": "language",
+    "effect": "no_change"
+  },
+  {
+    "route": "x_dynosaur",
+    "dimension": "platform",
+    "effect": "no_change"
+  },
+  {
+    "route": "x_dynosaur",
+    "dimension": "screen",
+    "effect": "no_change"
+  },
+  {
+    "route": "x_gnarly",
+    "dimension": "query",
+    "effect": "shape_changed"
+  },
+  {
+    "route": "x_gnarly",
+    "dimension": "cookie",
+    "effect": "shape_changed"
+  },
+  {
+    "route": "x_gnarly",
+    "dimension": "clock",
+    "effect": "no_change"
+  },
+  {
+    "route": "x_gnarly",
+    "dimension": "timezone",
+    "effect": "shape_changed"
+  },
+  {
+    "route": "x_gnarly",
+    "dimension": "language",
+    "effect": "no_change"
+  },
+  {
+    "route": "x_gnarly",
+    "dimension": "platform",
+    "effect": "shape_changed"
+  },
+  {
+    "route": "x_gnarly",
+    "dimension": "screen",
+    "effect": "no_change"
+  }
+]

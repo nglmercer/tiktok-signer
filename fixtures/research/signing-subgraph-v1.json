@@ -1,0 +1,858 @@
+{
+  "subgraph_version": 1,
+  "source": {
+    "provenance": "derived_from_profile_v1",
+    "case_id": "profile-2026-08-13-baseline",
+    "bundle_endpoint": "https://sf16-website-login.neutral.ttwstatic.com/obj/tiktok_web_login_static/webmssdk/1.0.0.388/webmssdk.js",
+    "bundle": {
+      "sha256": "dee22566273d398e074df6db40f39cfd827f6b8efd6fc382de03c44c501299ac",
+      "bytes": 235357
+    },
+    "trace_version": 2,
+    "product": "fetch",
+    "clock_ms": 0
+  },
+  "routes": [
+    {
+      "route": "fetch_composition",
+      "roots": [
+        58628
+      ],
+      "observed": true,
+      "phase": "invocation",
+      "truncated": false,
+      "frames": [
+        {
+          "entry": 58628,
+          "parents": [
+            56
+          ],
+          "calls": 1,
+          "steps": 34,
+          "argument_shapes": [
+            {
+              "position": 0,
+              "shapes": [
+                {
+                  "value_type": "string",
+                  "byte_lengths": [
+                    786
+                  ],
+                  "object_keys": []
+                }
+              ]
+            }
+          ],
+          "return_shapes": [
+            {
+              "value_type": "string",
+              "byte_lengths": [
+                1
+              ],
+              "object_keys": []
+            }
+          ],
+          "register_ops": {
+            "reads": 0,
+            "writes": 0,
+            "distinct_registers": 0,
+            "value_classes": []
+          },
+          "environment": {
+            "reads_window": false,
+            "reads_document": false,
+            "reads_storage": false,
+            "reads_crypto": false,
+            "reads_fetch": false,
+            "calls_vm": false
+          },
+          "handlers": []
+        },
+        {
+          "entry": 59051,
+          "parents": [
+            58628
+          ],
+          "calls": 1,
+          "steps": 0,
+          "argument_shapes": [],
+          "return_shapes": [],
+          "register_ops": {
+            "reads": 0,
+            "writes": 0,
+            "distinct_registers": 0,
+            "value_classes": []
+          },
+          "environment": {
+            "reads_window": false,
+            "reads_document": false,
+            "reads_storage": false,
+            "reads_crypto": false,
+            "reads_fetch": false,
+            "calls_vm": false
+          },
+          "handlers": []
+        },
+        {
+          "entry": 59053,
+          "parents": [
+            58628
+          ],
+          "calls": 1,
+          "steps": 0,
+          "argument_shapes": [],
+          "return_shapes": [],
+          "register_ops": {
+            "reads": 0,
+            "writes": 0,
+            "distinct_registers": 0,
+            "value_classes": []
+          },
+          "environment": {
+            "reads_window": false,
+            "reads_document": false,
+            "reads_storage": false,
+            "reads_crypto": false,
+            "reads_fetch": false,
+            "calls_vm": false
+          },
+          "handlers": []
+        }
+      ],
+      "call_edges": [
+        {
+          "parent": 56,
+          "child": 58628,
+          "observations": 0
+        },
+        {
+          "parent": 58628,
+          "child": 59051,
+          "observations": 0
+        },
+        {
+          "parent": 58628,
+          "child": 59053,
+          "observations": 0
+        }
+      ],
+      "handlers": [],
+      "dependencies": [
+        {
+          "kind": "query",
+          "evidence": "observed_dependency",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "cookie",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "clock",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "timezone",
+          "evidence": "observed_dependency",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "language",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "platform",
+          "evidence": "observed_dependency",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "screen",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        }
+      ]
+    },
+    {
+      "route": "ms_token",
+      "roots": [
+        8039,
+        92825
+      ],
+      "observed": true,
+      "phase": "eval",
+      "truncated": false,
+      "frames": [
+        {
+          "entry": 8039,
+          "parents": [],
+          "calls": 1,
+          "steps": 1,
+          "argument_shapes": [
+            {
+              "position": 0,
+              "shapes": [
+                {
+                  "value_type": "string",
+                  "byte_lengths": [
+                    4
+                  ],
+                  "object_keys": []
+                }
+              ]
+            }
+          ],
+          "return_shapes": [
+            {
+              "value_type": "string",
+              "byte_lengths": [
+                124
+              ],
+              "object_keys": []
+            }
+          ],
+          "register_ops": {
+            "reads": 0,
+            "writes": 0,
+            "distinct_registers": 0,
+            "value_classes": []
+          },
+          "environment": {
+            "reads_window": true,
+            "reads_document": false,
+            "reads_storage": true,
+            "reads_crypto": false,
+            "reads_fetch": false,
+            "calls_vm": false
+          },
+          "handlers": []
+        },
+        {
+          "entry": 92825,
+          "parents": [
+            91717
+          ],
+          "calls": 1,
+          "steps": 1,
+          "argument_shapes": [],
+          "return_shapes": [
+            {
+              "value_type": "string",
+              "byte_lengths": [
+                124
+              ],
+              "object_keys": []
+            }
+          ],
+          "register_ops": {
+            "reads": 0,
+            "writes": 0,
+            "distinct_registers": 0,
+            "value_classes": []
+          },
+          "environment": {
+            "reads_window": false,
+            "reads_document": false,
+            "reads_storage": false,
+            "reads_crypto": false,
+            "reads_fetch": false,
+            "calls_vm": false
+          },
+          "handlers": []
+        }
+      ],
+      "call_edges": [
+        {
+          "parent": 91717,
+          "child": 92825,
+          "observations": 0
+        }
+      ],
+      "handlers": [],
+      "dependencies": [
+        {
+          "kind": "query",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "cookie",
+          "evidence": "observed_dependency",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "clock",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "timezone",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "language",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "platform",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "screen",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "window",
+          "evidence": "candidate_dependency",
+          "source": "structural"
+        },
+        {
+          "kind": "storage",
+          "evidence": "candidate_dependency",
+          "source": "structural"
+        }
+      ]
+    },
+    {
+      "route": "x_dynosaur",
+      "roots": [
+        55188
+      ],
+      "observed": true,
+      "phase": "invocation",
+      "truncated": false,
+      "frames": [
+        {
+          "entry": 55188,
+          "parents": [
+            56
+          ],
+          "calls": 1,
+          "steps": 98,
+          "argument_shapes": [
+            {
+              "position": 0,
+              "shapes": [
+                {
+                  "value_type": "object",
+                  "value_class": "typed_array",
+                  "byte_lengths": [
+                    4
+                  ],
+                  "object_keys": [
+                    "0",
+                    "1",
+                    "2",
+                    "3"
+                  ]
+                }
+              ]
+            }
+          ],
+          "return_shapes": [
+            {
+              "value_type": "string",
+              "byte_lengths": [
+                388
+              ],
+              "object_keys": []
+            }
+          ],
+          "register_ops": {
+            "reads": 0,
+            "writes": 0,
+            "distinct_registers": 0,
+            "value_classes": []
+          },
+          "environment": {
+            "reads_window": false,
+            "reads_document": false,
+            "reads_storage": false,
+            "reads_crypto": false,
+            "reads_fetch": false,
+            "calls_vm": false
+          },
+          "handlers": []
+        },
+        {
+          "entry": 57048,
+          "parents": [
+            55188
+          ],
+          "calls": 1,
+          "steps": 0,
+          "argument_shapes": [],
+          "return_shapes": [],
+          "register_ops": {
+            "reads": 0,
+            "writes": 0,
+            "distinct_registers": 0,
+            "value_classes": []
+          },
+          "environment": {
+            "reads_window": false,
+            "reads_document": false,
+            "reads_storage": false,
+            "reads_crypto": false,
+            "reads_fetch": false,
+            "calls_vm": false
+          },
+          "handlers": []
+        },
+        {
+          "entry": 57451,
+          "parents": [
+            55188
+          ],
+          "calls": 1,
+          "steps": 0,
+          "argument_shapes": [],
+          "return_shapes": [],
+          "register_ops": {
+            "reads": 0,
+            "writes": 0,
+            "distinct_registers": 0,
+            "value_classes": []
+          },
+          "environment": {
+            "reads_window": false,
+            "reads_document": false,
+            "reads_storage": false,
+            "reads_crypto": false,
+            "reads_fetch": false,
+            "calls_vm": false
+          },
+          "handlers": []
+        },
+        {
+          "entry": 57471,
+          "parents": [
+            55188
+          ],
+          "calls": 1,
+          "steps": 0,
+          "argument_shapes": [],
+          "return_shapes": [],
+          "register_ops": {
+            "reads": 0,
+            "writes": 0,
+            "distinct_registers": 0,
+            "value_classes": []
+          },
+          "environment": {
+            "reads_window": false,
+            "reads_document": false,
+            "reads_storage": false,
+            "reads_crypto": false,
+            "reads_fetch": false,
+            "calls_vm": false
+          },
+          "handlers": []
+        },
+        {
+          "entry": 58048,
+          "parents": [
+            55188
+          ],
+          "calls": 1,
+          "steps": 0,
+          "argument_shapes": [],
+          "return_shapes": [],
+          "register_ops": {
+            "reads": 0,
+            "writes": 0,
+            "distinct_registers": 0,
+            "value_classes": []
+          },
+          "environment": {
+            "reads_window": false,
+            "reads_document": false,
+            "reads_storage": false,
+            "reads_crypto": false,
+            "reads_fetch": false,
+            "calls_vm": false
+          },
+          "handlers": []
+        }
+      ],
+      "call_edges": [
+        {
+          "parent": 56,
+          "child": 55188,
+          "observations": 0
+        },
+        {
+          "parent": 55188,
+          "child": 57048,
+          "observations": 0
+        },
+        {
+          "parent": 55188,
+          "child": 57451,
+          "observations": 0
+        },
+        {
+          "parent": 55188,
+          "child": 57471,
+          "observations": 0
+        },
+        {
+          "parent": 55188,
+          "child": 58048,
+          "observations": 0
+        }
+      ],
+      "handlers": [],
+      "dependencies": [
+        {
+          "kind": "query",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "cookie",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "clock",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "timezone",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "language",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "platform",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "screen",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        }
+      ]
+    },
+    {
+      "route": "x_gnarly",
+      "roots": [
+        48886
+      ],
+      "observed": true,
+      "phase": "invocation",
+      "truncated": false,
+      "frames": [
+        {
+          "entry": 48886,
+          "parents": [
+            56
+          ],
+          "calls": 1,
+          "steps": 383,
+          "argument_shapes": [
+            {
+              "position": 0,
+              "shapes": [
+                {
+                  "value_type": "string",
+                  "byte_lengths": [
+                    1274
+                  ],
+                  "object_keys": []
+                }
+              ]
+            }
+          ],
+          "return_shapes": [
+            {
+              "value_type": "string",
+              "byte_lengths": [
+                332
+              ],
+              "object_keys": []
+            }
+          ],
+          "register_ops": {
+            "reads": 0,
+            "writes": 0,
+            "distinct_registers": 0,
+            "value_classes": []
+          },
+          "environment": {
+            "reads_window": false,
+            "reads_document": false,
+            "reads_storage": false,
+            "reads_crypto": false,
+            "reads_fetch": false,
+            "calls_vm": false
+          },
+          "handlers": []
+        },
+        {
+          "entry": 50818,
+          "parents": [
+            48886
+          ],
+          "calls": 1,
+          "steps": 0,
+          "argument_shapes": [],
+          "return_shapes": [],
+          "register_ops": {
+            "reads": 0,
+            "writes": 0,
+            "distinct_registers": 0,
+            "value_classes": []
+          },
+          "environment": {
+            "reads_window": false,
+            "reads_document": false,
+            "reads_storage": false,
+            "reads_crypto": false,
+            "reads_fetch": false,
+            "calls_vm": false
+          },
+          "handlers": []
+        },
+        {
+          "entry": 50838,
+          "parents": [
+            48886
+          ],
+          "calls": 1,
+          "steps": 0,
+          "argument_shapes": [],
+          "return_shapes": [],
+          "register_ops": {
+            "reads": 0,
+            "writes": 0,
+            "distinct_registers": 0,
+            "value_classes": []
+          },
+          "environment": {
+            "reads_window": false,
+            "reads_document": false,
+            "reads_storage": false,
+            "reads_crypto": false,
+            "reads_fetch": false,
+            "calls_vm": false
+          },
+          "handlers": []
+        },
+        {
+          "entry": 50858,
+          "parents": [
+            48886
+          ],
+          "calls": 1,
+          "steps": 0,
+          "argument_shapes": [],
+          "return_shapes": [],
+          "register_ops": {
+            "reads": 0,
+            "writes": 0,
+            "distinct_registers": 0,
+            "value_classes": []
+          },
+          "environment": {
+            "reads_window": false,
+            "reads_document": false,
+            "reads_storage": false,
+            "reads_crypto": false,
+            "reads_fetch": false,
+            "calls_vm": false
+          },
+          "handlers": []
+        },
+        {
+          "entry": 51033,
+          "parents": [
+            48886
+          ],
+          "calls": 1,
+          "steps": 0,
+          "argument_shapes": [],
+          "return_shapes": [],
+          "register_ops": {
+            "reads": 0,
+            "writes": 0,
+            "distinct_registers": 0,
+            "value_classes": []
+          },
+          "environment": {
+            "reads_window": false,
+            "reads_document": false,
+            "reads_storage": false,
+            "reads_crypto": false,
+            "reads_fetch": false,
+            "calls_vm": false
+          },
+          "handlers": []
+        }
+      ],
+      "call_edges": [
+        {
+          "parent": 56,
+          "child": 48886,
+          "observations": 0
+        },
+        {
+          "parent": 48886,
+          "child": 50818,
+          "observations": 0
+        },
+        {
+          "parent": 48886,
+          "child": 50838,
+          "observations": 0
+        },
+        {
+          "parent": 48886,
+          "child": 50858,
+          "observations": 0
+        },
+        {
+          "parent": 48886,
+          "child": 51033,
+          "observations": 0
+        }
+      ],
+      "handlers": [],
+      "dependencies": [
+        {
+          "kind": "query",
+          "evidence": "observed_dependency",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "cookie",
+          "evidence": "observed_dependency",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "clock",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "timezone",
+          "evidence": "observed_dependency",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "language",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "platform",
+          "evidence": "observed_dependency",
+          "source": "controlled_experiment"
+        },
+        {
+          "kind": "screen",
+          "evidence": "no_observed_effect",
+          "source": "controlled_experiment"
+        }
+      ]
+    },
+    {
+      "route": "frontier_x_bogus",
+      "roots": [
+        69021
+      ],
+      "observed": true,
+      "phase": "invocation",
+      "truncated": false,
+      "frames": [
+        {
+          "entry": 69021,
+          "parents": [
+            56
+          ],
+          "calls": 1,
+          "steps": 10,
+          "argument_shapes": [],
+          "return_shapes": [
+            {
+              "value_type": "object",
+              "byte_lengths": [
+                0
+              ],
+              "object_keys": [
+                "X-Bogus"
+              ]
+            }
+          ],
+          "register_ops": {
+            "reads": 0,
+            "writes": 0,
+            "distinct_registers": 0,
+            "value_classes": []
+          },
+          "environment": {
+            "reads_window": false,
+            "reads_document": false,
+            "reads_storage": false,
+            "reads_crypto": false,
+            "reads_fetch": false,
+            "calls_vm": false
+          },
+          "handlers": []
+        },
+        {
+          "entry": 69171,
+          "parents": [
+            69021
+          ],
+          "calls": 1,
+          "steps": 9,
+          "argument_shapes": [],
+          "return_shapes": [],
+          "register_ops": {
+            "reads": 0,
+            "writes": 0,
+            "distinct_registers": 0,
+            "value_classes": []
+          },
+          "environment": {
+            "reads_window": false,
+            "reads_document": false,
+            "reads_storage": false,
+            "reads_crypto": false,
+            "reads_fetch": false,
+            "calls_vm": false
+          },
+          "handlers": []
+        }
+      ],
+      "call_edges": [
+        {
+          "parent": 56,
+          "child": 69021,
+          "observations": 0
+        },
+        {
+          "parent": 69021,
+          "child": 69171,
+          "observations": 0
+        }
+      ],
+      "handlers": [],
+      "dependencies": []
+    }
+  ]
+}

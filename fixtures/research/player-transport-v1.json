@@ -1,0 +1,135 @@
+{
+  "what": "Facts read out of the live player's transport code, which ttl-sign-core reproduces.",
+  "how": "node scripts/headless/player-audit.mjs --update",
+  "read_on": "2026-08-18",
+  "facts": {
+    "socket_hosts": [
+      "wss://webcast-ws.eu.tiktok.com",
+      "wss://webcast-ws.tiktok.com",
+      "wss://webcast-ws.us.tiktok.com"
+    ],
+    "ws_direct": true,
+    "fetch_before_ws_success": true,
+    "config_version_code": "270000",
+    "im_paths": [
+      "/webcast/im/fetch/",
+      "/webcast/im/fetch/history/",
+      "/webcast/im/fetch/preview/",
+      "/webcast/im/ws_proxy/from_preview/",
+      "/webcast/im/ws_proxy/ws_reuse_supplement/"
+    ],
+    "direct_socket_path": "/webcast/im/ws_proxy/ws_reuse_supplement/",
+    "preview_socket_path": "/webcast/im/ws_proxy/from_preview/",
+    "browser_block_keys": [
+      "version_code",
+      "device_platform",
+      "cookie_enabled",
+      "screen_width",
+      "screen_height",
+      "browser_language",
+      "browser_platform",
+      "browser_name",
+      "browser_version",
+      "browser_online",
+      "tz_name"
+    ],
+    "sdk_version_code": "180800",
+    "update_version_code": "2.0.0",
+    "ws_signer": "registerWsSigner",
+    "ws_sign_input": [
+      "X-MS-Q",
+      "X-MS-STUB"
+    ],
+    "ws_sign_output": "X-Gnarly",
+    "serializer_percent_encodes": false,
+    "serializer_camel_to_snake": true,
+    "protos": {
+      "PushFrame": {
+        "SeqID": {
+          "id": 1,
+          "type": "uint64"
+        },
+        "LogID": {
+          "id": 2,
+          "type": "uint64"
+        },
+        "service": {
+          "id": 3,
+          "type": "uint64"
+        },
+        "method": {
+          "id": 4,
+          "type": "uint64"
+        },
+        "headers": {
+          "id": 5,
+          "type": "PushHeader"
+        },
+        "payload_encoding": {
+          "id": 6,
+          "type": "string"
+        },
+        "payload_type": {
+          "id": 7,
+          "type": "string"
+        },
+        "payload": {
+          "id": 8,
+          "type": "bytes"
+        }
+      },
+      "EnterRoom": {
+        "room_id": {
+          "id": 1,
+          "type": "int64"
+        },
+        "room_tag": {
+          "id": 2,
+          "type": "string"
+        },
+        "live_region": {
+          "id": 3,
+          "type": "string"
+        },
+        "live_id": {
+          "id": 4,
+          "type": "int64"
+        },
+        "identity": {
+          "id": 5,
+          "type": "string"
+        },
+        "cursor": {
+          "id": 6,
+          "type": "string"
+        },
+        "account_type": {
+          "id": 7,
+          "type": "int64"
+        },
+        "enter_uniq_id": {
+          "id": 8,
+          "type": "int64"
+        },
+        "filter_welcome_msg": {
+          "id": 9,
+          "type": "string"
+        },
+        "is_anchor_continue_keep_msg": {
+          "id": 10,
+          "type": "bool"
+        }
+      },
+      "HeartBeat": {
+        "room_id": {
+          "id": 1,
+          "type": "int64"
+        },
+        "send_packet_seq_id": {
+          "id": 2,
+          "type": "int64"
+        }
+      }
+    }
+  }
+}

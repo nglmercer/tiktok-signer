@@ -1,18 +1,26 @@
 # tiktok-signer
 
-Self-hosted TikTok LIVE transport written in Rust. Signing implementations now sit behind
-a backend contract: deterministic replay and native-pipeline tests are headless, while a
-Wry WebView remains available as the live reference oracle.
+Self-hosted TikTok LIVE transport written in Rust. **No browser anywhere:** signing runs the
+real `webmssdk` bundle under a synthetic environment, and every step — listing live channels,
+resolving a room, reading metadata and gifts, and bootstrapping the transport — works without
+Wry, WebKit, or a display.
 
-**Primary objective:** replace the proprietary sign server with a reproducible native,
-headless signing path. The WebView remains the reference oracle until every required SDK
-stage converges.
+**Primary objective:** replace the proprietary sign server with a reproducible headless signing
+path. That is now the only path; the WebView oracle has been removed.
 
 ## Status
 
-The page-owned WebSocket relay was validated against a real room on 2026-08-10. It
-received room-entry, heartbeat, and `msg` frames without Euler and without calling
-`/webcast/im/fetch/`.
+Verified against live rooms on 2026-08-18 with no browser: discovery, `room/info` and `gift/list`
+return live data, and `/webcast/room/enter/` **accepts this project's signature** — it refuses
+unsigned and `X-Bogus`-only requests with 403 and accepts the full computed suffix with 200, which is
+positive proof the signing is correct.
+
+**The transport works, with no browser and no `im/fetch`.** The live player builds its message
+socket URL itself and signs the query with `registerWsSigner`, so it is constructible from first
+principles: `cargo run -p ttl-live-discovery --example live-check` ends in decoded chat, and
+`tiktok-live-connector` runs against the local sign server. `/webcast/im/fetch/` answers 200 with an
+empty body and it no longer matters — nothing depends on its answer. See
+[docs/12](docs/12-transport-reverse-engineering.md), including the claims withdrawn on the way.
 
 | Crate | Status |
 |---|---|
@@ -20,73 +28,86 @@ received room-entry, heartbeat, and `msg` frames without Euler and without calli
 | `ttl-sign-replay` | Versioned, sanitized offline signing fixtures and `ReplayBackend`. |
 | `ttl-sign-native` | Deterministic staged native pipeline with an isolated signing-algorithm boundary. |
 | `ttl-sign-lab` | Safe structured observations and classified backend differential reports. |
-| `ttl-sign-webview` | Wry engine, JS bridge, session bootstrap, navigation, and page-WebSocket relay. |
-| `ttl-live-ws` | WebSocket client with heartbeat, acknowledgements, and typed rejection handling. |
+| `ttl-live-discovery` | Browser-free discovery, entirely unsigned: room lookup, `room/info`, `gift/list`, and live channels. |
+| `ttl-sign-headless` | Browser-free `SignerBackend`: signs the transport through an external signer process. |
+| `ttl-live-ws` | WebSocket client with heartbeat, acknowledgements, typed rejection handling, and a reconnecting stream that re-signs each attempt. |
 | `ttl-sign-server` | `GET /webcast/fetch`, `GET /webcast/rooms/{room_id}/connect` (Node client), and `GET /healthz`. |
 
-Default tests do not build or initialize WebView code. Run the deterministic server with:
+Default tests are offline and deterministic. Run the offline server with:
 
 ```sh
 cargo run -p ttl-sign-server --bin ttl-sign-replay-server --features replay
 ```
 
-The live reference server remains explicit:
+The live server is explicit, and needs the signing bundle plus an account session — the
+transport endpoint answers guests with an empty body:
 
 ```sh
-cargo run -p ttl-sign-server --bin ttl-sign-server --features webview
+curl -s -o /tmp/webmssdk.js \
+  https://sf16-website-login.neutral.ttwstatic.com/obj/tiktok_web_login_static/webmssdk/1.0.0.388/webmssdk.js
+
+cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless
+```
+
+End-to-end check, no browser:
+
+```sh
+cargo run -p ttl-live-discovery --example live-check
 ```
 
 The workspace MSRV is Rust 1.86; CI runs the headless suite on that toolchain.
 
-### Controlled oracle research
+### Controlled research
 
-The research lab validates that every experiment changes exactly one input dimension. It
-runs each selected WebView case in a fresh process, strips signed URL queries, replaces raw
-cookie and transport values with deterministic placeholders, and refuses to overwrite a
-prior capture:
+Signing research runs against the real bundle without a browser. Fetch the bundle first (it is a
+public static asset and is deliberately not vendored):
+
+```sh
+curl -s -o /tmp/webmssdk.js \
+  https://sf16-website-login.neutral.ttwstatic.com/obj/tiktok_web_login_static/webmssdk/1.0.0.388/webmssdk.js
+sha256sum /tmp/webmssdk.js   # compare with fixtures/research/webmssdk-profile-2026-08-13.json
+```
+
+```sh
+# what each signing route produces, and which product each endpoint accepts
+node scripts/headless/sign-probe.mjs /tmp/webmssdk.js
+node scripts/headless/im-fetch-probe.mjs /tmp/webmssdk.js <user>
+
+# the browser surface the bundle touches, as a shim specification
+node scripts/headless/emit-surface.mjs /tmp/webmssdk.js \
+  fixtures/research/environment-surface-v1.json
+
+# transport bootstrap, and channels that are live now
+node scripts/headless/transport.mjs /tmp/webmssdk.js <user>
+node scripts/headless/find-live.mjs /tmp/webmssdk.js
+```
+
+Offline analysis of a captured VM trace needs no network at all:
 
 ```sh
 cargo run -p ttl-sign-lab --bin ttl-sign-plan -- fixtures/research/plan.example.json
-
-cargo run -p ttl-sign-lab --bin ttl-sign-oracle --features webview -- \
-  fixtures/research/plan.example.json baseline /tmp/ttl-oracle-captures
-
-cargo run -p ttl-sign-lab --bin ttl-sign-observation-diff -- \
-  /tmp/ttl-oracle-captures/baseline/observation.json \
-  /tmp/ttl-oracle-captures/timezone-lima/observation.json
-
-cargo run -p ttl-sign-lab --bin ttl-sign-url-oracle --features webview -- \
-  fixtures/research/plan.example.json baseline /tmp/ttl-oracle-captures
-
-cargo run -p ttl-sign-lab --bin ttl-sign-url-diff -- \
-  /tmp/ttl-oracle-captures/baseline-signing/signing-observation.json \
-  /tmp/ttl-oracle-captures/timezone-lima-signing/signing-observation.json
-
-cargo run -p ttl-sign-lab --bin ttl-sign-trace --features webview -- \
-  fixtures/research/plan.example.json baseline /tmp/ttl-sign-traces
-
-cargo run -p ttl-sign-lab --bin ttl-sign-paired-trace --features webview -- \
-  fixtures/research/plan.example.json query-duplicate-room-id /tmp/ttl-sign-paired
-
-cargo run -p ttl-sign-lab --bin ttl-sign-vm-trace --features webview -- \
-  fixtures/research/plan.example.json baseline fetch
+cargo run -p ttl-sign-lab --bin ttl-sign-subgraph -- /tmp/vm-trace.json \
+  --controlled fixtures/research/controlled-observations-2026-08-13.json
+cargo run -p ttl-sign-lab --bin ttl-sign-subgraph-diff -- <baseline.json> <candidate.json>
 ```
 
-The URL oracle triggers the browser's patched `fetch`, so the browser does issue the signed
-GET. Rust does not replay or consume its response. Artifacts contain parameter names plus
-value digests, never a reusable signed URL, raw cookie/signature value, or raw declared
-signing input. Repeated and paired traces separate stable structure from SDK entropy; see
+Artifacts contain parameter names plus value digests, never a reusable signed URL, raw
+cookie/signature value, or raw declared signing input; `ttl-fixture-hygiene` enforces that. See
 [`docs/09-signing-research.md`](docs/09-signing-research.md).
 
 The example room id is synthetic. Replace it only with a room you are authorized to test.
-Guest sessions are preferred; a configured account is loaded from the existing external
-session file and is never embedded in the plan or generated artifacts.
+
+> **Removed with the WebView.** The oracle binaries (`ttl-sign-oracle`, `ttl-sign-url-oracle`,
+> `ttl-sign-trace`, `ttl-sign-paired-trace`, `ttl-sign-vm-trace`, `ttl-sign-env-surface`) and the
+> browser probes drove a page and cannot run headless. `scripts/headless/` covers signing, the
+> environment surface, transport, and discovery; the paired URL/trace differentials have no
+> replacement, and `ttl-sign-lab`'s offline comparison tools remain.
 
 > Protobuf field numbers are confirmed against a real response
 > (`2 = cursor`, `5 = internal_ext`, `7 = route_params`, `10 = push_server`).
 > Capture with:
 >
-> `cargo run -p ttl-sign-webview --example fetch-dump`
+> `node scripts/headless/transport.mjs /tmp/webmssdk.js`
 
 ### Verified flow (2026-08-10)
 
@@ -242,17 +263,18 @@ These schemas are **not** MIT-licensed like the rest of the workspace. See
 ## Tools
 
 ```sh
-cargo run -p ttl-sign-webview --example endpoint-probe -- <user>
-cargo run -p ttl-sign-webview --example fetch-dump -- <user>
-cargo run -p ttl-sign-webview --example ws-probe -- <user>
-cargo run -p ttl-sign-webview --example page-probe -- <user> "<js>"
-cargo run -p ttl-sign-webview --example limit-probe -- [user] [requests]
+cargo run -p ttl-live-discovery --example live-check            # full flow, no browser
+cargo run -p ttl-live-discovery --example discover -- <user>    # room info + gift list
+node scripts/headless/find-live.mjs /tmp/webmssdk.js            # who is live now
+node scripts/headless/ws-direct.mjs /tmp/webmssdk.js <room_id>  # the transport, on its own
+node scripts/headless/room-page-scan.mjs @<user>               # what the room page seeds
+node scripts/headless/transport.mjs /tmp/webmssdk.js <user>    # the old im/fetch bootstrap
 ```
 
-`limit-probe` captures what a refusal actually looks like: it reports the verification
-infrastructure the page carries, then calls `room/info` repeatedly as a guest until TikTok
-stops answering `status_code: 0`. Use it to obtain real signatures before writing anything
-that reacts to them.
+The browser probes (`endpoint-probe`, `ws-probe`, `page-probe`, `limit-probe`) were removed with
+the WebView: they drove a page and have no headless equivalent. What a refusal looks like is now
+observable directly — `room/ping/audience` reports `status_code=20003, "User doesn't login"`, and
+`im/fetch` answers guests with an empty body.
 
 ### tiktok-live-connector (Node) compatibility
 
@@ -260,7 +282,7 @@ that reacts to them.
 Stream:
 
 ```sh
-cargo run -p ttl-sign-server --features webview   # terminal 1
+cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless   # terminal 1
 cd examples/node-connector && npm install
 bun run verify-signer.ts <username>               # terminal 2
 npm run verify:node -- <username>                 # or tsx, on plain Node
@@ -274,54 +296,75 @@ The Node client calls `GET /webcast/rooms/{room_id}/connect` (the Python client 
 `/webcast/fetch`); both are served, and the connect route also returns `X-Room-Id`, which
 the Node client reads back.
 
-**Verified 2026-08-10 against live rooms: it works.** 203 events — chat, likes, members,
-follows, viewer counts — reached `tiktok-live-connector` with no Euler Stream involved.
+**Verified 2026-08-18 against a live room: it works, browser-free.** 324 events — chat, likes,
+members, follows, gifts, viewer counts — reached `tiktok-live-connector` with no Euler Stream and no
+rendering engine involved.
 
-The interesting part is how, because `/webcast/im/fetch/` answers this signer with an empty
-body and cannot supply the `ProtoMessageFetchResult` the client expects. It is never asked
-to. The player signs its **own** WebSocket URI, and `bridge.js` records that URI before the
-connection is attempted, so with `block_page_websockets` enabled the engine captures a
-signed transport nothing has used. `ws_uri::fetch_result_from_ws_uri` rebuilds the protobuf
-from it: `push_server` from the URI base, `route_params` from its query, and a synthetic
-cursor, since the `ws_reuse_supplement` transport carries none and clients reject an empty
-one.
+The earlier run of this example, on 2026-08-10, worked only because the WebView had captured a URI
+the player signed for itself. That engine was removed, and so was the `--ws-uri` flag that let one be
+pasted in by hand: a fallback that needs a browser once is still a browser dependency, and keeping it
+meant the real problem never had to be solved.
 
-Two details make the reconstruction survive:
+What the server hands back now is assembled locally. `push_server` carries the socket host and path,
+`route_params` every parameter of the signed query, and the client rebuilds the URL from that map —
+reordered, re-encoded, with the duplicated `version_code` collapsed. The socket accepts that, which
+is what makes the shape safe to hand to a client that was written for Euler Stream.
 
-- **Values are decoded.** Clients re-encode `route_params` when rebuilding the query, so a
-  stored `%2F` would become `%252F` and break the signature. Storing `/` round-trips.
-- **The client's own parameters are removed.** The example empties
-  `WebSocketConfigDefaults.DEFAULT_WS_CLIENT_PARAMS`; otherwise the connector merges ~27
-  parameters of its own and appends `&version_code=270000`, sending a query TikTok never
-  signed.
+**The transport works, and it is neither.** On 2026-08-18 the player's own transport chunk
+settled it: the live room page configures its IM SDK with `wsDirect: "1"` and a `socketHost`, and the
+SDK then builds and signs the socket URI itself —
+`wss://webcast-ws.tiktok.com/webcast/im/ws_proxy/ws_reuse_supplement/?<query>&X-Gnarly=<sig>`, where
+the signature is `registerWsSigner()` over the query bytes. There is no `push_server` to obtain.
+`im/fetch` still runs in the player under `fetchBeforeWsSuccess`, but only as a best-effort first
+page of messages, which is why it can answer 200 with zero bytes to a request with nothing wrong with
+it. `cargo run -p ttl-live-discovery --example live-check` now ends in decoded chat.
 
-A browser also emits URIs that no Rust HTTP client will parse — `browser_version=5.0 (X11;
-Linux x86_64)` contains raw spaces, which fail with "invalid uri character".
-`ws_uri::sanitize_uri` percent-encodes only those, which does not disturb the signature, and
-`LiveConnection::open_uri` applies it automatically.
+Three claims in [docs/12](docs/12-transport-reverse-engineering.md) were withdrawn along the way.
+`room/info` and `gift/list` were believed to prove the signer works; they do not verify signatures at
+all. The transport request was believed to need a signature; the page's allowlist excludes that path.
+And the signature was believed to be wrong in its value; `room/enter` verifies one and accepts ours.
 
-### Accounts are optional
+Everything downstream is built and tested: `ttl-live-ws` connects, heartbeats, and acknowledges,
+`sanitize_uri` escapes the raw spaces the player emits in `browser_version` (which no Rust HTTP
+client will parse) without disturbing the signature, and `ttl-live-events` decodes the frames.
 
-Listening works as a **guest**. Verified anonymously against a real live room on
-2026-08-10: discovery, `unique_id` → `room_id`, `room/info`, `gift/list`, and the page
-WebSocket with its chat events all work with no cookies at all, because TikTok's page serves
-logged-out viewers.
+A socket signature ages out, so `ReconnectingConnection` owns what happens on a close: it re-signs
+and reopens, five attempts by default with a doubling backoff, and reports a refusal rather than
+retrying it — a rejection is a verdict about the request, and a retry loop around one looks like a
+network problem while being a signing one. `live-check` runs on it; `TTL_LISTEN_SECONDS` makes the
+window long enough to watch it work.
 
-Prefer guest. `sessionid` *is* the account, so using one attributes everything the automated
-browser does to it, and an account is not a fix for rate limiting — a fresh guest identity
-is. Log in only for what genuinely needs an identity, such as subscriber-only rooms.
+### Discovery is guest-only-friendly; the socket is not
 
-### Log in
+Discovery needs no account: live search, `unique_id` → `room_id`, `room/info` and `gift/list` all
+answer with no cookies at all, and none of them verifies a signature.
+
+**The message socket does need a session.** A jar-less handshake to
+`/webcast/im/ws_proxy/ws_reuse_supplement/` is refused before the socket opens — an immediate 1006,
+measured 2026-08-18. The older claim here, that listening works as a guest, was about the page
+WebSocket the removed WebView captured, and does not hold on this path.
+
+`sessionid` *is* the account, so everything this sends is attributed to it, and an account is not a
+fix for rate limiting — pace the connections instead.
+
+### Providing a session
+
+There is no interactive login any more: that example opened a real browser window, which is
+exactly what was removed. Export the cookies from a browser where you are already logged in and
+write them as a cookie header:
 
 ```sh
-cargo run -p ttl-sign-webview --example login
-cargo run -p ttl-sign-webview --example login -- --timeout 600
-cargo run -p ttl-sign-webview --example login -- --logout
+install -m 600 /dev/null "$XDG_CONFIG_HOME/ttl-signer/session"
+printf 'sessionid=...; sessionid_ss=...; sid_tt=...; ttwid=...' \
+  > "$XDG_CONFIG_HOME/ttl-signer/session"
 ```
 
-The login example opens a visible TikTok window, polls the `sessionid` cookie, and
-stores the session at `$XDG_CONFIG_HOME/ttl-signer/session` with mode `0600`.
-`TTL_SESSION_ID` takes precedence; `TTL_SESSION_FILE` changes the file path.
+`TTL_SESSION_FILE` changes the path. `sessionid` is the one that matters: without it the message
+socket refuses the handshake outright, and the headless server refuses to start.
+
+`sessionid` **is** the account, so everything done with it is attributed to that account. It is
+also not a fix for rate limiting. Use one only for what genuinely needs an identity — which now
+includes the message socket, since it refuses guests.
 
 ## Usage
 
@@ -332,17 +375,17 @@ cargo test                                        # headless default members
 cargo run -p ttl-live-ws --example rooms -- user1 user2
 
 # Full flow against a live channel
-cargo run -p ttl-sign-webview --example live-check
-cargo run -p ttl-sign-webview --example live-check -- user
+cargo run -p ttl-live-discovery --example live-check
+cargo run -p ttl-live-discovery --example live-check -- user
 
 # Verify schema-registry decoding against a live channel
-cargo run -p ttl-sign-webview --example schema-check -- user
+cargo run -p ttl-live-discovery --example live-check -- user
 
 # Replay a captured request
 cargo run -p ttl-live-ws --example replay -- fixtures/f0/im_fetch.curl
 
 # Start the sign server
-TTL_BIND=127.0.0.1:8080 cargo run -p ttl-sign-server --features webview
+TTL_BIND=127.0.0.1:8080 cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless
 ```
 
 ## Deployment

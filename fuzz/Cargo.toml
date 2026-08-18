@@ -14,8 +14,8 @@ ttl-sign-core = { path = "../crates/ttl-sign-core" }
 ttl-sign-replay = { path = "../crates/ttl-sign-replay" }
 
 [[bin]]
-name = "ws_uri_parser"
-path = "fuzz_targets/ws_uri_parser.rs"
+name = "uri_sanitizer"
+path = "fuzz_targets/uri_sanitizer.rs"
 test = false
 doc = false
 bench = false

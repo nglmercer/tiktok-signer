@@ -1,17 +1,31 @@
 //! TikTok LIVE WebSocket client.
 //!
-//! Consumes a `SignedFetch` and opens the connection. **It does not sign anything**:
-//! `route_params` are already signed by TikTok inside the protobuf.
+//! Opens the connection and keeps it alive. **It does not sign anything.**
+//!
+//! Two ways in, and the second is the live one:
+//!
+//! - [`LiveConnection::open`] consumes a `SignedFetch` — the `push_server` and `route_params` an
+//!   `/webcast/im/fetch/` response used to carry. Kept for fixtures and the replay example.
+//! - [`LiveConnection::open_uri`] takes a URI the caller built and signed. This is what the web
+//!   player does: with `wsDirect` on it builds the socket URI itself and signs the query with
+//!   `registerWsSigner`, so no `im/fetch` response is involved. See
+//!   [`ttl_sign_core::DirectSocketParams`].
 //!
 //! Two things this crate deliberately **does not** do:
 //!
-//! - **It does not reconnect.** Parameters expire after about 30 seconds, so reconnecting
-//!   means restarting the `/webcast/im/fetch/` flow. The orchestrator decides what to do
-//!   with the reported close reason.
+//! - **[`LiveConnection`] does not reconnect.** The signature ages out, so a reconnect means
+//!   re-signing the URI. [`ReconnectingConnection`] is that policy, made once, over any
+//!   `SignerBackend`; this type stays a single socket that reports its close reason and stops.
 //! - **It does not parse events.** It returns decompressed `msg` payloads; event schemas
 //!   belong to the consumer.
+//!
+//! A jar-less handshake is refused before the socket opens (measured: immediate 1006), which is
+//! why [`WsError::EmptyCookies`] is checked before anything is sent.
 
 use std::time::Duration;
+
+pub mod reconnect;
+pub use reconnect::{ReconnectPolicy, ReconnectingConnection, StreamError};
 
 use flate2::read::GzDecoder;
 use futures_util::{SinkExt, StreamExt};
@@ -25,7 +39,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tracing::{debug, error, warn};
 
 use ttl_sign_core::proto::PushFrame;
-use ttl_sign_core::{CookieJar, FetchResult, Preset, SignedFetch, WsParams};
+use ttl_sign_core::{Compression, CookieJar, FetchResult, Preset, SignedFetch, WsParams};
 
 const DEFAULT_HEARTBEAT_SECONDS: u64 = 10;
 const INITIAL_HEARTBEAT_SEQUENCE: u64 = 1;
@@ -81,15 +95,15 @@ pub struct LiveMessage {
 pub struct ConnectConfig {
     /// Matches the `heartbeat_duration=10000` query parameter.
     pub heartbeat: Duration,
-    /// Request compressed frames. Empty means no compression.
-    pub compress: String,
+    /// Compression requested in the socket query, and applied by the server to `msg` payloads.
+    pub compress: Compression,
 }
 
 impl Default for ConnectConfig {
     fn default() -> Self {
         Self {
             heartbeat: Duration::from_secs(DEFAULT_HEARTBEAT_SECONDS),
-            compress: "gzip".into(),
+            compress: Compression::default(),
         }
     }
 }
@@ -174,7 +188,7 @@ impl LiveConnection {
         }
 
         let mut params = WsParams::new(room_id);
-        params.compress = config.compress.clone();
+        params.compress = config.compress;
         params.cursor = result.cursor.clone();
         params.internal_ext = result.internal_ext.clone();
         let uri = params.build_uri(&result.push_server, &result.route_params, preset);

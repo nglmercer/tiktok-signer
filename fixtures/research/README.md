@@ -1,3 +1,8 @@
+> **Removed with the WebView.** The oracle and trace binaries below were driven by a real page and
+> were deleted along with `ttl-sign-webview`. `scripts/headless/` covers signing, the environment
+> surface, transport, and discovery without a browser; the paired URL and trace differentials have
+> no replacement. The commands are kept as a record of how the committed fixtures were produced.
+
 # Controlled research plans
 
 `plan.example.json` is safe configuration, not a captured live observation. Replace its
@@ -122,3 +127,90 @@ default and should be preferred whenever it can answer the research question.
 
 `webmssdk-profile-2026-08-13.json` is the sanitized, machine-readable baseline for the
 confirmed SDK bundle, VM offsets, and output shapes. It contains no captured values.
+
+## Route subgraph extraction
+
+A VM trace describes everything the bundle executed. Reduce it to the reachable subgraph of the
+confirmed signing routes:
+
+```sh
+cargo run -p ttl-sign-lab --bin ttl-sign-subgraph -- \
+  /tmp/ttl-vm-trace.json \
+  --controlled fixtures/research/controlled-observations-2026-08-13.json \
+  --output fixtures/research/signing-subgraph-v1.json
+```
+
+This binary reads an artifact: it needs no WebView, no `webview` feature, and never signs. Pass
+`--route <name>` (repeatable) to extract a single route; the names are `fetch_composition`,
+`ms_token`, `x_dynosaur`, `x_gnarly`, and `frontier_x_bogus`.
+
+The output retains frame entries and parents, call edges, handler slots, operand *widths* and
+helper kinds, sanitized argument and return shape classes, register read/write counts, and
+environment capability flags. It never retains operand values or operand byte strings (they index
+the VM string and numeric constant tables), the string table, bundle source, or any signing
+material. `ttl-fixture-hygiene` enforces this with the `vm-operand-value` rule.
+
+Ordering never depends on hash-map iteration or discovery order: every collection is sorted by a
+total key, so two equivalent traces serialize to identical bytes.
+
+Detect structural Oracle-vs-Oracle regressions between two extractions:
+
+```sh
+cargo run -p ttl-sign-lab --bin ttl-sign-subgraph-diff -- \
+  fixtures/research/signing-subgraph-v1.json /tmp/candidate-subgraph.json
+```
+
+Exit code 2 signals a structural difference — a changed reachable frame set, call edge, handler
+set, operand shape, argument/return shape class, or environment flag. Entropy never produces one:
+signed-value byte lengths, call/step/execution counts, and digests are deliberately excluded, so a
+run that differs only in random values reports zero differences.
+
+### Controlled observations
+
+`controlled-observations-2026-08-13.json` is the paired, one-dimension experiment corpus that
+dependency classification consumes. Each entry names a route, one dimension from the bounded
+vocabulary, and whether the route's sanitized shape moved. Structural capability flags can only
+ever produce `candidate_dependency`; only an entry in this corpus can produce
+`observed_dependency` or `no_observed_effect`.
+
+### Committed subgraph fixture
+
+`signing-subgraph-v1.json` currently carries `"provenance": "derived_from_profile_v1"`: it was
+transcribed from the sanitized `route_frame_map` of the v1 research profile, which records frames,
+edges, step counts, and shapes but no per-opcode attribution. Re-running `ttl-sign-subgraph` over
+a fresh authorized VM trace replaces it with `extracted_from_vm_trace` and fills in the handler
+sets; `ttl-sign-subgraph-diff` then shows exactly what the real extraction added.
+
+## Environment surface fingerprint
+
+Phase 0 of `docs/11-webview-removal.md`: record which browser properties the bundle touches while
+it signs. Both routes to a browser-free build need this list — an embedded JS engine has to shim
+these properties, and a native VM interpreter has to resolve them.
+
+```sh
+cargo run -p ttl-sign-lab --bin ttl-sign-env-surface --features webview -- \
+  fixtures/research/plan.example.json baseline > /tmp/environment-surface.json
+```
+
+The recorder installs proxies over `navigator`, `screen`, `location`, `crypto`, `localStorage`,
+`sessionStorage`, and `document` inside an offscreen iframe, instruments a fixed list of global
+properties (the global object cannot be proxied), then evaluates the **unmodified** bundle and
+drives the patched-fetch path against a stubbed transport. No signed request is sent.
+
+Only shapes are recorded: property path, operation counts (`get`/`set`/`call`/`has`), `typeof`
+class, and byte length. `PropertyAccess` has nowhere to put a value, so `document.cookie` is
+recorded as a length and the cookie never crosses the bridge.
+
+Recording covers bundle evaluation **and** signing, because a shim has to satisfy the SDK at load
+time as well as at sign time.
+
+### Reading the result
+
+Check `instrumentation` before trusting `properties`. A root whose trap failed to install produces
+an empty surface, which is indistinguishable from a root the bundle never touched — so failures
+are recorded explicitly and the binary warns on stderr. A surface with any uninstrumented root is
+incomplete and must not be used as a shim specification.
+
+`missing_shim_coverage` is the gate this artifact exists for: given a surface and the list of paths
+a shim implements, it names every property still missing. A shim is complete when that list is
+empty.
