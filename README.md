@@ -266,8 +266,9 @@ These schemas are **not** MIT-licensed like the rest of the workspace. See
 cargo run -p ttl-live-discovery --example live-check            # full flow, no browser
 cargo run -p ttl-live-discovery --example discover -- <user>    # room info + gift list
 node scripts/headless/find-live.mjs /tmp/webmssdk.js            # who is live now
-node scripts/headless/transport.mjs /tmp/webmssdk.js <user>     # push_server bootstrap
-node scripts/headless/im-fetch-probe.mjs /tmp/webmssdk.js <user>
+node scripts/headless/ws-direct.mjs /tmp/webmssdk.js <room_id>  # the transport, on its own
+node scripts/headless/room-page-scan.mjs @<user>               # what the room page seeds
+node scripts/headless/transport.mjs /tmp/webmssdk.js <user>    # the old im/fetch bootstrap
 ```
 
 The browser probes (`endpoint-probe`, `ws-probe`, `page-probe`, `limit-probe`) were removed with
@@ -306,17 +307,24 @@ the client expects came from the WebSocket URI the player had signed for itself,
 **That route no longer exists.** The engine that captured those URIs was deleted, and on
 2026-08-18 so were the parser and the `live-check --ws-uri` flag that accepted one by hand —
 deliberately, because a fallback that needs a browser once is still a browser dependency, and
-keeping it meant the real problem never had to be solved. The transport is `/webcast/im/fetch/`
+keeping it meant the real problem never had to be solved. The transport is built from first principles
 or nothing.
 
-`im/fetch` does not yet answer with a `push_server`. What is known about why is in
-[docs/12](docs/12-transport-reverse-engineering.md), and two long-standing claims there have been
-withdrawn. `room/info` and `gift/list` were believed to prove the signer works; they do not verify
-signatures at all, so they are now called unsigned. And the transport request was believed to need a
-signature; the page's own allowlist excludes that path, signing it is what produced the 403, and it
-now goes out unsigned. The signer's remaining job is `room/enter`.
+**The transport works, and it is neither.** On 2026-08-18 the player's own transport chunk
+settled it: the live room page configures its IM SDK with `wsDirect: "1"` and a `socketHost`, and the
+SDK then builds and signs the socket URI itself —
+`wss://webcast-ws.tiktok.com/webcast/im/ws_proxy/ws_reuse_supplement/?<query>&X-Gnarly=<sig>`, where
+the signature is `registerWsSigner()` over the query bytes. There is no `push_server` to obtain.
+`im/fetch` still runs in the player under `fetchBeforeWsSuccess`, but only as a best-effort first
+page of messages, which is why it can answer 200 with zero bytes to a request with nothing wrong with
+it. `cargo run -p ttl-live-discovery --example live-check` now ends in decoded chat.
 
-Everything downstream of a `push_server` is built and tested: `ttl-live-ws` connects,
+Three claims in [docs/12](docs/12-transport-reverse-engineering.md) were withdrawn along the way.
+`room/info` and `gift/list` were believed to prove the signer works; they do not verify signatures at
+all. The transport request was believed to need a signature; the page's allowlist excludes that path.
+And the signature was believed to be wrong in its value; `room/enter` verifies one and accepts ours.
+
+Everything downstream is built and tested: `ttl-live-ws` connects,
 heartbeats, and acknowledges, `sanitize_uri` escapes the raw spaces a browser emits in
 `browser_version` (which no Rust HTTP client will parse) without disturbing the signature, and
 `ttl-live-events` decodes the frames.

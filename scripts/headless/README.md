@@ -159,9 +159,40 @@ Note that `/webcast/feed/` — the endpoint the `/live` page itself uses — ans
 empty body for a guest identity, both on `webcast.tiktok.com` and `webcast.us.tiktok.com`, even
 when the issued `x-ms-token` is fed back. The search endpoint is the working route.
 
-## Transport bootstrap
+## The transport
 
-`transport.mjs` signs `/webcast/im/fetch/` and reads the push_server out of the response:
+`ws-direct.mjs` opens the message socket the way the current web player does — no `im/fetch`, no
+`push_server`, no browser:
+
+```sh
+node scripts/headless/ws-direct.mjs /tmp/webmssdk.js <room_id> 20
+```
+
+```text
+query      655 bytes, 29 parameters
+X-Gnarly   332 bytes
+open after 1280 ms
+sent im_enter_room
+30 frame(s), 135440 bytes in 20s
+```
+
+It builds the query the SDK builds (unencoded, `version_code` twice), signs it with
+`registerWsSigner`, connects to
+`wss://webcast-ws.tiktok.com/webcast/im/ws_proxy/ws_reuse_supplement/`, sends the `im_enter_room`
+`PushFrame` and heartbeats. `TTL_PRINT_QUERY=1` prints the query and stops, which is what the Rust
+builder's parity test compares against.
+
+`room-page-scan.mjs` reads a live room page's rehydration data — the experiment flags and hosts it
+seeds the player with. It is what led to the chunk that explained the socket.
+
+```sh
+node scripts/headless/room-page-scan.mjs @<unique_id>
+```
+
+## The old bootstrap, kept for the record
+
+`transport.mjs` signs `/webcast/im/fetch/` and reads the push_server out of the response. That
+endpoint answers this signer 200 with zero bytes, and nothing depends on it any more:
 
 ```sh
 node scripts/headless/transport.mjs /tmp/webmssdk.js <unique_id>

@@ -6,6 +6,67 @@ no devtools** — building it from first principles rather than copying one the 
 Read [11](11-webview-removal.md) first for how the browser-free signer works and what it already
 does.
 
+## Answered, 2026-08-18: the client builds the URI itself
+
+The socket URI is constructible from first principles, and `im/fetch` is not on the path at all.
+
+The live room page configures its IM SDK like this — read from
+`static/js/async/main___live-container/(anchorName).live/page.<hash>.js`:
+
+```js
+s.config({ host, socketHost: "wss://webcast-ws.tiktok.com", wsDirect: "1",
+           fetchBeforeWsSuccess: "1", aid, appName, liveId, versionCode: "270000", ... })
+```
+
+and the SDK's `start()` branches on exactly that:
+
+```js
+this.isDirectSocket()
+  ? ("1" === this._config.fetchBeforeWsSuccess && this._initialization.start({...i, fetchRule: 1}),
+     s.createClient({...i}))
+  : this._initialization.start({...i, fetchRule: 1})
+```
+
+When `wsDirect` is `"1"` and a `socketHost` is set, `createClient()` builds the URI itself:
+
+```text
+wss://webcast-ws.tiktok.com/webcast/im/ws_proxy/ws_reuse_supplement/?<query>&X-Gnarly=<signature>
+```
+
+`<query>` is the SDK's own serialization of the config plus its browser block, and the signature is
+`byted_acrawler.registerWsSigner()({ "X-MS-Q": <query>, "X-MS-STUB": "" })["X-Gnarly"]`. No
+`push_server`, no `route_params`, no `wrss`/`imprp`. The `im/fetch` call still goes out under
+`fetchBeforeWsSuccess`, but only as a best-effort first page of messages — nothing depends on its
+answer, which is why it can return 200 with zero bytes to a request with nothing wrong with it.
+
+Three properties of the query are load-bearing, because the signature covers its bytes verbatim:
+
+- **Nothing is percent-encoded.** `browser_version` keeps its spaces and parentheses, `tz_name` its
+  slash. Encoding them signs bytes the server never sees.
+- **`version_code` appears twice**, `180800` then `270000`: the SDK's browser block supplies one
+  under a snake_case key and the page config the other under a camelCase one, and the serializer
+  emits both.
+- **Order is the SDK's**, not alphabetical.
+
+Verified against live rooms: the socket opens in about 1.3 s, and after the `im_enter_room`
+`PushFrame` it pushes chat, gifts, likes and member events — 30 frames and 135 KB in the first 20
+seconds. Both implementations do this now:
+
+```sh
+node scripts/headless/ws-direct.mjs /tmp/webmssdk.js <room_id> 20
+cargo run -p ttl-live-discovery --example live-check
+```
+
+`DirectSocketParams` (`crates/ttl-sign-core/src/params.rs`) builds the query; a unit test pins its
+bytes against `TTL_PRINT_QUERY=1 node scripts/headless/ws-direct.mjs`, so a change in the player's
+serializer fails a test rather than a connection. `scripts/headless/room-page-scan.mjs` is what found
+the trail: the room page's rehydration data carries the `live_im_sdk_socket_link` experiment and the
+`imFrontier` host.
+
+Everything below is the record of the search that preceded this, kept because its measurements stand
+on their own: `im/fetch` is unsigned by the page, `room/enter` verifies our signature and accepts it,
+and three read endpoints verify nothing at all.
+
 ## What the player actually does
 
 The live web player's transport client is a lazy-loaded chunk,
@@ -19,8 +80,9 @@ read directly from that chunk:
 
 It polls `im/fetch` with `fetchRule: 1`, and when a response arrives with `fetch_type === 1` and a
 non-empty `push_server`, it creates the socket client from `push_server`, `route_params`, and
-`heartbeat_duration`. So the WS URI is **not** independently constructible: `wrss` and `imprp` come
-from that response, and a socket opened without them is refused. Verified against both known hosts.
+`heartbeat_duration`. So the WS URI looked **not** independently constructible: `wrss` and `imprp` come from that
+response. That reading was of the polling path only. The same chunk's `createClient()` builds a URI
+with neither, under `wsDirect` — see the section above.
 
 Two details that matter and are not guessable:
 

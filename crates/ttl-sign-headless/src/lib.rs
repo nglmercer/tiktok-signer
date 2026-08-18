@@ -40,13 +40,22 @@
 //! `room/enter` is the oracle that proves it. `scripts/headless/enter-then-fetch.mjs` runs that
 //! sequence.
 //!
-//! # What still does not work
+//! # This is no longer the transport
 //!
-//! `im/fetch` answers 200 with **zero bytes** — as does `room/enter` — and a zero-byte 200 is not an
-//! application refusal, since a refusal carries a `status_code`. Ruled out: the signature (in either
-//! direction), the query and its three parameter sets, `resp_content_type` (JSON is empty too), the
-//! host (`webcast.us`, `webcast.tiktokv.com`), the `x-tt-target-idc` routing header, identity, and
-//! the room. An empty body is reported as [`RejectReason::EmptyBody`].
+//! `im/fetch` answers 200 with **zero bytes**, and nothing about the request explains it: ruled out
+//! are the signature in either direction, three parameter sets, `resp_content_type`, five hosts, the
+//! `x-tt-target-idc` header, identity down to no cookies, and the room. The player's own code
+//! explains it instead. Its IM SDK is configured with `wsDirect: "1"` and a `socketHost`, and then
+//! builds and signs the message socket URI itself; `im/fetch` still runs under
+//! `fetchBeforeWsSuccess`, but only as a best-effort first page of messages, so nothing depends on
+//! its answer.
+//!
+//! The live path is therefore [`ttl_sign_core::DirectSocketParams`] plus
+//! [`ttl_live_discovery::SigningProduct::WsDirect`], which is what
+//! `cargo run -p ttl-live-discovery --example live-check` runs. This backend is kept because it is
+//! the one place the `im/fetch` request shape is written down correctly, and because the sign
+//! server and the contract tests are built on its [`SignedFetch`]. An empty body is reported as
+//! [`RejectReason::EmptyBody`].
 //!
 //! # What it requires
 //!
