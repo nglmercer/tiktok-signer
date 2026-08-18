@@ -177,3 +177,28 @@ Both routes currently end in 403, and the frontierSign route in an empty 200. Th
 our computed signatures are shorter than the oracle's — `X-Gnarly` 324 against a recorded 332 — which
 points at the signing input rather than the algorithm. See `docs/12-transport-reverse-engineering.md`
 for the plan.
+
+## Canonical input convergence
+
+`canonical-input.mjs` measures what the VM receives at each signing route and prints it beside the
+oracle's recorded value:
+
+```sh
+TTL_URL="$(cargo run -q -p ttl-sign-core --example print-fetch-url -- <room_id>)" \
+  node scripts/headless/canonical-input.mjs /tmp/webmssdk.js 124
+```
+
+```text
+route              entry   input(ours)  input(oracle)   delta   output(ours)  output(oracle)
+X-Gnarly           48886          1278           1274      +4            332             332
+X-Dynosaur         55188             4              4      +0            392             388
+fetch composition  58628           786            786      +0              -               1
+```
+
+Two facts it established: the canonical string tracks the **query** one byte for one byte, and
+`document.cookie` does not enter it at all. Use the project's `FetchParams` query rather than a
+hand-written one — that difference alone was 82 bytes.
+
+`TTL_ENV` overrides shim properties as JSON (`{"navigator.platform":"Win32"}`) for bisection,
+`TTL_PAD` appends a known-length parameter, and `TTL_NO_WEBGL` restores the old empty-canvas
+behaviour that made the signatures short.

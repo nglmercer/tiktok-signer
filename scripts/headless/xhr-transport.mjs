@@ -158,6 +158,18 @@ function makeXhr() {
           origin: 'https://www.tiktok.com',
           referer: ROOM_URL,
           'accept-language': 'en-US,en;q=0.9',
+          // Headers a Chromium XHR sends that Node does not. Listed in docs/12 as a Phase C
+          // suspect; TTL_NO_CLIENT_HINTS drops them so the difference stays measurable.
+          ...(process.env.TTL_NO_CLIENT_HINTS ? {} : {
+            accept: '*/*',
+            'accept-encoding': 'gzip, deflate, br',
+            'sec-ch-ua': '"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Linux"',
+            'sec-fetch-dest': 'empty',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-site': 'same-site',
+          }),
           ...added,
         };
         if (this.withCredentials) {
@@ -245,7 +257,13 @@ for (let attempt = 1; attempt <= 3; attempt += 1) {
   const request = new w.XMLHttpRequest();
   request.timeout = 10000;
   request.responseType = 'arraybuffer';
-  request.open('GET', `https://webcast.tiktok.com/webcast/im/fetch/?${params}`, true);
+  // TTL_URL overrides the query. The parameter set matters: signing over the project's
+  // `FetchParams` query reproduces the oracle's `X-Gnarly` length exactly, while a shorter
+  // hand-written one does not.
+  const target = process.env.TTL_URL
+    ? process.env.TTL_URL.replace(/room_id=\d+/, `room_id=${roomId}`)
+    : `https://webcast.tiktok.com/webcast/im/fetch/?${params}`;
+  request.open('GET', target, true);
   request.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
   request.withCredentials = true;
   request.send();

@@ -1,6 +1,8 @@
 // Synthetic browser shim for webmssdk, with per-path access recording.
 // No browser, no network: every global the bundle resolves comes from here.
 
+import nodeCrypto from 'node:crypto';
+
 export function createSandbox() {
 const accesses = new Map();
   const record = (path, op, value) => {
@@ -49,10 +51,48 @@ const accesses = new Map();
     getItem: () => null, setItem: () => {}, removeItem: () => {}, clear: () => {},
     key: () => null, length: 0,
   });
+  // A canvas that can return a WebGL context. The SDK keeps a `WEBGL` field in its state, and a
+  // `getContext` that always returns null makes that collection silently empty — which shortens
+  // the fingerprint rather than failing. TTL_NO_WEBGL restores the empty behaviour.
+  const WEBGL_PARAMS = {
+    7936: 'WebKit', 7937: 'WebKit WebGL', 7938: 'WebGL 1.0 (OpenGL ES 2.0 Chromium)',
+    35724: 'WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)',
+    37445: 'Google Inc. (Intel)',
+    37446: 'ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL 4.6)',
+    3379: 16384, 34076: 16384, 34921: 16, 35660: 16, 35661: 32, 36349: 1024, 34930: 16,
+  };
+  const webglContext = () => ({
+    getParameter: (p) => (p in WEBGL_PARAMS ? WEBGL_PARAMS[p] : 0),
+    getExtension: (name) => (name === 'WEBGL_debug_renderer_info'
+      ? { UNMASKED_VENDOR_WEBGL: 37445, UNMASKED_RENDERER_WEBGL: 37446 } : null),
+    getSupportedExtensions: () => ['ANGLE_instanced_arrays', 'EXT_blend_minmax', 'OES_texture_float'],
+    getShaderPrecisionFormat: () => ({ rangeMin: 127, rangeMax: 127, precision: 23 }),
+    createBuffer: () => ({}), bindBuffer() {}, bufferData() {}, createProgram: () => ({}),
+    createShader: () => ({}), shaderSource() {}, compileShader() {}, attachShader() {},
+    linkProgram() {}, useProgram() {}, getAttribLocation: () => 0, enableVertexAttribArray() {},
+    vertexAttribPointer() {}, drawArrays() {}, viewport() {}, clearColor() {}, clear() {},
+    canvas: { width: 300, height: 150 },
+  });
   const elementShim = () => ({
     style: {}, setAttribute() {}, getAttribute: () => null, appendChild: (c) => c,
     removeChild: (c) => c, addEventListener() {}, removeEventListener() {},
-    getContext: () => null, remove() {},
+    width: 300, height: 150,
+    toDataURL: () => 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAASw=',
+    getContext: (kind) => {
+      if (process.env.TTL_NO_WEBGL) return null;
+      if (kind === 'webgl' || kind === 'experimental-webgl' || kind === 'webgl2') {
+        return webglContext();
+      }
+      if (kind === '2d') {
+        return {
+          fillText() {}, strokeText() {}, fillRect() {}, arc() {}, beginPath() {}, closePath() {},
+          fill() {}, stroke() {}, measureText: () => ({ width: 42 }), getImageData: () => ({ data: [] }),
+          canvas: { width: 300, height: 150, toDataURL: () => 'data:image/png;base64,iVBORw0KGgo=' },
+        };
+      }
+      return null;
+    },
+    remove() {},
   });
   const documentShim = view('document', {
     cookie: '', createElement: () => elementShim(), createTextNode: () => ({}),
@@ -64,7 +104,17 @@ const accesses = new Map();
     location: locationShim, characterSet: 'UTF-8', hidden: false,
   });
   const cryptoShim = view('crypto', {
-    getRandomValues: (a) => { for (let i = 0; i < a.length; i++) a[i] = (i * 7 + 13) & 255; return a; },
+    // Real entropy by default. A fixed sequence makes runs comparable but pushes the signatures
+  // out of the distribution a browser produces — `X-Dynosaur` came out 384 bytes against the
+  // 388/392/444 the oracle recorded, and `X-Gnarly` signs over it, so both were short.
+  // TTL_DETERMINISTIC restores the fixed sequence for differential work.
+  getRandomValues: (a) => {
+    if (process.env.TTL_DETERMINISTIC) {
+      for (let i = 0; i < a.length; i++) a[i] = (i * 7 + 13) & 255;
+      return a;
+    }
+    return nodeCrypto.getRandomValues(a);
+  },
     randomUUID: () => '00000000-0000-4000-8000-000000000000',
     subtle: {},
   });
