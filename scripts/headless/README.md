@@ -157,3 +157,23 @@ stdout carries the signed URL and nothing else: the bundle prints while it loads
 is redirected to stderr. `ttl_live_discovery::CommandSigner` drives this, and
 `cargo run -p ttl-live-discovery --example discover -- <unique_id>` is the end-to-end path from
 Rust with no browser.
+
+## Transport reverse engineering
+
+`xhr-transport.mjs` drives `/webcast/im/fetch/` the way the live player does — over a real
+`XMLHttpRequest` with `withCredentials`, not `fetch`:
+
+```sh
+node scripts/headless/xhr-transport.mjs /tmp/webmssdk.js <unique_id>
+```
+
+The player's transport client (`static/js/async/9894.*.js`, reachable from the room page's webpack
+manifest) uses XHR exclusively, and webmssdk hooks XHR and `fetch` on separate paths — `XHRSignTime`
+and `fetchSignTime` are distinct fields in its state. The sandbox therefore needs a working
+`XMLHttpRequest`, including the whole event-handler surface: the SDK reassigns `onabort` and friends
+while wrapping `send`, and a missing slot fails as "cannot read properties of undefined".
+
+Both routes currently end in 403, and the frontierSign route in an empty 200. The open lead is that
+our computed signatures are shorter than the oracle's — `X-Gnarly` 324 against a recorded 332 — which
+points at the signing input rather than the algorithm. See `docs/12-transport-reverse-engineering.md`
+for the plan.
