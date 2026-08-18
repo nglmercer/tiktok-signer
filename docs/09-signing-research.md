@@ -211,6 +211,41 @@ Entropy is excluded deliberately, and the exclusions are each asserted by test:
 The guarantee that follows, asserted directly: two captures differing only in random values produce
 zero structural differences.
 
+## Headless execution, and what it settled
+
+The bundle is a **public static asset**. Running it outside a browser needs no account, no live
+room, and no signed request — and it turns out to work. `scripts/headless/` evaluates the real
+bundle against a synthetic environment shim with the transport stubbed:
+
+- The bundle evaluates with **no browser** and exposes all nine `byted_acrawler` functions —
+  exactly the symbol list this document already pinned.
+- `frontierSign` returns a 16-byte `X-Bogus`, matching the oracle's recorded shape.
+- The patched `fetch` appends the complete suffix `X-Dynosaur → msToken → X-Bogus → X-Gnarly`,
+  in that order, with `X-Bogus=1`.
+
+Two structural facts came out of executing what static analysis could only bound.
+
+### The fetch patch is gated on a path allowlist
+
+`init` builds `window._mssdk._enablePathListRegex` from its `enablePathList` option, and the
+patched `fetch` signs only URLs matching it. With no matching entry, `fetch` **is** patched and
+appends nothing — a silent no-op that looks identical to a broken signer. Any native or embedded
+implementation has to reproduce this gate, and any experiment that forgets it measures nothing.
+
+### `msToken` is not computed
+
+`msToken` is a **verbatim passthrough of `localStorage['xmst']`**. A stored token of length *n*
+produces `msToken` of length *n* — confirmed at 124, 132, 152, and 172 bytes, which are precisely
+the lengths in the sampled oracle corpus. With no stored token the parameter is present and empty.
+
+This retires the msToken route as a signing problem. There is no algorithm to recover: the field
+echoes a token the environment already holds. It also explains the earlier cookie observation —
+the synthetic-cookie probe changed the *stored token*, and the length moved with it, which the
+corpus recorded as an input dependency without being able to see the mechanism.
+
+What remains for `msToken` is **acquiring** a valid `xmst`, which is an identity/session problem
+(see [11](11-webview-removal.md), Phase 3), not a signing one.
+
 ## Convergence levels
 
 Progress toward a native signer is reported on this ladder; levels are not skipped when reporting.
@@ -234,7 +269,7 @@ rather than by prose alone.
 | Route | Confirmed | Convergence |
 |---|---|---|
 | fetch composition / suffix order | Four fields, fixed order; `X-Bogus=1` is a stable one-byte literal in the fetch path. Reaches 59051/59053 from 58628 on a 786-byte canonical input. | **L0–L1**: canonical input handling, route reachability, and output shape are reproducible against sanitized oracle observations; the deterministic constant is encoded. |
-| `msToken` | Varies per call; length shifts under a synthetic-cookie probe (paired, same-identity). Eval-phase route; reaches `window` and storage. | **L1 partial**: route reachability, one observed input dependency, and output shape are established; no deterministic intermediate reproduced. |
+| `msToken` | **Resolved**: a verbatim passthrough of `localStorage['xmst']`, confirmed at four token lengths. Not computed. | **L4-capable as a signing field** — there is no transform to reproduce. Blocked on *acquiring* a valid token, which is an identity problem, not a signing one. |
 | `X-Dynosaur` | Varies per call; stable output shape from a four-byte typed-array-shaped input; fans out to four child frames. | **L1 partial**: reachability and shape established; no controlled input dimension moves it; algorithm not recovered. |
 | `X-Gnarly` | Stable 332-byte output; canonical-input length moves under cookie/query/platform/timezone mutations; fans out to four child frames. | **L1 partial**: reachability, four observed input dependencies, and input/output shape established; algorithm not recovered. |
 | public `frontierSign` → `X-Bogus` | Distinct product from the fetch `X-Bogus`; 69021 → 69171 only. | Not a transport route; tracked only to keep it separated from the fetch marker. |
@@ -244,8 +279,13 @@ shapes on every route above — that is what the subgraph fixture and its differ
 automatically. It remains **partial** overall because L1 also requires agreement between Native and
 Oracle, and no native implementation of these routes exists to agree.
 
-L2 and above are **not** claimed for any dynamic route. No deterministic intermediate has been
-reproduced natively, and no field has been reproduced against an authorized oracle value.
+L2 and above are **not** claimed for `X-Dynosaur` or `X-Gnarly`: no deterministic intermediate has
+been reproduced for either, and neither has been checked against an authorized oracle value.
+`msToken` is the exception, and only because it turned out not to be a computation.
+
+Headless execution reproduces the complete suffix *structurally* — correct fields, correct order,
+correct `X-Bogus` constant — but that is not L4. L4 requires agreement with the oracle on the
+values, and L5 requires a live acceptance; neither has been tested.
 
 ## Why NativeBackend is unimplemented, and the next blocker
 
@@ -256,14 +296,20 @@ algorithm from output-length coincidences is explicitly disallowed.
 
 **Exact next blocker, in order:**
 
-1. **Per-opcode attribution.** The committed subgraph is profile-derived and therefore has empty
-   handler sets. One authorized `ttl-sign-vm-trace` run, reduced with `ttl-sign-subgraph`, upgrades
-   it to `extracted_from_vm_trace` and supplies the handler slots, operand widths, and helper kinds
-   each route actually executes. Everything downstream needs this; nothing else does not.
-2. **L2 for one route.** With handler attribution in hand, isolate a deterministic intermediate for
-   `X-Gnarly` — the route whose canonical input is most directly observable, and the one with the
-   most observed input dependencies — and demonstrate it reproduces against sanitized oracle trace
-   shapes, then against an authorized oracle value held outside the repository.
+1. **Oracle agreement on values.** Headless execution now produces the full suffix, so the missing
+   comparison is no longer structural. Sign one controlled case in the WebView and headlessly with
+   the *same* environment and stored token, and compare the fields. This needs one authorized run
+   and settles whether the shim is faithful.
+2. **A real `xmst`.** `msToken` is solved as a transform but unusable without a valid stored token.
+   Acquiring one natively is Phase 3 of [11](11-webview-removal.md).
+3. **`X-Dynosaur` and `X-Gnarly` entropy sources.** Both are stable under every controlled input
+   dimension tested and vary across repeated identical calls, so their variation comes from
+   entropy or SDK state rather than from any input. The headless shim makes this directly testable:
+   its `crypto.getRandomValues` is deterministic, and both fields are correspondingly stable.
+   Establishing *which* source each field draws from is the next real research step.
+
+Per-opcode attribution remains useful for the native-interpreter track, but it is no longer the
+critical path: executing the bundle answered the questions it was meant to bound.
 
 Only opcode semantics reachable from a confirmed route are to be implemented, and an unsupported
 handler must fail explicitly rather than approximate.

@@ -1,0 +1,873 @@
+{
+  "surface_version": 1,
+  "source": {
+    "case_id": "headless-node-baseline",
+    "bundle_endpoint": "https://sf16-website-login.neutral.ttwstatic.com/obj/tiktok_web_login_static/webmssdk/1.0.0.388/webmssdk.js",
+    "bundle": {
+      "sha256": "dee22566273d398e074df6db40f39cfd827f6b8efd6fc382de03c44c501299ac",
+      "bytes": 235357
+    },
+    "product": "fetch",
+    "clock_ms": 0
+  },
+  "instrumentation": [
+    {
+      "root": "window",
+      "installed": true
+    },
+    {
+      "root": "document",
+      "installed": true
+    },
+    {
+      "root": "navigator",
+      "installed": true
+    },
+    {
+      "root": "screen",
+      "installed": true
+    },
+    {
+      "root": "location",
+      "installed": true
+    },
+    {
+      "root": "storage",
+      "installed": true
+    },
+    {
+      "root": "crypto",
+      "installed": true
+    }
+  ],
+  "properties": [
+    {
+      "path": "document.addEventListener",
+      "root": "document",
+      "operations": {
+        "gets": 39,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "function",
+      "byte_lengths": []
+    },
+    {
+      "path": "document.cookie",
+      "root": "document",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "string",
+      "byte_lengths": []
+    },
+    {
+      "path": "document.createElement",
+      "root": "document",
+      "operations": {
+        "gets": 2,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "function",
+      "byte_lengths": []
+    },
+    {
+      "path": "document.createEvent",
+      "root": "document",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "undefined",
+      "byte_lengths": []
+    },
+    {
+      "path": "document.readyState",
+      "root": "document",
+      "operations": {
+        "gets": 2,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "string",
+      "byte_lengths": []
+    },
+    {
+      "path": "localStorage.getItem",
+      "root": "storage",
+      "operations": {
+        "gets": 2,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "function",
+      "byte_lengths": []
+    },
+    {
+      "path": "location.href",
+      "root": "location",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "string",
+      "byte_lengths": []
+    },
+    {
+      "path": "navigator.connection",
+      "root": "navigator",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "object",
+      "byte_lengths": []
+    },
+    {
+      "path": "navigator.userAgent",
+      "root": "navigator",
+      "operations": {
+        "gets": 3,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "string",
+      "byte_lengths": []
+    },
+    {
+      "path": "performance.now",
+      "root": "other",
+      "operations": {
+        "gets": 6,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "function",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.__ac_intercepted_fetch",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 1,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.__dirname",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "undefined",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.__SLARDAR_DEVTOOLS_GLOBAL_HOOK__",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "undefined",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.__SLARDAR_REGISTRY__",
+      "root": "window",
+      "operations": {
+        "gets": 10,
+        "sets": 1,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window._fetch",
+      "root": "window",
+      "operations": {
+        "gets": 0,
+        "sets": 1,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "function",
+      "byte_lengths": []
+    },
+    {
+      "path": "window._mssdk",
+      "root": "window",
+      "operations": {
+        "gets": 25,
+        "sets": 1,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.addEventListener",
+      "root": "window",
+      "operations": {
+        "gets": 5,
+        "sets": 0,
+        "calls": 0,
+        "has": 1
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.Array",
+      "root": "window",
+      "operations": {
+        "gets": 364,
+        "sets": 0,
+        "calls": 0,
+        "has": 10
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.ArrayBuffer",
+      "root": "window",
+      "operations": {
+        "gets": 31,
+        "sets": 0,
+        "calls": 0,
+        "has": 27
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.Buffer",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "undefined",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.byted_acrawler",
+      "root": "window",
+      "operations": {
+        "gets": 3,
+        "sets": 1,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "object",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.console",
+      "root": "window",
+      "operations": {
+        "gets": 3,
+        "sets": 0,
+        "calls": 0,
+        "has": 1
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.DataView",
+      "root": "window",
+      "operations": {
+        "gets": 27,
+        "sets": 0,
+        "calls": 0,
+        "has": 27
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.Date",
+      "root": "window",
+      "operations": {
+        "gets": 367,
+        "sets": 0,
+        "calls": 0,
+        "has": 366
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.decodeURIComponent",
+      "root": "window",
+      "operations": {
+        "gets": 9,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "function",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.define",
+      "root": "window",
+      "operations": {
+        "gets": 2,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "undefined",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.document",
+      "root": "window",
+      "operations": {
+        "gets": 59,
+        "sets": 0,
+        "calls": 0,
+        "has": 22
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.dwInfl",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 1,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "object",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.encodeURI",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "function",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.exports",
+      "root": "window",
+      "operations": {
+        "gets": 2,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "undefined",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.fetch",
+      "root": "window",
+      "operations": {
+        "gets": 2,
+        "sets": 1,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "function",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.Function",
+      "root": "window",
+      "operations": {
+        "gets": 4,
+        "sets": 0,
+        "calls": 0,
+        "has": 2
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.global",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "undefined",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.globalThis",
+      "root": "window",
+      "operations": {
+        "gets": 6,
+        "sets": 1,
+        "calls": 0,
+        "has": 4
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.Headers",
+      "root": "window",
+      "operations": {
+        "gets": 3,
+        "sets": 0,
+        "calls": 0,
+        "has": 1
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.Int32Array",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "function",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.JS_MD5_NO_ARRAY_BUFFER",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "undefined",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.JS_MD5_NO_ARRAY_BUFFER_IS_VIEW",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "undefined",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.JS_MD5_NO_COMMON_JS",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "undefined",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.JS_MD5_NO_NODE_JS",
+      "root": "window",
+      "operations": {
+        "gets": 2,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "undefined",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.JS_MD5_NO_WINDOW",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "undefined",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.localStorage",
+      "root": "window",
+      "operations": {
+        "gets": 3,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "object",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.location",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 1
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.Math",
+      "root": "window",
+      "operations": {
+        "gets": 2543,
+        "sets": 0,
+        "calls": 0,
+        "has": 2234
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.module",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "undefined",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.navigator",
+      "root": "window",
+      "operations": {
+        "gets": 4,
+        "sets": 0,
+        "calls": 0,
+        "has": 3
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.Number",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "function",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.Object",
+      "root": "window",
+      "operations": {
+        "gets": 106,
+        "sets": 0,
+        "calls": 0,
+        "has": 9
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.open",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "undefined",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.parseInt",
+      "root": "window",
+      "operations": {
+        "gets": 16,
+        "sets": 0,
+        "calls": 0,
+        "has": 16
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.performance",
+      "root": "window",
+      "operations": {
+        "gets": 12,
+        "sets": 0,
+        "calls": 0,
+        "has": 12
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.PerformanceLongTaskTiming",
+      "root": "window",
+      "operations": {
+        "gets": 0,
+        "sets": 0,
+        "calls": 0,
+        "has": 1
+      },
+      "value_type": "undefined",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.PerformanceObserver",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 1
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.process",
+      "root": "window",
+      "operations": {
+        "gets": 2,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "undefined",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.RegExp",
+      "root": "window",
+      "operations": {
+        "gets": 6,
+        "sets": 0,
+        "calls": 0,
+        "has": 3
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.Request",
+      "root": "window",
+      "operations": {
+        "gets": 3,
+        "sets": 0,
+        "calls": 0,
+        "has": 1
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.require",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "undefined",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.setTimeout",
+      "root": "window",
+      "operations": {
+        "gets": 5,
+        "sets": 0,
+        "calls": 0,
+        "has": 3
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.String",
+      "root": "window",
+      "operations": {
+        "gets": 4867,
+        "sets": 0,
+        "calls": 0,
+        "has": 867
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.Symbol",
+      "root": "window",
+      "operations": {
+        "gets": 84,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "function",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.Symbol(Symbol.toStringTag)",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "undefined",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.TextDecoder",
+      "root": "window",
+      "operations": {
+        "gets": 2,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "function",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.TextEncoder",
+      "root": "window",
+      "operations": {
+        "gets": 14,
+        "sets": 0,
+        "calls": 0,
+        "has": 9
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.Uint16Array",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "function",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.Uint32Array",
+      "root": "window",
+      "operations": {
+        "gets": 2,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "function",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.Uint8Array",
+      "root": "window",
+      "operations": {
+        "gets": 599,
+        "sets": 0,
+        "calls": 0,
+        "has": 52
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.URL",
+      "root": "window",
+      "operations": {
+        "gets": 6,
+        "sets": 0,
+        "calls": 0,
+        "has": 3
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.window",
+      "root": "window",
+      "operations": {
+        "gets": 92,
+        "sets": 0,
+        "calls": 0,
+        "has": 32
+      },
+      "value_type": "unknown",
+      "byte_lengths": []
+    },
+    {
+      "path": "window.XMLHttpRequest",
+      "root": "window",
+      "operations": {
+        "gets": 1,
+        "sets": 0,
+        "calls": 0,
+        "has": 0
+      },
+      "value_type": "function",
+      "byte_lengths": []
+    }
+  ]
+}

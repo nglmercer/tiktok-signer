@@ -111,10 +111,24 @@ that the subgraph currently cannot distinguish.
 shim covers all of them, so a missing shim is a test failure with a property name attached rather
 than a runtime mystery.
 
-**Status: tooling complete, awaiting one authorized run.** `ttl-sign-env-surface` records the
-surface and `ttl_sign_lab::environment_surface` owns the sanitized model, the coverage gate, and
-the drift comparison. The recorder has not yet been executed against a live page, so no surface
-fixture is committed; the model and script generation are covered by tests that need no browser.
+**Status: complete — and it did not need the browser.** The bundle is a public static asset, so it
+can be executed directly against a synthetic shim with the transport stubbed. `scripts/headless/`
+does exactly that, and `fixtures/research/environment-surface-v1.json` is the committed result.
+
+The surface is **69 properties**, of which only nine are outside `window`:
+
+```text
+document.addEventListener  document.cookie      document.createElement
+document.createEvent       document.readyState  localStorage.getItem
+location.href              navigator.connection navigator.userAgent
+```
+
+That is the entire browser dependency of the signing path. It is far smaller than the phase
+assumed, which is the answer to "is Track A a week or a quarter".
+
+`ttl-sign-env-surface` (the in-page Proxy recorder) remains available and is still the right tool
+for confirming that a *live page* touches nothing the headless run missed. It is now a
+cross-check rather than the only route.
 
 ### Phase 1 — Per-opcode attribution *(already the stated next blocker in [09](09-signing-research.md))*
 
@@ -127,10 +141,23 @@ to the stricter branch automatically.
 
 ### Phase 2 — Track A: `ttl-sign-jsvm`
 
+**Feasibility is no longer in question.** Running the bundle headless under Node already produces
+the complete fetch suffix — `X-Dynosaur → msToken → X-Bogus → X-Gnarly`, with `X-Bogus=1` — with
+all nine SDK functions exposed and a 69-property shim. The remaining work is porting that shim to
+an embedded engine and checking the values against the oracle, not discovering whether it can work.
+
 New crate embedding QuickJS, with the Phase 0 surface implemented as a shim. Wire it as a
 `SigningAlgorithm` **behind the existing `NativeBackend`**, not as a fourth backend — the
 `SignerBackend` contract tests, the `UnsupportedAlgorithm` default, and the "never fabricate,
 never silently reject" guarantees then all apply unchanged.
+
+Two behaviours the shim must reproduce, both discovered by executing rather than reading:
+
+- **The path allowlist.** `init` builds `_mssdk._enablePathListRegex` from `enablePathList`, and
+  the patched `fetch` signs only matching URLs. A missing entry means `fetch` is patched and
+  appends nothing — indistinguishable from a broken signer.
+- **`msToken` is a passthrough** of `localStorage['xmst']`, not a computation. The shim must supply
+  a real stored token; there is nothing to implement.
 
 Convergence, reported on the existing ladder and not skipped:
 
@@ -150,6 +177,8 @@ Independent of the signing track and required by all of them:
 
 - `ttwid` acquisition without a page load, and the guest-identity rotation that
   `rotate_guest_identity` performs today.
+- **`xmst` acquisition.** Now known to be the whole of `msToken`. This moved from the signing
+  workstream to this one, and it is on the critical path for a working native transport.
 - `msToken` cookie lifecycle — note the confirmed observation that the cookie *feeds* the msToken
   route, so the cookie and the signed field are coupled and must be modelled together.
 - Challenge detection and surfacing. The WebView can show a challenge to a human; a headless build
@@ -222,7 +251,7 @@ goal. Do not let B block shipping A.
 ## Sequencing summary
 
 ```text
-Phase 0  environment surface fingerprint   ← do this first, it is cheap and decides everything
+Phase 0  environment surface fingerprint   ✅ done headlessly; 69 properties
 Phase 1  per-opcode attribution            ← scopes Track B
 Phase 2  Track A: JS VM, L0 → L5           ← the browser is gone here
 Phase 3  native identity/session lifecycle ← required regardless of track
@@ -231,7 +260,8 @@ Phase 5  Track B: native interpreter       ← the vendor JS is gone here
 Phase 6  decommission to research-only
 ```
 
-Phases 0 and 1 each need one authorized live run and are otherwise pure tooling. Phase 3 can
+Phase 0 is done and needed no live run. Phase 1 still wants one authorized run, and Phase 2 now
+wants one for value comparison rather than for feasibility. Phase 3 can
 proceed in parallel with Phase 2. Phases 4 and 5 are independent of each other.
 
 ## What does not change
