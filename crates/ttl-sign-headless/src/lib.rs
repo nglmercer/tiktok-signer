@@ -66,11 +66,11 @@
 use std::time::Duration;
 
 use ttl_live_discovery::{SigningProduct, UrlSigner};
-use ttl_sign_core::params::FetchParams;
+use ttl_sign_core::params::{DirectSocketParams, FetchParams};
 use ttl_sign_core::proto::FetchResult;
 use ttl_sign_core::{
     BackendFuture, ClientIdentity, CookieJar, Preset, RejectReason, SignError, SignOutcome,
-    SignedFetch, SignerBackend, TransportRequest,
+    SignedFetch, SignerBackend, TransportRequest, WS_REUSE_PATH,
 };
 
 /// Default ceiling on one signing round trip, including the signer subprocess.
@@ -138,6 +138,35 @@ impl HeadlessBackend {
             .is_some_and(|value| !value.is_empty())
     }
 
+    /// Issue the legacy `/webcast/im/fetch/` request, trying both `sup_ws_ds_opt` values.
+    ///
+    /// **Not the transport.** It is kept because it is the only Rust statement of that request's
+    /// shape, and because the shape is not settled history: on 2026-08-18 one signed attempt was
+    /// answered with 120,290 bytes and a real `push_server`, and the next two with 403
+    /// (`fixtures/research/bisect-ledger.json`). A caller wanting to reproduce that must configure
+    /// its signer with a product this route accepts — [`TRANSPORT_PRODUCT`] is the socket's, and
+    /// signs the wrong thing here.
+    pub async fn im_fetch(&self, room_id: &str) -> SignOutcome {
+        let mut last = SignOutcome::Rejected(RejectReason::EmptyBody);
+        for option in WS_DS_OPTIONS {
+            match self.attempt(room_id, option).await {
+                outcome @ SignOutcome::Ok(_) => return outcome,
+                // Only an empty body is worth retrying under the other option; a transport error or
+                // a real refusal will not change.
+                SignOutcome::Rejected(RejectReason::EmptyBody) => {
+                    tracing::debug!(
+                        room_id,
+                        sup_ws_ds_opt = option,
+                        "empty transport response; trying the other option"
+                    );
+                    last = SignOutcome::Rejected(RejectReason::EmptyBody);
+                }
+                other => return other,
+            }
+        }
+        last
+    }
+
     async fn attempt(&self, room_id: &str, sup_ws_ds_opt: u8) -> SignOutcome {
         let mut params = FetchParams::new(room_id);
         params.sup_ws_ds_opt = sup_ws_ds_opt;
@@ -172,6 +201,103 @@ impl HeadlessBackend {
 
         build_outcome(status, &signed, body, self.session.clone(), &self.preset)
     }
+}
+
+/// Heartbeat the synthesized result advertises, matching the query it was built from.
+const HEARTBEAT_DURATION_MS: u64 = 10_000;
+
+/// A cursor a client can start from.
+///
+/// `tiktok-live-connector` refuses a result whose cursor is empty, and the socket does not need a
+/// real one: the server sends the current state after `im_enter_room`. The player's own cold start
+/// sends `0` for the same reason.
+const COLD_START_CURSOR: &str = "0";
+
+impl HeadlessBackend {
+    /// Build and sign the socket URL, and describe it the way a client expects.
+    ///
+    /// This is the transport. Nothing is sent here: the URL *is* the product, and the client opens
+    /// it. That is what the player does — with `wsDirect` on it builds the socket URL itself and
+    /// signs the query with `registerWsSigner`, rather than asking `/webcast/im/fetch/` for a
+    /// `push_server`.
+    ///
+    /// The result is packed into TikTok's own `ProtoMessageFetchResult` shape because that is the
+    /// contract every client of this server already speaks: `push_server` carries the host and path,
+    /// and `route_params` every query parameter including the signature.
+    ///
+    /// Clients rebuild the query from that map rather than sending our bytes — `URLSearchParams`
+    /// reorders it, re-encodes the spaces, and collapses the duplicated `version_code`. Measured on
+    /// 2026-08-18: the socket accepts the rebuilt query and pushes frames, so the verifier is not
+    /// byte-exact. That is what makes this shape safe to hand out.
+    async fn direct_socket(&self, room_id: &str) -> SignOutcome {
+        let mut params = DirectSocketParams::new(room_id);
+        if let Some(webid) = self
+            .session
+            .get("tt_webid_v2")
+            .filter(|value| !value.is_empty())
+        {
+            params.device_id = webid.to_string();
+        }
+        let unsigned = params.url(&self.preset);
+
+        let signed = match self.signer.sign(&unsigned).await {
+            Ok(signed) => signed,
+            Err(error) => {
+                return SignOutcome::Transport(SignError::BackendUnavailable(error.to_string()))
+            }
+        };
+
+        let Some((host, query)) = signed.split_once('?') else {
+            return SignOutcome::Transport(SignError::BackendUnavailable(
+                "the signer returned a socket URL with no query".into(),
+            ));
+        };
+        if !query.contains("X-Gnarly=") {
+            // Without the signature the handshake is refused, and a client cannot tell that from a
+            // dead room. Fail here, where the reason is still legible.
+            return SignOutcome::Transport(SignError::BackendUnavailable(
+                "the signer returned no X-Gnarly; the socket product was not used".into(),
+            ));
+        }
+
+        let result = FetchResult {
+            cursor: COLD_START_CURSOR.into(),
+            internal_ext: String::new(),
+            route_params: route_params(query),
+            heartbeat_duration: HEARTBEAT_DURATION_MS,
+            need_ack: true,
+            push_server: host.to_string(),
+        };
+
+        SignOutcome::Ok(SignedFetch {
+            protobuf: result.encode(),
+            cookies: self.session.clone(),
+            user_agent: self.preset.user_agent(),
+            signed_url: signed,
+        })
+    }
+}
+
+/// Split a signed query into the `route_params` map a client rebuilds its URL from.
+///
+/// Values are percent-decoded, because the client percent-encodes them again on the way out and
+/// would otherwise send `%253D` where the signature covered `=`.
+fn route_params(query: &str) -> Vec<(String, String)> {
+    let mut params: Vec<(String, String)> = Vec::new();
+    for pair in query.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let value = ttl_sign_core::params::percent_decode(value);
+        // The query carries `version_code` twice and a map cannot; last wins, which is the same
+        // collapse the client would perform. Measured to still be accepted.
+        match params.iter_mut().find(|(name, _)| name == key) {
+            Some(slot) => slot.1 = value,
+            None => params.push((key.to_string(), value)),
+        }
+    }
+    params
 }
 
 /// Classify the response.
@@ -209,27 +335,7 @@ pub fn build_outcome(
 
 impl SignerBackend for HeadlessBackend {
     fn transport(&self, request: TransportRequest) -> BackendFuture<'_> {
-        Box::pin(async move {
-            let mut last = SignOutcome::Rejected(RejectReason::EmptyBody);
-            for option in WS_DS_OPTIONS {
-                let outcome = self.attempt(&request.room_id, option).await;
-                match outcome {
-                    SignOutcome::Ok(_) => return outcome,
-                    // Only an empty body is worth retrying under the other option; a transport
-                    // error or a real refusal will not change.
-                    SignOutcome::Rejected(RejectReason::EmptyBody) => {
-                        tracing::debug!(
-                            room_id = %request.room_id,
-                            sup_ws_ds_opt = option,
-                            "empty transport response; trying the other option"
-                        );
-                        last = SignOutcome::Rejected(RejectReason::EmptyBody);
-                    }
-                    other => return other,
-                }
-            }
-            last
-        })
+        Box::pin(async move { self.direct_socket(&request.room_id).await })
     }
 
     fn identity(&self) -> ClientIdentity {
@@ -237,11 +343,16 @@ impl SignerBackend for HeadlessBackend {
     }
 }
 
-/// The signing product `/webcast/im/fetch/` accepts.
+/// The signing product the transport requires.
 ///
-/// Exposed so a caller configuring [`ttl_live_discovery::CommandSigner`] cannot pick the other one
-/// by accident; the patched-fetch suffix is rejected with 403 on this route.
-pub const TRANSPORT_PRODUCT: SigningProduct = SigningProduct::FrontierSign;
+/// Exposed so a caller configuring [`ttl_live_discovery::CommandSigner`] cannot pick another by
+/// accident. The socket is signed by `registerWsSigner` over the query bytes; the patched-fetch
+/// suffix and `frontierSign` produce parameters this endpoint ignores, and the handshake is then
+/// refused with a bare 1006 that looks like a dead room.
+pub const TRANSPORT_PRODUCT: SigningProduct = SigningProduct::WsDirect;
+
+/// The socket path every signed result points at.
+pub const TRANSPORT_PATH: &str = WS_REUSE_PATH;
 
 #[cfg(test)]
 mod tests {
@@ -353,9 +464,31 @@ mod tests {
         assert_eq!(backend.identity().user_agent, preset().user_agent());
     }
 
-    /// Pinning the product is the point: the transport endpoint refuses the other one with 403.
+    /// Pinning the product is the point: the socket ignores the parameters the other two products
+    /// add, and then refuses the handshake with a bare 1006 that reads like a dead room.
     #[test]
-    fn the_transport_route_uses_the_public_signing_product() {
-        assert_eq!(TRANSPORT_PRODUCT, SigningProduct::FrontierSign);
+    fn the_transport_route_uses_the_socket_signing_product() {
+        assert_eq!(TRANSPORT_PRODUCT, SigningProduct::WsDirect);
+    }
+
+    /// A client rebuilds its URL from `route_params`, so what goes in there has to survive that.
+    #[test]
+    fn route_params_decode_values_and_collapse_the_duplicate_version_code() {
+        let params = route_params(
+            "version_code=180800&room_id=7&tz_name=America%2FNew_York&version_code=270000\
+&X-Gnarly=ab%2Fcd",
+        );
+        let by_name = |name: &str| {
+            params
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+        };
+        assert_eq!(params.iter().filter(|(k, _)| k == "version_code").count(), 1);
+        // Last wins, which is the same collapse the client performs on its own map.
+        assert_eq!(by_name("version_code").as_deref(), Some("270000"));
+        // Decoded, because the client encodes them again on the way out.
+        assert_eq!(by_name("tz_name").as_deref(), Some("America/New_York"));
+        assert_eq!(by_name("X-Gnarly").as_deref(), Some("ab/cd"));
     }
 }

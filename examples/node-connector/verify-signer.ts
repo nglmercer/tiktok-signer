@@ -2,7 +2,7 @@
 //
 // The Node client normally signs through Euler Stream. Pointing `SignConfig.basePath` at
 // the local server makes it call our `GET /webcast/rooms/{room_id}/connect` instead, so the
-// signature is produced by the WebView in this repository and nothing leaves for a
+// signature is produced by this repository's headless signer and nothing leaves for a
 // third-party signing service.
 //
 //   cargo run -p ttl-sign-server            # terminal 1
@@ -46,9 +46,13 @@ if (!USERNAME) {
 SignConfig.basePath = SIGN_SERVER;
 SignConfig.apiKey = undefined;
 
-// The signer returns the query TikTok's own player signed. The connector would otherwise
-// merge ~27 parameters of its own and append `&version_code=270000`, sending a query that
-// does not match the signature. Emptying the defaults leaves only our `route_params`.
+// The signer returns the query TikTok's own player signed, as `route_params`. The connector
+// would otherwise merge ~27 parameters of its own and append `&version_code=270000`, sending
+// a query with two sets of browser fields in it. Emptying the defaults leaves ours.
+//
+// The connector still rebuilds the query from that map — reordered, re-encoded, and with the
+// duplicated `version_code` collapsed. Measured 2026-08-18: the socket accepts that and pushes
+// frames, so the signature does not have to survive as bytes, only as values.
 //
 // The declared type pins each known key, so replacing the whole record needs a cast; the
 // runtime contract is only "an object of query parameters".
@@ -107,7 +111,7 @@ async function main(): Promise<void> {
 
   const state = await connection.connect();
   console.log(`\nconnected: roomId=${state.roomId}`);
-  console.log('the signature came from the local WebView, not from Euler Stream\n');
+  console.log('the signature came from the local signer, not from Euler Stream\n');
 
   await new Promise((resolve) => setTimeout(resolve, EVENT_TIMEOUT_MS));
   connection.disconnect();

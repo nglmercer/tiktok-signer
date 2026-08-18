@@ -1,6 +1,7 @@
 //! Live sign-server with no browser.
 //!
-//! Same HTTP surface as the WebView server; the difference is entirely in the backend. Signing
+//! Same HTTP surface as the WebView server it replaced; the difference is entirely in the backend.
+//! Signing
 //! runs through an external signer process rather than a page, so this binary's dependency tree
 //! contains no `wry`.
 //!
@@ -12,7 +13,8 @@
 //!   cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless
 //! ```
 //!
-//! `/webcast/im/fetch/` refuses guests, so an account session is required. It is read from
+//! The message socket refuses a jar-less handshake, so an account session is required. It is read
+//! from
 //! `TTL_SESSION_FILE`, else `$XDG_CONFIG_HOME/ttl-signer/session` — the same file the WebView
 //! path uses. The server refuses to start without one rather than serving requests that would all
 //! come back empty.
@@ -69,8 +71,8 @@ async fn main() -> Result<()> {
         .unwrap_or_default();
     anyhow::ensure!(
         session.get("sessionid").is_some_and(|v| !v.is_empty()),
-        "no account session found. /webcast/im/fetch/ refuses guests, so every request would \
-         return an empty body. Create it as a cookie header (name=value; ...) containing at \
+        "no account session found. The message socket refuses guests, so every request would \
+         be refused at the handshake. Create it as a cookie header (name=value; ...) containing at \
          least sessionid, exported from a browser where you are logged in."
     );
 

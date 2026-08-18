@@ -2,6 +2,12 @@
 //!
 //! Deliberately thin layer: translates HTTP ↔ [`ttl_sign_core::SignerBackend`] calls and has
 //! no signing logic or browser dependency of its own.
+//!
+//! The body it returns is a `ProtoMessageFetchResult`, which is what every client of this
+//! specification decodes. Since 2026-08-18 the headless backend assembles that locally from a
+//! signed socket URL rather than relaying one from `/webcast/im/fetch/`: `push_server` carries the
+//! host and path, `route_params` every query parameter including the signature. Clients rebuild the
+//! query from that map, and the socket accepts the result.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

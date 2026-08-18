@@ -15,12 +15,12 @@ return live data, and `/webcast/room/enter/` **accepts this project's signature*
 unsigned and `X-Bogus`-only requests with 403 and accepts the full computed suffix with 200, which is
 positive proof the signing is correct.
 
-The transport still does not deliver. `/webcast/im/fetch/` answers 200 with an empty body, and the
-captured-URI fallback was removed rather than kept, so there is currently **no working transport**.
-Two long-standing defects were fixed on the way there: the transport request was being *signed*,
-which draws a 403 because the page does not sign that path, and its query was ours rather than the
-player's. Neither was the empty body. See
-[docs/12](docs/12-transport-reverse-engineering.md) — including the claims withdrawn that day.
+**The transport works, with no browser and no `im/fetch`.** The live player builds its message
+socket URL itself and signs the query with `registerWsSigner`, so it is constructible from first
+principles: `cargo run -p ttl-live-discovery --example live-check` ends in decoded chat, and
+`tiktok-live-connector` runs against the local sign server. `/webcast/im/fetch/` answers 200 with an
+empty body and it no longer matters — nothing depends on its answer. See
+[docs/12](docs/12-transport-reverse-engineering.md), including the claims withdrawn on the way.
 
 | Crate | Status |
 |---|---|
@@ -296,19 +296,19 @@ The Node client calls `GET /webcast/rooms/{room_id}/connect` (the Python client 
 `/webcast/fetch`); both are served, and the connect route also returns `X-Room-Id`, which
 the Node client reads back.
 
-**Verified 2026-08-10 against live rooms: it works.** 203 events — chat, likes, members,
-follows, viewer counts — reached `tiktok-live-connector` with no Euler Stream involved.
+**Verified 2026-08-18 against a live room: it works, browser-free.** 324 events — chat, likes,
+members, follows, gifts, viewer counts — reached `tiktok-live-connector` with no Euler Stream and no
+rendering engine involved.
 
-That run predates the WebView's removal, and it worked the only way it could at the time:
-`/webcast/im/fetch/` answers this signer with an empty body, so the `ProtoMessageFetchResult`
-the client expects came from the WebSocket URI the player had signed for itself, which
-`bridge.js` recorded before the connection was attempted.
+The earlier run of this example, on 2026-08-10, worked only because the WebView had captured a URI
+the player signed for itself. That engine was removed, and so was the `--ws-uri` flag that let one be
+pasted in by hand: a fallback that needs a browser once is still a browser dependency, and keeping it
+meant the real problem never had to be solved.
 
-**That route no longer exists.** The engine that captured those URIs was deleted, and on
-2026-08-18 so were the parser and the `live-check --ws-uri` flag that accepted one by hand —
-deliberately, because a fallback that needs a browser once is still a browser dependency, and
-keeping it meant the real problem never had to be solved. The transport is built from first principles
-or nothing.
+What the server hands back now is assembled locally. `push_server` carries the socket host and path,
+`route_params` every parameter of the signed query, and the client rebuilds the URL from that map —
+reordered, re-encoded, with the duplicated `version_code` collapsed. The socket accepts that, which
+is what makes the shape safe to hand to a client that was written for Euler Stream.
 
 **The transport works, and it is neither.** On 2026-08-18 the player's own transport chunk
 settled it: the live room page configures its IM SDK with `wsDirect: "1"` and a `socketHost`, and the
@@ -354,12 +354,12 @@ printf 'sessionid=...; sessionid_ss=...; sid_tt=...; ttwid=...' \
   > "$XDG_CONFIG_HOME/ttl-signer/session"
 ```
 
-`TTL_SESSION_FILE` changes the path. `sessionid` is the one that matters: without it
-`/webcast/im/fetch/` answers with an empty body, and the headless server refuses to start.
+`TTL_SESSION_FILE` changes the path. `sessionid` is the one that matters: without it the message
+socket refuses the handshake outright, and the headless server refuses to start.
 
 `sessionid` **is** the account, so everything done with it is attributed to that account. It is
 also not a fix for rate limiting. Use one only for what genuinely needs an identity — which now
-includes the transport endpoint, since it refuses guests.
+includes the message socket, since it refuses guests.
 
 ## Usage
 
