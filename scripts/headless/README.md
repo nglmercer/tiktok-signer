@@ -77,3 +77,37 @@ how a fresh client obtains one.
 
 Because `room/info` and `gift/list` succeed with the same machinery, the signature is demonstrably
 valid and `im/fetch` is blocked on something else. See `docs/11-webview-removal.md`.
+
+## Finding live channels
+
+`find-live.mjs` lists channels that are live right now, without a browser:
+
+```sh
+node scripts/headless/find-live.mjs /tmp/webmssdk.js          # keyword defaults to "live"
+node scripts/headless/find-live.mjs /tmp/webmssdk.js music 20
+```
+
+```text
+10 live now (keyword "live")
+
+  viewers  room_id              user
+     2336  7675315929085037333  @josecompartiedopalabra
+           Oración de fe 🙏
+     1933  7675333220732275457  @_elizaayala
+```
+
+This replaces the last renderer-bound capability. The WebView reads live channels out of the
+rendered `/live` DOM because that page ships no channel data in its HTML — but
+`/api/search/live/full/` returns the same rooms as JSON, and the headless signer can sign it. The
+response carries the room id, viewer count, title, and owner directly, so no follow-up lookup is
+needed.
+
+Rows are ready to feed straight into the other probes:
+
+```sh
+node scripts/headless/native-check.mjs /tmp/webmssdk.js josecompartiedopalabra
+```
+
+Note that `/webcast/feed/` — the endpoint the `/live` page itself uses — answers `200` with an
+empty body for a guest identity, both on `webcast.tiktok.com` and `webcast.us.tiktok.com`, even
+when the issued `x-ms-token` is fed back. The search endpoint is the working route.

@@ -13,7 +13,11 @@
 //! | `unique_id` → `room_id` | none | **yes** |
 //! | `/webcast/room/info/` | a signature | no |
 //! | `/webcast/gift/list/` | a signature | no |
-//! | who is live now | a rendering engine | no, and not by signing |
+//! | who is live now | a signature | no |
+//!
+//! "Who is live now" was previously believed to need a rendering engine, because the `/live` page
+//! ships no channel data in its HTML. It does not: `/api/search/live/full/` returns the same
+//! information as JSON, and it is signable. See `scripts/headless/find-live.mjs`.
 //!
 //! Parsing and URL construction live in [`ttl_sign_core::room`] and are shared with the WebView
 //! path, so a native lookup and a page lookup cannot disagree about what "live" means.
@@ -64,8 +68,12 @@ pub enum Requirement {
     None,
     /// The request must carry a webmssdk signature, so it depends on the signing workstream.
     Signature,
-    /// The data is produced by client-side rendering and is absent from the served HTML. No
+    /// The data is produced by client-side rendering and is absent from any JSON endpoint. No
     /// amount of signing progress makes this native.
+    ///
+    /// Nothing currently carries this requirement: the one operation that appeared to — listing
+    /// who is live — turned out to have a signable JSON endpoint. The variant is kept because the
+    /// distinction is real and the next capability audited may need it.
     Renderer,
 }
 
@@ -73,8 +81,11 @@ pub enum Requirement {
 pub fn requirement(operation: DiscoveryOperation) -> Requirement {
     match operation {
         DiscoveryOperation::RoomLookup => Requirement::None,
-        DiscoveryOperation::RoomInfo | DiscoveryOperation::GiftList => Requirement::Signature,
-        DiscoveryOperation::LiveChannels => Requirement::Renderer,
+        // `LiveChannels` reads `/api/search/live/full/`, which is signed like any webcast call.
+        // The `/live` DOM is one source of this list, not the only one.
+        DiscoveryOperation::RoomInfo
+        | DiscoveryOperation::GiftList
+        | DiscoveryOperation::LiveChannels => Requirement::Signature,
     }
 }
 
@@ -224,23 +235,23 @@ mod tests {
         );
         assert_eq!(
             requirement(DiscoveryOperation::LiveChannels),
-            Requirement::Renderer
+            Requirement::Signature
         );
         assert_eq!(native_operations(), vec![DiscoveryOperation::RoomLookup]);
     }
 
-    /// Signing progress must never be read as making the renderer-bound operation native.
+    /// Every operation must be reachable once signing works. A `Renderer` requirement would mean
+    /// a capability no signing progress can ever deliver, so it must be justified by evidence
+    /// rather than by an untested assumption — as `LiveChannels` was until a signable JSON
+    /// endpoint for it was found.
     #[test]
-    fn no_operation_is_both_signature_and_renderer_bound() {
+    fn nothing_is_renderer_bound_without_evidence() {
         for operation in DiscoveryOperation::ALL {
-            let requirement = requirement(operation);
-            if operation == DiscoveryOperation::LiveChannels {
-                assert_eq!(
-                    requirement,
-                    Requirement::Renderer,
-                    "live channels need rendering; a signature does not help"
-                );
-            }
+            assert_ne!(
+                requirement(operation),
+                Requirement::Renderer,
+                "{operation:?} is marked renderer-bound; confirm no JSON endpoint serves it"
+            );
         }
     }
 

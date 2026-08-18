@@ -19,13 +19,17 @@ into three independent problems:
 |---|---|---|---|
 | 1 | **Signing** | `fetch`, `fetch_with`, `sign_url`, `sign_ws_uri`, `page_ws_fetch_result`, and — indirectly — `room_info` and `gift_list`, which the page's patched `fetch` signs for free | executing or reproducing the webmssdk transform |
 | 2 | **Identity and session bootstrap** | `ttwid` / `msToken` cookie acquisition, `rotate_guest_identity`, `challenge` / `wait_for_challenge`, `reload` | a native cookie/challenge lifecycle |
-| 3 | **Rendered-DOM discovery** | `live_channels` | a different discovery source entirely |
+| 3 | ~~Rendered-DOM discovery~~ | `live_channels` | **solved** — `/api/search/live/full/` serves the same list as signable JSON |
 
-Problem 3 deserves emphasis because it is easy to miss: `live_channels` reads the **rendered** DOM,
-and the crate documents that "a raw `GET` is insufficient: the client renders the data, so raw HTML
-is empty." No amount of signing progress removes that. Conversely, `room_lookup` is documented as
-**unsigned** — it runs in the page only to reuse the session and User-Agent — so it is already
-native-ready today.
+Problem 3 looked like the hard one: `live_channels` reads the **rendered** DOM, and the `/live`
+page genuinely ships no channel data — its HTML contains no `wss://`, no `push_server`, and its
+embedded rehydration blob is A/B configuration. The conclusion drawn from that, *that no signing
+progress could ever make it native*, was wrong. The DOM is one source of the list, not the only
+one: `/api/search/live/full/` returns the same rooms as JSON, and it signs like any other endpoint.
+
+The lesson worth keeping: "the page renders this" establishes that one route needs a browser, not
+that every route does. `room_lookup` was already native because it is **unsigned**; `live_channels`
+is native because it is merely **signed**.
 
 So the honest framing is: solving signing gets you most of the way, but a browser-free build still
 needs answers for 2 and 3.
@@ -240,7 +244,7 @@ room on 2026-08-18:
 
 | Step | WebView | Headless | Result |
 |---|---|---|---|
-| who is live now | rendered `/live` DOM | — | **renderer-bound**, no native path |
+| who is live now | rendered `/live` DOM | signed `/api/search/live/full/` | **200**, live rooms with ids and viewer counts |
 | `unique_id` → `room_id` | page fetch | plain HTTP | **200**, same room id |
 | guest identity | page navigation | `GET /@user/live` | **issues `ttwid`, `tt_csrf_token`, `tt_chain_token`** |
 | `msToken` | page state | `im/fetch` 403 response | **issues a 124-byte token** |
