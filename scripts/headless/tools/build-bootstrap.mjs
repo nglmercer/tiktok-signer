@@ -46,6 +46,18 @@ if (typeof globalThis.console === 'undefined') {
   globalThis.console = { log() {}, info() {}, warn() {}, error() {}, debug() {}, trace() {} };
 }
 
+// Randomness. An engine embedded in a Rust process has no \`crypto\`, so the host installs
+// \`__ttl_random_bytes(n)\` before evaluating this file and the shim's random source is wired to it
+// here. Filling the array in JavaScript avoids handing a typed array back across the boundary.
+if (typeof globalThis.crypto === 'undefined'
+    && typeof globalThis.__ttl_random_bytes === 'function') {
+  globalThis.TTL_RANDOM_SOURCE = (array) => {
+    const bytes = globalThis.__ttl_random_bytes(array.length);
+    for (let at = 0; at < array.length; at += 1) array[at] = bytes[at];
+    return array;
+  };
+}
+
 if (typeof globalThis.queueMicrotask === 'undefined') {
   globalThis.queueMicrotask = (callback) => { Promise.resolve().then(callback); };
 }
@@ -215,78 +227,69 @@ if (typeof globalThis.URL === 'undefined') {
 const DRIVER = `
 // --- the driver ------------------------------------------------------------------------------------
 //
-// The same pinned profile \`scripts/headless/lib/sign.mjs\` uses: frozen clock, frozen
-// \`performance\`, \`Math.random\` fixed, the deterministic entropy sequence, one user agent, one
-// stored token. Two runs must be byte-identical, and so must two *engines* — that is the whole
-// acceptance test for embedding.
+// One entry point per thing a host needs: prepare a sandbox with the bundle loaded, then sign URLs
+// against it. Keeping the prepared sandbox is the whole reason to embed an engine — the 235 KB parse
+// and the SDK's initialisation happen once instead of per signature.
+//
+// The three products are the same three \`scripts/headless/sign-url.mjs\` exposes, and for the same
+// reason: they are not interchangeable, and sending the wrong one draws a 403 that looks exactly
+// like a broken signer.
+//
+//   fetch     the patched-fetch suffix (X-Dynosaur, msToken, X-Bogus, X-Gnarly)
+//   frontier  the public frontierSign product, a real 16-byte X-Bogus
+//   ws        registerWsSigner over the query bytes, appended as X-Gnarly
+//
+// \`pinned\` freezes the clock, \`performance\`, \`Math.random\` and the entropy sequence, which is
+// what makes two runs — and two *engines* — comparable. Production leaves it off: a signature that
+// repeats is not one a browser would produce.
 
 const TTL_FIXED_NOW = 1787000000000;
-const TTL_USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) '
-  + 'Chrome/131.0.0.0 Safari/537.36';
+const TTL_DEFAULT_USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
+  + '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
-/// Load the bundle once and keep the loaded sandbox. This is the whole point of embedding: today
-/// every signature pays for a process start and a 235 KB parse, and a warm context pays neither.
-globalThis.ttlPrepare = function ttlPrepare(bundleSource) {
-  const prepared = ttlEnvironment();
-  const failure = prepared.env.load(bundleSource);
-  if (failure) return JSON.stringify({ error: \`bundle failed to load: \${failure.message}\` });
-  const sdk = prepared.w.byted_acrawler;
-  if (!sdk) return JSON.stringify({ error: 'the bundle exposed no byted_acrawler' });
-  sdk.init({ aid: 1988, enablePathList: ['/webcast/'] });
-  globalThis.__ttlPrepared = prepared;
-  return JSON.stringify({ ok: true });
-};
-
-/// Sign against the prepared sandbox. The clock is frozen, so repeated calls must agree.
-globalThis.ttlSignUrl = function ttlSignUrl(url) {
-  const prepared = globalThis.__ttlPrepared;
-  if (!prepared) return JSON.stringify({ error: 'ttlPrepare was not called' });
-  globalThis.__ttlCaptured = null;
-  prepared.w.fetch(url, { method: 'GET' });
-  return JSON.stringify({ signed: globalThis.__ttlCaptured });
-};
-
-globalThis.ttlSign = function ttlSign(bundleSource, url) {
-  const prepared = JSON.parse(globalThis.ttlPrepare(bundleSource));
-  if (prepared.error) return JSON.stringify(prepared);
-  return globalThis.ttlSignUrl(url);
-};
-
-/// The pinned environment, built once per prepared sandbox.
-function ttlEnvironment() {
-  globalThis.TTL_SHIM_OPTIONS = { TTL_DETERMINISTIC: 1 };
+function ttlEnvironment(options) {
+  globalThis.TTL_SHIM_OPTIONS = { TTL_DETERMINISTIC: options.pinned ? 1 : 0 };
   const env = createSandbox();
   const w = env.windowTarget;
 
   const quiet = () => {};
   w.console = { log: quiet, info: quiet, warn: quiet, error: quiet, debug: quiet, trace: quiet };
 
-  const FrozenDate = function FrozenDate(...args) {
-    return args.length ? new Date(...args) : new Date(TTL_FIXED_NOW);
-  };
-  FrozenDate.now = () => TTL_FIXED_NOW;
-  FrozenDate.parse = Date.parse;
-  FrozenDate.UTC = Date.UTC;
-  FrozenDate.prototype = Date.prototype;
-  w.Date = FrozenDate;
-  w.performance = {
-    now: () => 1234.5,
-    timeOrigin: TTL_FIXED_NOW,
-    timing: { navigationStart: TTL_FIXED_NOW },
-    getEntriesByType: () => [],
-  };
-  w.Math = Object.create(Math);
-  w.Math.random = () => 0.42;
+  if (options.pinned) {
+    const FrozenDate = function FrozenDate(...args) {
+      return args.length ? new Date(...args) : new Date(TTL_FIXED_NOW);
+    };
+    FrozenDate.now = () => TTL_FIXED_NOW;
+    FrozenDate.parse = Date.parse;
+    FrozenDate.UTC = Date.UTC;
+    FrozenDate.prototype = Date.prototype;
+    w.Date = FrozenDate;
+    w.performance = {
+      now: () => 1234.5,
+      timeOrigin: TTL_FIXED_NOW,
+      timing: { navigationStart: TTL_FIXED_NOW },
+      getEntriesByType: () => [],
+    };
+    w.Math = Object.create(Math);
+    w.Math.random = () => 0.42;
+  }
 
-  const token = 'x'.repeat(124);
+  // The stored token is the caller's to supply. The pinned profile keeps the synthetic 124-byte one
+  // \`lib/sign.mjs\` uses, so its signatures stay comparable; production starts with none and gets a
+  // real one from the session.
+  const token = options.xmst === undefined
+    ? (options.pinned ? 'x'.repeat(124) : null)
+    : options.xmst;
   w.localStorage = {
-    getItem: (key) => (key === 'xmst' ? token : null),
+    getItem: (key) => (key === 'xmst' ? token || null : null),
     setItem() {}, removeItem() {}, clear() {}, key: () => null, length: 0,
   };
-  Object.defineProperty(w.document, 'cookie', { configurable: true, get: () => '', set() {} });
-  Object.defineProperty(w.navigator, 'userAgent', { configurable: true, get: () => TTL_USER_AGENT });
+  const cookie = options.cookie || '';
+  Object.defineProperty(w.document, 'cookie', { configurable: true, get: () => cookie, set() {} });
+  Object.defineProperty(w.navigator, 'userAgent', {
+    configurable: true, get: () => options.userAgent || TTL_DEFAULT_USER_AGENT,
+  });
 
-  globalThis.__ttlCaptured = null;
   w.fetch = function (input) {
     globalThis.__ttlCaptured = typeof input === 'string' ? input : String(input && input.url);
     return Promise.resolve({
@@ -298,9 +301,88 @@ function ttlEnvironment() {
   return { env, w };
 }
 
-/// Read back after the host has drained its job queue, for engines that resolve promises later.
-globalThis.ttlCaptured = function ttlCaptured() {
-  return JSON.stringify({ signed: globalThis.__ttlCaptured });
+/// Load the bundle once and keep the loaded sandbox.
+globalThis.ttlPrepare = function ttlPrepare(bundleSource, optionsJson) {
+  let options = {};
+  try {
+    options = optionsJson ? JSON.parse(optionsJson) : {};
+  } catch (error) {
+    return JSON.stringify({ error: \`options are not JSON: \${error}\` });
+  }
+  if (options.pinned === undefined) options.pinned = true;
+
+  const prepared = ttlEnvironment(options);
+  const failure = prepared.env.load(bundleSource);
+  if (failure) return JSON.stringify({ error: \`bundle failed to load: \${failure.message}\` });
+
+  const sdk = prepared.w.byted_acrawler;
+  if (!sdk) return JSON.stringify({ error: 'the bundle exposed no byted_acrawler' });
+  // The patched fetch only signs paths on the allowlist init builds, so it covers the whole
+  // webcast surface rather than one path.
+  sdk.init({ aid: 1988, enablePathList: ['/webcast/'] });
+
+  globalThis.__ttlPrepared = prepared;
+  return JSON.stringify({ ok: true });
+};
+
+/// Sign one URL against the prepared sandbox.
+globalThis.ttlSignUrl = function ttlSignUrl(url, product) {
+  const prepared = globalThis.__ttlPrepared;
+  if (!prepared) return JSON.stringify({ error: 'ttlPrepare was not called' });
+  const sdk = prepared.w.byted_acrawler;
+
+  try {
+    if (product === 'ws') {
+      // The socket signature covers the query exactly as sent, so the bytes are taken from the URL
+      // verbatim rather than through URL/URLSearchParams, which would re-encode them.
+      const at = url.indexOf('?');
+      if (at === -1) return JSON.stringify({ error: 'a socket URL must carry a query' });
+      const query = url.slice(at + 1);
+      // \`registerWsSigner\` is a one-shot: calling it hands back the signer and removes itself, so
+      // a second call finds nothing. A subprocess never noticed — it signs once and exits — but a
+      // warm context must keep what it was given, which is exactly what the player does with its
+      // own cached copy.
+      if (!prepared.wsSigner) {
+        if (typeof sdk.registerWsSigner !== 'function') {
+          return JSON.stringify({ error: 'this bundle exposes no registerWsSigner' });
+        }
+        prepared.wsSigner = sdk.registerWsSigner();
+      }
+      const signer = prepared.wsSigner;
+      const signed = typeof signer === 'function'
+        ? signer({ 'X-MS-Q': query, 'X-MS-STUB': '' })
+        : null;
+      const gnarly = signed && signed['X-Gnarly'];
+      if (!gnarly) return JSON.stringify({ error: 'registerWsSigner produced no X-Gnarly' });
+      return JSON.stringify({ signed: \`\${url}&X-Gnarly=\${encodeURIComponent(gnarly)}\` });
+    }
+
+    if (product === 'frontier') {
+      const out = sdk.frontierSign({ url });
+      const bogus = out && out['X-Bogus'];
+      if (!bogus) return JSON.stringify({ error: 'frontierSign returned no X-Bogus' });
+      const separator = url.indexOf('?') === -1 ? '?' : '&';
+      return JSON.stringify({
+        signed: \`\${url}\${separator}X-Bogus=\${encodeURIComponent(bogus)}\`,
+      });
+    }
+
+    globalThis.__ttlCaptured = null;
+    prepared.w.fetch(url, { method: 'GET' });
+    if (!globalThis.__ttlCaptured) {
+      return JSON.stringify({ error: 'the patched fetch did not sign the request' });
+    }
+    return JSON.stringify({ signed: globalThis.__ttlCaptured });
+  } catch (error) {
+    return JSON.stringify({ error: \`\${product || 'fetch'} threw: \${error}\` });
+  }
+};
+
+/// Prepare and sign in one call. Used by the spike and by anything signing exactly once.
+globalThis.ttlSign = function ttlSign(bundleSource, url, product) {
+  const prepared = JSON.parse(globalThis.ttlPrepare(bundleSource));
+  if (prepared.error) return JSON.stringify(prepared);
+  return globalThis.ttlSignUrl(url, product || 'fetch');
 };
 `;
 

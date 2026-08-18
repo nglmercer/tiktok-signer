@@ -1,0 +1,18 @@
+[package]
+name = "ttl-sign-embedded"
+description = "Signs in-process by running the real bundle in an embedded QuickJS context."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+ttl-live-discovery = { workspace = true }
+
+rand = { workspace = true }
+rquickjs = "0.12"
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

@@ -19,12 +19,13 @@ required-features = ["replay"]
 [features]
 default = []
 replay = ["dep:ttl-sign-replay"]
-headless = ["dep:ttl-sign-headless", "dep:ttl-live-discovery"]
+headless = ["dep:ttl-sign-headless", "dep:ttl-live-discovery", "dep:ttl-sign-embedded"]
 
 [dependencies]
 ttl-sign-core = { workspace = true }
 ttl-sign-replay = { workspace = true, optional = true }
 ttl-sign-headless = { workspace = true, optional = true }
+ttl-sign-embedded = { workspace = true, optional = true }
 ttl-live-discovery = { workspace = true, optional = true }
 
 anyhow = { workspace = true }

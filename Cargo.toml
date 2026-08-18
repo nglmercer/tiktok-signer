@@ -10,6 +10,7 @@ members = [
     "crates/ttl-fixture-hygiene",
     "crates/ttl-live-discovery",
     "crates/ttl-sign-headless",
+    "crates/ttl-sign-embedded",
     "crates/ttl-live-ws",
     "crates/ttl-live-proto",
     "crates/ttl-live-events",
@@ -23,6 +24,7 @@ default-members = [
     "crates/ttl-fixture-hygiene",
     "crates/ttl-live-discovery",
     "crates/ttl-sign-headless",
+    "crates/ttl-sign-embedded",
     "crates/ttl-live-ws",
     "crates/ttl-live-proto",
     "crates/ttl-live-events",
@@ -42,6 +44,7 @@ ttl-sign-lab = { path = "crates/ttl-sign-lab" }
 ttl-sign-native = { path = "crates/ttl-sign-native" }
 ttl-live-discovery = { path = "crates/ttl-live-discovery" }
 ttl-sign-headless = { path = "crates/ttl-sign-headless" }
+ttl-sign-embedded = { path = "crates/ttl-sign-embedded" }
 ttl-live-ws = { path = "crates/ttl-live-ws" }
 ttl-live-proto = { path = "crates/ttl-live-proto" }
 ttl-live-events = { path = "crates/ttl-live-events" }

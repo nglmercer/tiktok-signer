@@ -16,6 +16,7 @@ tokio = { workspace = true, features = ["process"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
+ttl-sign-embedded = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 ttl-sign-core = { workspace = true }
 ttl-sign-headless = { workspace = true }

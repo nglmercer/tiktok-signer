@@ -7,6 +7,11 @@ this document used to be almost entirely about.
 What it does need: the Rust binary, Node 19.7 or newer (for `Headers.getSetCookie`), the signer
 script, the signing bundle, and an account session.
 
+**`TTL_SIGNER=embedded` removes the Node requirement too.** The same sandbox then runs in a QuickJS
+context inside the server process — no subprocess per signature, and 70–89 ms instead of 95–105 ms.
+It is opt-in for now; see [13 — Embedded runtime](13-embedded-runtime.md) for the measurements and
+the parity test behind it. With it set, a deployment is the binary, the bundle and the session.
+
 ## Container
 
 ```sh

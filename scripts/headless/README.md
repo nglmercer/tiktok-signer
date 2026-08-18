@@ -185,6 +185,21 @@ precisely so they cannot disagree:
 node scripts/headless/tools/gen-canvas.mjs
 ```
 
+## Tools
+
+| Tool | Purpose |
+|---|---|
+| `tools/gen-canvas.mjs` | regenerates `lib/canvas.mjs`, the canvas fingerprint as data |
+| `tools/build-bootstrap.mjs` | flattens the sandbox into one classic script for an embedded engine |
+| `tools/sign-pinned.mjs` | signs under the pinned profile in V8, the reference half of the parity test |
+
+`build-bootstrap.mjs` writes `crates/ttl-sign-embedded/bootstrap.js`, which the Rust signer embeds.
+Regenerate it after editing the shim — `cargo test -p ttl-sign-embedded` fails if it has drifted:
+
+```sh
+node scripts/headless/tools/build-bootstrap.mjs crates/ttl-sign-embedded/bootstrap.js
+```
+
 ## Shared modules
 
 Three files under `lib/`, and everything else imports them rather than re-deriving them:

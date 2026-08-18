@@ -23,7 +23,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use tracing::{info, warn};
-use ttl_live_discovery::CommandSigner;
+use ttl_live_discovery::{CommandSigner, UrlSigner};
+use ttl_sign_embedded::{EmbeddedSigner, Profile};
 use ttl_sign_core::{CookieJar, DevicePreset, LocationPreset, Preset, ScreenPreset};
 use ttl_sign_headless::{HeadlessBackend, HeadlessConfig, TRANSPORT_PRODUCT};
 use ttl_sign_server::{router, AppState};
@@ -81,11 +82,36 @@ async fn main() -> Result<()> {
         LocationPreset::us_east(),
         ScreenPreset::FHD,
     );
-    let signer = CommandSigner::node(script.clone(), bundle.clone())
-        .with_product(TRANSPORT_PRODUCT)
-        .with_user_agent(preset.user_agent())
-        .with_cookie(session.to_cookie_string());
-    let backend = HeadlessBackend::new(HeadlessConfig::new(preset, session), Box::new(signer))
+    // Two signers, one trait. `TTL_SIGNER=embedded` runs the bundle in an in-process QuickJS
+    // context instead of spawning `node` per signature: same sandbox source, byte-identical output
+    // under a pinned profile (`cargo test -p ttl-sign-embedded`), and no 235 KB parse each time.
+    // The subprocess stays the default until the parity test has been green for a while.
+    let embedded = matches!(
+        std::env::var("TTL_SIGNER").as_deref(),
+        Ok("embedded") | Ok("quickjs")
+    );
+    let signer: Box<dyn UrlSigner> = if embedded {
+        let source = std::fs::read_to_string(&bundle)
+            .with_context(|| format!("could not read the signing bundle at {bundle}"))?;
+        let profile = Profile {
+            user_agent: Some(preset.user_agent()),
+            cookie: Some(session.to_cookie_string()),
+            ..Profile::default()
+        };
+        info!(%bundle, "signing in-process with an embedded engine");
+        Box::new(
+            EmbeddedSigner::with_product(source, profile, TRANSPORT_PRODUCT)
+                .context("could not start the embedded signer")?,
+        )
+    } else {
+        Box::new(
+            CommandSigner::node(script.clone(), bundle.clone())
+                .with_product(TRANSPORT_PRODUCT)
+                .with_user_agent(preset.user_agent())
+                .with_cookie(session.to_cookie_string()),
+        )
+    };
+    let backend = HeadlessBackend::new(HeadlessConfig::new(preset, session), signer)
         .context("could not build the headless backend")?;
 
     if !backend.is_authenticated() {

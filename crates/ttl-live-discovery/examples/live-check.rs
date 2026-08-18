@@ -25,11 +25,12 @@ use std::time::Duration;
 use ttl_live_events::{decode_batch, LiveEvent};
 use ttl_live_ws::{ConnectConfig, ReconnectPolicy, ReconnectingConnection};
 
-use ttl_live_discovery::{CommandSigner, DiscoveryClient, DiscoveryError};
+use ttl_live_discovery::{CommandSigner, DiscoveryClient, DiscoveryError, UrlSigner};
 use ttl_sign_core::{
     CookieJar, DevicePreset, LocationPreset, Preset, ScreenPreset, DIRECT_SOCKET_HOST as SOCKET_HOST,
     WS_REUSE_PATH,
 };
+use ttl_sign_embedded::{EmbeddedSigner, Profile};
 use ttl_sign_headless::{HeadlessBackend, HeadlessConfig, TRANSPORT_PRODUCT};
 
 fn session() -> CookieJar {
@@ -164,13 +165,42 @@ async fn main() {
     }
     // Through the same backend the sign server uses, so this example exercises the production path
     // rather than a parallel copy of it. It builds the socket URL, has it signed, and describes it.
-    let signer = CommandSigner::node(script, bundle)
-        .with_product(TRANSPORT_PRODUCT)
-        .with_user_agent(preset.user_agent())
-        .with_cookie(jar.to_cookie_string());
+    // `TTL_SIGNER=embedded` runs the bundle in-process instead of spawning `node` per signature.
+    let signer: Box<dyn UrlSigner> = if matches!(
+        std::env::var("TTL_SIGNER").as_deref(),
+        Ok("embedded") | Ok("quickjs")
+    ) {
+        let source = std::fs::read_to_string(&bundle).unwrap_or_else(|error| {
+            eprintln!("\nFAILED: could not read {bundle}: {error}");
+            std::process::exit(1);
+        });
+        println!("      signing in-process with an embedded engine");
+        Box::new(
+            EmbeddedSigner::with_product(
+                source,
+                Profile {
+                    user_agent: Some(preset.user_agent()),
+                    cookie: Some(jar.to_cookie_string()),
+                    ..Profile::default()
+                },
+                TRANSPORT_PRODUCT,
+            )
+            .unwrap_or_else(|error| {
+                eprintln!("\nFAILED: could not start the embedded signer: {error}");
+                std::process::exit(1);
+            }),
+        )
+    } else {
+        Box::new(
+            CommandSigner::node(script, bundle)
+                .with_product(TRANSPORT_PRODUCT)
+                .with_user_agent(preset.user_agent())
+                .with_cookie(jar.to_cookie_string()),
+        )
+    };
     let backend = match HeadlessBackend::new(
         HeadlessConfig::new(preset.clone(), jar.clone()),
-        Box::new(signer),
+        signer,
     ) {
         Ok(backend) => backend,
         Err(error) => {

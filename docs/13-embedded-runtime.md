@@ -86,12 +86,48 @@ project's stated targets.
 For the browser target specifically, embed nothing: the page already has an engine. Compile the
 Rust core to `wasm32` and run the same flattened bootstrap through `wasm-bindgen`.
 
+## What was built on that decision
+
+`crates/ttl-sign-embedded` holds a warm QuickJS context on its own thread — a QuickJS context is not
+`Send` — and implements the same `UrlSigner` trait as `CommandSigner`, so the sign server and
+`live-check` swap between them with `TTL_SIGNER=embedded` and nothing else changes. It signs all
+three products, and its `Profile` carries the user agent, cookie jar and stored token the sandbox
+should report.
+
+Measured through the sign server against a live room, same machine, same rooms:
+
+| Signer | Latency per signature |
+|---|---|
+| subprocess (`node`, current default) | 95–105 ms |
+| **embedded (QuickJS, warm)** | **70–89 ms** |
+
+The gap is smaller than the raw engine numbers suggest — most of the subprocess cost is Node's
+start-up and the 235 KB parse, and most of the embedded cost is QuickJS being an interpreter. What
+the embedded path buys beyond the milliseconds is that there is no Node on the host at all.
+
+### One thing the subprocess was hiding
+
+`byted_acrawler.registerWsSigner` is a **one-shot**: it hands back the signer and removes itself, so
+a second call finds nothing. A process that signs once and exits never notices. A warm context does,
+and the second socket signature failed with "this bundle exposes no registerWsSigner" until the
+driver started keeping what it was given — which is exactly what the player does with its own cached
+copy. `crates/ttl-sign-embedded/tests/warm.rs` signs 25 times to keep it that way.
+
+That is the general shape of the risk in this migration: not that an engine computes a different
+signature, but that a warm context exercises the SDK in ways a fresh process never did.
+
 ## Reproducing
 
 ```sh
 node scripts/headless/tools/build-bootstrap.mjs
 cargo run --release --manifest-path spikes/embed-spike/Cargo.toml --features quickjs -- /tmp/webmssdk.js
 cargo run --release --manifest-path spikes/embed-spike/Cargo.toml --features boa -- --probe
+```
+
+```sh
+cargo test -p ttl-sign-embedded          # parity against V8, and the warm-context regressions
+TTL_SIGNER=embedded cargo run -p ttl-live-discovery --example live-check
+TTL_SIGNER=embedded cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless
 ```
 
 `spikes/embed-spike` is deliberately not a workspace member: these dependencies are heavy and must
