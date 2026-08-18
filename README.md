@@ -15,12 +15,28 @@ return live data, and `/webcast/room/enter/` **accepts this project's signature*
 unsigned and `X-Bogus`-only requests with 403 and accepts the full computed suffix with 200, which is
 positive proof the signing is correct.
 
-**The transport works, with no browser and no `im/fetch`.** The live player builds its message
-socket URL itself and signs the query with `registerWsSigner`, so it is constructible from first
-principles: `cargo run -p ttl-live-discovery --example live-check` ends in decoded chat, and
-`tiktok-live-connector` runs against the local sign server. `/webcast/im/fetch/` answers 200 with an
-empty body and it no longer matters — nothing depends on its answer. See
-[docs/12](docs/12-transport-reverse-engineering.md), including the claims withdrawn on the way.
+**The transport works, with no browser and no `im/fetch`.** The live room page configures its IM
+SDK with `wsDirect: "1"` and a `socketHost`, and the SDK then builds and signs the socket URI itself:
+
+```text
+wss://webcast-ws.tiktok.com/webcast/im/ws_proxy/ws_reuse_supplement/?<query>&X-Gnarly=<sig>
+```
+
+where the signature is `registerWsSigner()` over the query bytes. There is no `push_server` to
+obtain, so the URI is constructible from first principles — `cargo run -p ttl-live-discovery
+--example live-check` ends in decoded chat, and `tiktok-live-connector` runs against the local sign
+server. `im/fetch` still runs in the player under `fetchBeforeWsSuccess`, as a best-effort first page
+of messages, which is why it can answer 200 with zero bytes to a request with nothing wrong with it.
+
+Three long-standing claims were withdrawn on the way there, all in
+[docs/12](docs/12-transport-reverse-engineering.md): `room/info` and `gift/list` were believed to
+prove the signer works (they verify nothing); the transport request was believed to need a signature
+(the page's allowlist excludes that path); and the signature was believed to be wrong in its value
+(`room/enter` verifies one and accepts ours).
+
+Downstream is built and tested: `ttl-live-ws` connects, heartbeats, acknowledges, and reconnects,
+`sanitize_uri` escapes the raw spaces the player emits in `browser_version` (which no Rust HTTP
+client will parse) without disturbing the signature, and `ttl-live-events` decodes the frames.
 
 | Crate | Status |
 |---|---|
@@ -39,8 +55,8 @@ Default tests are offline and deterministic. Run the offline server with:
 cargo run -p ttl-sign-server --bin ttl-sign-replay-server --features replay
 ```
 
-The live server is explicit, and needs the signing bundle plus an account session — the
-transport endpoint answers guests with an empty body:
+The live server is explicit, and needs the signing bundle plus an account session — the message
+socket refuses a jar-less handshake:
 
 ```sh
 curl -s -o /tmp/webmssdk.js \
@@ -69,18 +85,32 @@ sha256sum /tmp/webmssdk.js   # compare with fixtures/research/webmssdk-profile-2
 ```
 
 ```sh
+# does the player still build the transport the way we do? 55 facts, exit 1 on drift
+node scripts/headless/player-audit.mjs
+
 # what each signing route produces, and which product each endpoint accepts
 node scripts/headless/sign-probe.mjs /tmp/webmssdk.js
-node scripts/headless/im-fetch-probe.mjs /tmp/webmssdk.js <user>
+node scripts/headless/verify-probe.mjs /tmp/webmssdk.js <room_id> all
+
+# which inputs reach a signature at all, and where in it they land
+node scripts/headless/value-differential.mjs /tmp/webmssdk.js
+node scripts/headless/byte-map.mjs /tmp/webmssdk.js
 
 # the browser surface the bundle touches, as a shim specification
 node scripts/headless/emit-surface.mjs /tmp/webmssdk.js \
   fixtures/research/environment-surface-v1.json
 
-# transport bootstrap, and channels that are live now
-node scripts/headless/transport.mjs /tmp/webmssdk.js <user>
+# the transport itself, and channels that are live now
+node scripts/headless/ws-direct.mjs /tmp/webmssdk.js <room_id> 20
 node scripts/headless/find-live.mjs /tmp/webmssdk.js
 ```
+
+`player-audit.mjs` is the one to run first when something breaks. It reads the socket hosts, paths,
+both `version_code` values, the query serializer's behaviour, and three protobuf field maps back out
+of the shipped app, and diffs them against `fixtures/research/player-transport-v1.json`; a
+`ttl-sign-core` test then asserts that fixture against the builder. So the chain is covered end to
+end — player's chunk → fixture → test → `DirectSocketParams` → the wire — and a TikTok deploy fails a
+test instead of producing a socket that opens and never speaks.
 
 Offline analysis of a captured VM trace needs no network at all:
 
@@ -103,44 +133,43 @@ The example room id is synthetic. Replace it only with a room you are authorized
 > environment surface, transport, and discovery; the paired URL/trace differentials have no
 > replacement, and `ttl-sign-lab`'s offline comparison tools remain.
 
-> Protobuf field numbers are confirmed against a real response
-> (`2 = cursor`, `5 = internal_ext`, `7 = route_params`, `10 = push_server`).
-> Capture with:
->
-> `node scripts/headless/transport.mjs /tmp/webmssdk.js`
+> `ProtoMessageFetchResult` field numbers were confirmed against a real response
+> (`2 = cursor`, `5 = internal_ext`, `7 = route_params`, `10 = push_server`) and are what the sign
+> server now *writes* rather than reads. The socket's own three messages — `PushFrame`, `EnterRoom`,
+> `HeartBeat` — are checked against the player's descriptors by `player-audit.mjs`.
 
-### Verified flow (2026-08-10)
+### Verified flow (2026-08-18)
+
+Every row measured with no browser, no display, and no captured artefact.
 
 | Step | Status |
 |---|---|
-| Discover live channels | Works through the rendered `/live` DOM. |
-| `unique_id` → `room_id` | Works without signing or a display. |
-| Room info and gift table | Works; `/webcast/room/info/` and `/webcast/gift/list/` are read as JSON from the page. |
-| Page-signed URI reused outside the WebView | Works; delivers `msg` frames with no `/webcast/im/fetch/` call. |
-| Page-owned WebSocket | Works; TikTok signs and opens it. |
-| Room entry and heartbeat | Managed by TikTok's page and observed over IPC. |
-| Receive protobuf frames | Works; multiple `msg` frames received in live validation. |
+| Discover live channels | `/api/search/live/full/` as JSON. Unsigned. |
+| `unique_id` → `room_id` | Unsigned. |
+| Room info and gift table | Unsigned — neither endpoint verifies a signature (`verify-probe.mjs`). |
+| Build the socket URL | From first principles: the player's own query, signed with `registerWsSigner`. |
+| Open the socket | 101, then `im_enter_room`; a jar-less handshake is refused with 1006. |
+| Receive and decode frames | 203 frames and 555 events in a 150-second soak. |
+| Reconnect after a close | Re-signs and reopens; a refusal is reported rather than retried. |
 
-`/webcast/im/fetch/` is no longer used anywhere on a critical path: it returns a silent
-empty-body rejection for this signer, with or without a session. Clients that need its
-protobuf are served a result rebuilt from the player's own signed socket URI instead — see
-the connector section below.
+`/webcast/im/fetch/` is on no critical path. Clients that expect its protobuf are served a
+`ProtoMessageFetchResult` assembled locally from the signed socket URL — see the connector section
+below.
 
 ### Room state
 
-The WebSocket reports *changes*; it never reports the room as it already is. Two endpoints
-on `webcast.tiktok.com` fill that gap. They are signed, but the page's patched `fetch` signs
-them, and unlike `/webcast/im/fetch/` they answer with CORS headers, so the body is readable
-from inside the page:
+The socket reports *changes*; it never reports the room as it already is. Two endpoints on
+`webcast.tiktok.com` fill that gap, and both are **unsigned** — a one-character tamper and a
+signature-free request return byte-identical data, which `scripts/headless/verify-probe.mjs`
+measures:
 
 ```rust
-let info = signer.room_info(&room_id).await?;   // title, owner, viewers, likes, cover
-let gifts = signer.gift_list(&room_id).await?;  // gift id → name and diamond cost
+let info = client.room_info(&room_id).await?;   // title, owner, viewers, likes, cover
+let gifts = client.gift_list(&room_id).await?;  // gift id → name and diamond cost
 ```
 
-Call both after navigating to the room's live page. `gift_list` returns a few megabytes
-(626 gifts in the verified room), so request it once per session and keep the table: gift
-events carry only a `gift_id`, and pricing them requires it.
+`gift_list` returns a few megabytes (673 gifts in the verified room), so request it once per session
+and keep the table: gift events carry only a `gift_id`, and pricing them requires it.
 
 ### Refusals and verification
 
@@ -156,35 +185,9 @@ There is deliberately **no table of known codes**. Rate-limit and verification c
 not been observed first-hand here, and constants invented for them would mislabel whatever
 TikTok actually sends. Check `error.is_refusal()`, log the real code, and back off.
 
-When a refusal might mean "prove you are human", ask the page directly:
-
-```rust
-if signer.challenge().await?.present {
-    signer.set_window_visible(true).await?;      // hand the puzzle to a person
-    signer.wait_for_challenge(Duration::from_secs(180)).await?;
-    signer.set_window_visible(false).await?;
-}
-```
-
-Detection is by observable effect — a captcha container that is actually laid out — not by
-guessed status codes, so an ordinary error is not reported as a challenge. Measured as
-`present: false` on a healthy page.
-
-### Rotating a throttled identity
-
-`ttwid` and `msToken` identify the *device*, not a person, so a guest that TikTok has
-started refusing can simply become a different guest:
-
-```rust
-if error.is_refusal() {
-    signer.rotate_guest_identity().await?;   // new device, then reload
-}
-```
-
-Verified: `ttwid` and `msToken` both change and the engine keeps working. This is the
-concrete payoff of staying a guest — an account cannot be rotated. Rotation discards warmed
-browsing state, so use it in response to a refusal, not on a timer. A deliberately
-configured session survives, because the bridge reinstalls those cookies on every document.
+A refusal that means "prove you are human" has **no handler here any more**. The old one showed the
+page's captcha to a person and waited — it needed a browser window, which is exactly what was
+removed. Nothing in this workspace can solve one, and nothing pretends to: log the code and stop.
 
 ### Gift streaks
 
@@ -204,15 +207,21 @@ table completes immediately — reporting it once beats never reporting it.
 
 ### Recovery
 
-`subscribe_live_events` and `subscribe_schema_events` survive the page losing its transport.
-TikTok's page normally reconnects on its own; if it has not done so within 15 seconds, the
-engine reloads the page, which makes it sign, connect, and re-enter the room from scratch.
-After three failed attempts the subscription reports that the room is gone rather than
-reloading forever. `Signer::reload()` exposes the same step manually.
+A socket signature ages out, and rooms restart their push servers. `ReconnectingConnection` owns
+what happens on a close: it **re-signs** and reopens — reusing a stale URI is the failure it exists
+to avoid — five attempts by default with a doubling backoff capped at a minute.
 
-Subscriber queues are bounded. A consumer that stops reading is disconnected instead of
-being served a stream with silently missing frames — a closed channel is diagnosable, a gap
-in a protobuf event stream is not.
+A refusal is reported rather than retried. A rejection is a verdict about the request, so a retry
+loop around one looks like a network problem while being a signing one.
+
+```rust
+let mut stream = ReconnectingConnection::open(
+    backend, room_id, ConnectConfig::default(), ReconnectPolicy::default(),
+).await?;
+while let Some(message) = stream.next_message().await { … }
+```
+
+`live-check` runs on it, and `TTL_LISTEN_SECONDS` makes the window long enough to watch it work.
 
 ### Handling every event
 
@@ -267,14 +276,15 @@ cargo run -p ttl-live-discovery --example live-check            # full flow, no 
 cargo run -p ttl-live-discovery --example discover -- <user>    # room info + gift list
 node scripts/headless/find-live.mjs /tmp/webmssdk.js            # who is live now
 node scripts/headless/ws-direct.mjs /tmp/webmssdk.js <room_id>  # the transport, on its own
-node scripts/headless/room-page-scan.mjs @<user>               # what the room page seeds
-node scripts/headless/transport.mjs /tmp/webmssdk.js <user>    # the old im/fetch bootstrap
+node scripts/headless/room-page-scan.mjs @<user>                # what the room page seeds
+node scripts/headless/player-audit.mjs                          # has the player changed?
+node scripts/headless/transport.mjs /tmp/webmssdk.js <user>     # the old im/fetch bootstrap
 ```
 
 The browser probes (`endpoint-probe`, `ws-probe`, `page-probe`, `limit-probe`) were removed with
 the WebView: they drove a page and have no headless equivalent. What a refusal looks like is now
-observable directly — `room/ping/audience` reports `status_code=20003, "User doesn't login"`, and
-`im/fetch` answers guests with an empty body.
+observable directly — `room/ping/audience` reports `status_code=20003, "User doesn't login"`, and a
+jar-less socket handshake is refused with an immediate 1006.
 
 ### tiktok-live-connector (Node) compatibility
 
@@ -310,30 +320,6 @@ What the server hands back now is assembled locally. `push_server` carries the s
 reordered, re-encoded, with the duplicated `version_code` collapsed. The socket accepts that, which
 is what makes the shape safe to hand to a client that was written for Euler Stream.
 
-**The transport works, and it is neither.** On 2026-08-18 the player's own transport chunk
-settled it: the live room page configures its IM SDK with `wsDirect: "1"` and a `socketHost`, and the
-SDK then builds and signs the socket URI itself —
-`wss://webcast-ws.tiktok.com/webcast/im/ws_proxy/ws_reuse_supplement/?<query>&X-Gnarly=<sig>`, where
-the signature is `registerWsSigner()` over the query bytes. There is no `push_server` to obtain.
-`im/fetch` still runs in the player under `fetchBeforeWsSuccess`, but only as a best-effort first
-page of messages, which is why it can answer 200 with zero bytes to a request with nothing wrong with
-it. `cargo run -p ttl-live-discovery --example live-check` now ends in decoded chat.
-
-Three claims in [docs/12](docs/12-transport-reverse-engineering.md) were withdrawn along the way.
-`room/info` and `gift/list` were believed to prove the signer works; they do not verify signatures at
-all. The transport request was believed to need a signature; the page's allowlist excludes that path.
-And the signature was believed to be wrong in its value; `room/enter` verifies one and accepts ours.
-
-Everything downstream is built and tested: `ttl-live-ws` connects, heartbeats, and acknowledges,
-`sanitize_uri` escapes the raw spaces the player emits in `browser_version` (which no Rust HTTP
-client will parse) without disturbing the signature, and `ttl-live-events` decodes the frames.
-
-A socket signature ages out, so `ReconnectingConnection` owns what happens on a close: it re-signs
-and reopens, five attempts by default with a doubling backoff, and reports a refusal rather than
-retrying it — a rejection is a verdict about the request, and a retry loop around one looks like a
-network problem while being a signing one. `live-check` runs on it; `TTL_LISTEN_SECONDS` makes the
-window long enough to watch it work.
-
 ### Discovery is guest-only-friendly; the socket is not
 
 Discovery needs no account: live search, `unique_id` → `room_id`, `room/info` and `gift/list` all
@@ -362,10 +348,6 @@ printf 'sessionid=...; sessionid_ss=...; sid_tt=...; ttwid=...' \
 `TTL_SESSION_FILE` changes the path. `sessionid` is the one that matters: without it the message
 socket refuses the handshake outright, and the headless server refuses to start.
 
-`sessionid` **is** the account, so everything done with it is attributed to that account. It is
-also not a fix for rate limiting. Use one only for what genuinely needs an identity — which now
-includes the message socket, since it refuses guests.
-
 ## Usage
 
 ```sh
@@ -390,9 +372,8 @@ TTL_BIND=127.0.0.1:8080 cargo run -p ttl-sign-server --bin ttl-sign-headless-ser
 
 ## Deployment
 
-The engine is a real browser: Linux/WebKitGTK requires X11 or Wayland even when the window
-is hidden, so a headless VPS needs `Xvfb` — not a desktop environment. The container does
-this for you:
+No browser, so no WebKit, no GTK, and no `Xvfb`. A deployment is the Rust binary, Node (for the
+signer script), the bundle, and a session:
 
 ```sh
 docker compose up -d --build
@@ -400,7 +381,7 @@ curl http://127.0.0.1:8080/healthz
 ```
 
 See [07 — Deployment](docs/07-deploy.md) for the bare-VPS setup, systemd units, environment
-variables, and how sessions and captchas work on a host with no screen.
+variables, and sessions in production.
 
 ## Documentation
 
@@ -410,13 +391,21 @@ variables, and how sessions and captchas work on a host with no screen.
 | [01 — Architecture](docs/01-architecture.md) | Crates, threading model, and design decisions |
 | [02 — Roadmap](docs/02-roadmap.md) | Phases, deliverables, and acceptance criteria |
 | [03 — Sign-server specification](docs/03-spec-sign-server.md) | HTTP endpoints and client compatibility |
-| [04 — WebView bridge specification](docs/04-spec-webview-bridge.md) | JS↔Rust IPC contract |
-| [05 — WebSocket client specification](docs/05-spec-websocket-client.md) | URI construction, headers, heartbeat, and acknowledgements |
+| [04 — WebView bridge specification](docs/04-spec-webview-bridge.md) | *Historical.* The IPC contract of the removed browser |
+| [05 — WebSocket client specification](docs/05-spec-websocket-client.md) | URI construction, headers, heartbeat, acknowledgements, and reconnection |
 | [06 — Risks and operations](docs/06-risks-and-ops.md) | Failure modes, rate limits, and maintenance |
 | [07 — Deployment](docs/07-deploy.md) | Docker, headless VPS, configuration, and sessions in production |
+| [08 — Headless migration](docs/08-headless-migration.md) | How the browser was taken out, and what moved where |
+| [09 — Signing research](docs/09-signing-research.md) | Method, fixture hygiene, and what each probe measures |
+| [10 — Authorized API feasibility](docs/10-authorized-api-feasibility.md) | Whether the official APIs can do this instead |
+| [11 — WebView removal](docs/11-webview-removal.md) | What the browser did, what replaced it, and what was lost |
+| [12 — Transport reverse engineering](docs/12-transport-reverse-engineering.md) | **How the socket is built and signed**, and the search that preceded it |
 
 ## Summary
 
-1. TikTok's page signs and owns the WebSocket.
-2. The initialization bridge mirrors binary frames to Rust without altering the socket.
-3. No Euler API, custom sign server, or native X-Gnarly implementation is required.
+1. The socket URL is built from first principles and signed with `registerWsSigner`, the way the
+   live player builds its own. No page, no capture, no `im/fetch`.
+2. Discovery is unsigned; the socket needs a session and a signature.
+3. No Euler API and no native X-Gnarly implementation is required — the real bundle runs headless.
+4. `scripts/headless/player-audit.mjs` re-reads the player's transport facts and fails when they
+   move, so a TikTok deploy breaks a test rather than a connection.
