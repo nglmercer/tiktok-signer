@@ -202,3 +202,18 @@ hand-written one — that difference alone was 82 bytes.
 `TTL_ENV` overrides shim properties as JSON (`{"navigator.platform":"Win32"}`) for bisection,
 `TTL_PAD` appends a known-length parameter, and `TTL_NO_WEBGL` restores the old empty-canvas
 behaviour that made the signatures short.
+
+## Identity variants
+
+`identity-probe.mjs` holds the signature fixed and moves only the identity — session, page cookies,
+`ttwid` alone, no cookies, `device_id` — one dimension per row:
+
+```sh
+TTL_URL="$(cargo run -q -p ttl-sign-core --example print-fetch-url -- <room_id>)" \
+  node scripts/headless/identity-probe.mjs /tmp/webmssdk.js <unique_id>
+```
+
+Every row returns 403, including the one with no cookies at all, so identity is not what
+`/webcast/im/fetch/` is refusing. Removing parameters instead shows that either computed signature
+— `X-Dynosaur` or `X-Gnarly` — turns an empty 200 into a 403, which means the service verifies them
+and ours are wrong in value despite matching in length. See `docs/12-transport-reverse-engineering.md`.

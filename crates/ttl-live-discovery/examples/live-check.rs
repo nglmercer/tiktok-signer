@@ -221,12 +221,23 @@ async fn main() {
             println!("      `ttl_sign_core::ws_uri` has recorded the same behaviour since");
             println!("      2026-08-10, before any of the headless work.");
             println!();
-            println!("      Working transport today needs a URI the player built. Copy one from a");
-            println!("      browser's devtools (Network → WS → the webcast socket → its URL) and");
-            println!("      hand it to this example:");
+            println!("      It is not the signature either. The signing input now matches the");
+            println!("      oracle exactly — X-Gnarly is 332 bytes, the recorded value — which is");
+            println!("      checkable without a browser or a network:");
             println!();
-            println!("        cargo run -p ttl-live-discovery --example live-check -- \\");
-            println!("          {} --ws-uri '<wss://…>'", lookup.unique_id);
+            println!(
+                "        TTL_URL=\"$(cargo run -q -p ttl-sign-core --example print-fetch-url \\"
+            );
+            println!("          -- {})\" \\", lookup.room_id);
+            println!("          node scripts/headless/canonical-input.mjs /tmp/webmssdk.js 124");
+            println!();
+            println!("      The open suspects are identity, not signing: how `ttwid` was issued,");
+            println!("      whether `device_id` must be bound to it, and whether this account or");
+            println!("      address is refused on this endpoint. See docs/12 for the evidence and");
+            println!("      what has already been ruled out.");
+            println!();
+            println!("      `--ws-uri <wss://…>` accepts a push_server URI from any source and");
+            println!("      runs the rest of this check against it.");
             return;
         }
         SignOutcome::Rejected(reason) => {

@@ -117,19 +117,60 @@ is outside the signature and the next suspects are ordered: the `ttwid` value's 
 `device_id`/`ttwid` binding, and request headers a browser sends that Node does not (`sec-ch-ua`,
 `sec-fetch-*`, `accept`).
 
-**Gate not met.** With signatures in the oracle's distribution, `/webcast/im/fetch/` still answers
-403 over the XHR route and an empty 200 over `frontierSign`. Adding the client hints a Chromium XHR
-sends (`accept`, `sec-ch-ua*`, `sec-fetch-*`) changed nothing.
+**Gate not met**, but the failure is now precisely located.
 
-So signature *shape* is now right and the request is still refused. What that rules out matters:
-the remaining difference is not the signing input, since the one measurable proxy for it now
-matches exactly. The open suspects, in order: the `ttwid` value's provenance (ours comes from a
-plain page GET, not from a browser that ran the anti-bot flow), the `device_id` to `ttwid` binding,
-and whether this account or address is simply refused on this endpoint after the volume of testing
-here.
+Holding the converged signature fixed and moving only the identity — `scripts/headless/identity-probe.mjs`
+— changes nothing:
 
-The honest reading is that this is no longer a signing problem, and the next evidence has to come
-from a request that differs in identity rather than in signature.
+| Identity | Result |
+|---|---|
+| account session + fresh page cookies | 403 |
+| page cookies only, no session | 403 |
+| `ttwid` alone | 403 |
+| **no cookies at all** | 403 |
+| session with `device_id=0` | 403 |
+
+Every row carries `X-Gnarly` at 332 bytes. Identity is not the lever: a request with no cookies at
+all is refused identically to a fully authenticated one. Chromium client hints (`accept`,
+`sec-ch-ua*`, `sec-fetch-*`) change nothing either.
+
+Removing parameters one at a time locates it exactly:
+
+| Request | Result |
+|---|---|
+| real `X-Bogus` only | **200**, empty |
+| `X-Dynosaur` + `X-Bogus` | **403** |
+| `X-Gnarly` + `X-Bogus` | **403** |
+| full suffix, with or without a real `X-Bogus` | **403** |
+
+**Either computed signature present flips an empty 200 into a 403.** The service verifies
+`X-Dynosaur` and `X-Gnarly` and rejects ours. An absent signature is merely unauthenticated —
+answered, and answered with nothing; a *wrong* one is refused outright.
+
+That is the real conclusion, and it is sharper than "the transport is blocked": the signatures are
+now the right **shape** and the wrong **value**. Length convergence was necessary and is not
+sufficient.
+
+## What that means for the goal
+
+Reaching a valid value is level L2/L3 on the ladder in [09](09-signing-research.md) — reproducing
+deterministic intermediates, then a complete field — and that work needs an oracle to compare
+values against, one signed request whose bytes are known-good. The WebView provided exactly that
+and has been removed.
+
+So the honest position: from zero, with no browser and no captured URI, the remaining step is
+value-level signature convergence, and the tooling for it is a differential against a known-good
+signature that this repository no longer has a way to produce. The measurable proxies — canonical
+input length, output length, parameter set, identity dimensions — are all exhausted and all match.
+
+Options, in the order they would settle it:
+
+1. **One known-good signed request**, from any source, retained as bytes. That restores the
+   differential and makes L2 approachable. It does not need to be repeatable; it needs to exist.
+2. **Native execution of the two routes.** The subgraph already names their entries (48886, 55188)
+   and the extractor reduces them; implementing their opcodes would let the value be derived rather
+   than compared. Bounded by reachability, but a large piece of work.
+3. **Accept the captured-URI path** as the supported route, and treat `im/fetch` as closed.
 
 ### Phase D — Only then, the socket
 
