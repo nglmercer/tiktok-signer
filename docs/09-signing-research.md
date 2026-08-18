@@ -294,6 +294,14 @@ has not converged: current evidence establishes *that* these fields depend on ce
 *what shape* they take, but not a deterministic function that reproduces them. Inferring an
 algorithm from output-length coincidences is explicitly disallowed.
 
+**L5 has been reached for the signed REST endpoints.** A headlessly-signed `/webcast/room/info/`
+and `/webcast/gift/list/` were accepted by the live service on 2026-08-18, returning real room data
+and the same 673-gift table the WebView run reported. Signing is no longer what blocks a
+browser-free build; see [11](11-webview-removal.md) for the measured comparison.
+
+`/webcast/im/fetch/` still answers 403 under the same signature and a full guest identity, so the
+remaining problem is transport bootstrap rather than signature generation.
+
 **Exact next blocker, in order:**
 
 1. **Oracle agreement on values.** Headless execution now produces the full suffix, so the missing

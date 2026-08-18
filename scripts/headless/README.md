@@ -50,3 +50,30 @@ every free identifier the bundle resolves is recorded by path. Unknown propertie
 
 The environment shim is deliberately deterministic — `crypto.getRandomValues` returns a fixed
 sequence — so repeated runs are comparable. Real signing needs real entropy.
+
+## Live verification (authorized use only)
+
+`native-check.mjs` is the headless equivalent of
+`cargo run -p ttl-sign-webview --example live-check`. Unlike the other probes it **sends real
+signed requests**, so point it only at a room you are authorized to test:
+
+```sh
+node scripts/headless/native-check.mjs /tmp/webmssdk.js <unique_id>
+```
+
+It prints status codes, byte counts, and parameter names only — never a signed URL, cookie value,
+or token.
+
+Measured on 2026-08-18 against a live room:
+
+- `unique_id` → `room_id`: **200**, no signature needed.
+- `GET /@user/live`: issues the guest identity cookies. No browser required.
+- `/webcast/room/info/`: **200, `status_code=0`**, real viewer counts.
+- `/webcast/gift/list/`: **200, 673 gifts** — identical to the WebView run.
+- `/webcast/im/fetch/`: **403**, even holding the full guest identity and a service-issued token.
+
+The first `im/fetch` rejection is still useful: the response issues a 124-byte `msToken`, which is
+how a fresh client obtains one.
+
+Because `room/info` and `gift/list` succeed with the same machinery, the signature is demonstrably
+valid and `im/fetch` is blocked on something else. See `docs/11-webview-removal.md`.

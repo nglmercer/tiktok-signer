@@ -232,6 +232,44 @@ backend. Flip the server default, keep `--features webview` for oracle work, and
 [08](08-headless-migration.md)'s "Production can operate headlessly" row to Complete with the L5
 evidence that justifies it.
 
+## Verified against the live service
+
+The WebView example `cargo run -p ttl-sign-webview --example live-check` is the reference flow.
+`scripts/headless/native-check.mjs` runs the same steps with no browser. Measured against a live
+room on 2026-08-18:
+
+| Step | WebView | Headless | Result |
+|---|---|---|---|
+| who is live now | rendered `/live` DOM | — | **renderer-bound**, no native path |
+| `unique_id` → `room_id` | page fetch | plain HTTP | **200**, same room id |
+| guest identity | page navigation | `GET /@user/live` | **issues `ttwid`, `tt_csrf_token`, `tt_chain_token`** |
+| `msToken` | page state | `im/fetch` 403 response | **issues a 124-byte token** |
+| `/webcast/room/info/` | page-signed | headless-signed | **200, `status_code=0`**, live viewer counts |
+| `/webcast/gift/list/` | page-signed | headless-signed | **200, 673 gifts** — identical to the WebView run |
+| `/webcast/im/fetch/` | not used (page relays its own socket) | headless-signed | **403**, with full identity |
+| event stream | page WebSocket relay | — | blocked on the above |
+
+**This is L5 for the signed REST endpoints.** A native, browser-free, headlessly-signed request was
+accepted by the live service and returned real room data. Signing is no longer the obstacle.
+
+### The remaining obstacle is not signing
+
+`room/info` and `gift/list` succeed with the same signature machinery that `im/fetch` rejects, so
+the signature is demonstrably valid. `im/fetch` returns 403 even holding `ttwid`, `tt_csrf_token`,
+`tt_chain_token`, and a service-issued `msToken`.
+
+Two things worth noting before anyone attributes this to the signer:
+
+- The WebView **does not call `im/fetch` either**. It relays the page's own WebSocket and
+  synthesizes a `FetchResult` from the player's URI. The repository already recorded that
+  re-issuing `/webcast/im/fetch/` from Rust behaves differently from issuing it in the page.
+- The live page HTML contains no `wss://`, `push_server`, or `im/fetch` data. The transport URI is
+  built client-side after load, which is precisely why the page relay exists.
+
+So the open problem is **transport bootstrap**, not signature generation. Either `im/fetch` needs
+state that only a running page accumulates, or the WebSocket URI must be obtained another way.
+That is the one question standing between this project and a browser-free build.
+
 ## Risks and kill criteria
 
 State these now, so the decision to stop is made on evidence rather than on sunk cost.
@@ -260,8 +298,9 @@ Phase 5  Track B: native interpreter       ← the vendor JS is gone here
 Phase 6  decommission to research-only
 ```
 
-Phase 0 is done and needed no live run. Phase 1 still wants one authorized run, and Phase 2 now
-wants one for value comparison rather than for feasibility. Phase 3 can
+Phase 0 is done and needed no live run. Phase 2's feasibility is settled by live acceptance of
+headless-signed REST requests. The critical path is now Phase 3 — specifically the transport
+bootstrap, which is the only step with no demonstrated native path. Phase 3 can
 proceed in parallel with Phase 2. Phases 4 and 5 are independent of each other.
 
 ## What does not change
