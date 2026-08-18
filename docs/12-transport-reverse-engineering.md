@@ -84,6 +84,18 @@ static and live halves of the same check. Note that room pages now answer a bare
 1155-byte anti-bot shell, which is why the audit reads `https://www.tiktok.com/live` instead — the
 same app bundle, no creator required.
 
+### One unexplained acceptance, 2026-08-18
+
+While re-testing the tooling, `im-fetch-bisect.mjs` recorded a single **ACCEPTED** row: the ordinary
+signed `baseline` variant, answered 200 with 120,290 bytes carrying a real `wss://` push_server. The
+same variant, same shim revision, same room and same session was refused with 403 on the next two
+attempts, and `xhr-transport.mjs` was refused against that room in between. So `im/fetch` can answer
+a signed request — it did once — but nothing about the request explains when, and it is not
+reproducible from here. The row is in `fixtures/research/bisect-ledger.json` rather than in a memory,
+which is the point of the ledger.
+
+It changes nothing operationally: the direct socket does not need that response.
+
 Everything below is the record of the search that preceded this, kept because its measurements stand
 on their own: `im/fetch` is unsigned by the page, `room/enter` verifies our signature and accepts it,
 and three read endpoints verify nothing at all.

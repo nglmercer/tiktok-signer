@@ -34,12 +34,12 @@
 // Statuses, byte counts and digests only. No signed URL, cookie, or token is printed or stored.
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createSandbox } from './shim.mjs';
 import { createXhrClass } from './lib/xhr.mjs';
+import { absorbCookies, cookieHeader as header, sessionJar } from './lib/session.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const LEDGER = path.join(HERE, '..', '..', 'fixtures', 'research', 'bisect-ledger.json');
@@ -68,28 +68,9 @@ const WINDOWS_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 
 // --- identity ---------------------------------------------------------------------------------
 
-const jar = new Map();
-const cookieHeader = () => [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
-const absorb = (response) => {
-  const lines = response.headers.getSetCookie ? response.headers.getSetCookie() : [];
-  for (const line of lines) {
-    const [pair] = line.split(';');
-    const eq = pair.indexOf('=');
-    if (eq > 0) jar.set(pair.slice(0, eq).trim(), pair.slice(eq + 1));
-  }
-};
-
-function sessionPath() {
-  if (process.env.TTL_SESSION_FILE) return process.env.TTL_SESSION_FILE;
-  const base = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
-  return path.join(base, 'ttl-signer', 'session');
-}
-try {
-  for (const part of fs.readFileSync(sessionPath(), 'utf8').trim().split(';')) {
-    const eq = part.indexOf('=');
-    if (eq > 0) jar.set(part.slice(0, eq).trim(), part.slice(eq + 1).trim());
-  }
-} catch { /* guest */ }
+const jar = sessionJar();
+const cookieHeader = () => header(jar);
+const absorb = (response) => absorbCookies(jar, response);
 console.log(`session: ${jar.size} cookies, authenticated=${Boolean(jar.get('sessionid'))}`);
 
 const lookup = await fetch(

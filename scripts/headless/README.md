@@ -159,6 +159,22 @@ Note that `/webcast/feed/` — the endpoint the `/live` page itself uses — ans
 empty body for a guest identity, both on `webcast.tiktok.com` and `webcast.us.tiktok.com`, even
 when the issued `x-ms-token` is fed back. The search endpoint is the working route.
 
+## Shared modules
+
+Three files under `lib/`, and everything else imports them rather than re-deriving them:
+
+| Module | What it owns |
+|---|---|
+| `lib/session.mjs` | the user agent, the session file path, the jar, the cookie header, `Set-Cookie` absorption |
+| `lib/player.mjs` | the player's transport constants, its query serializer, and the socket frames |
+| `lib/sign.mjs` | signing one URL under a described, reproducible environment |
+| `lib/xhr.mjs` | the real `XMLHttpRequest` the SDK's hooks operate on |
+
+The first two exist because the same twenty lines had been copy-pasted into ten probes, which is how
+two of them ended up reading a different session path than the rest. Protobuf field numbers and query
+constants live in `lib/player.mjs` under names — a bare `6` in a frame encoder is unreviewable, and
+`player-audit.mjs` checks those numbers against the descriptors the player ships.
+
 ## Keeping up with the player (run this first when something breaks)
 
 Everything the transport depends on was read out of TikTok's own JavaScript, and none of it is

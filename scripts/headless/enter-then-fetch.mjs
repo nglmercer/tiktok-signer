@@ -28,6 +28,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createSandbox } from './shim.mjs';
+import { USER_AGENT as UA, absorbCookies, cookieHeader as header } from './lib/session.mjs';
 
 const bundlePath = process.argv[2];
 const user = process.argv[3];
@@ -36,19 +37,11 @@ if (!bundlePath || !user) {
   process.exit(2);
 }
 
-const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) '
-  + 'Chrome/131.0.0.0 Safari/537.36';
 const HOST = 'https://webcast.tiktok.com';
 
 const jar = new Map();
-const cookieHeader = () => [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
-const absorb = (response) => {
-  for (const line of response.headers.getSetCookie ? response.headers.getSetCookie() : []) {
-    const [pair] = line.split(';');
-    const eq = pair.indexOf('=');
-    if (eq > 0) jar.set(pair.slice(0, eq).trim(), pair.slice(eq + 1));
-  }
-};
+const cookieHeader = () => header(jar);
+const absorb = (response) => absorbCookies(jar, response);
 
 function sessionPath() {
   if (process.env.TTL_SESSION_FILE) return process.env.TTL_SESSION_FILE;

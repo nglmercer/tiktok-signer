@@ -15,9 +15,8 @@
 // AUTHORIZED USE ONLY: this sends real requests. It prints key paths and value shapes; no cookie,
 // token, or signed URL is printed, and a `wss://` URL is reported by host and parameter names only.
 
-import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { USER_AGENT as UA, cookieHeader, sessionJar } from './lib/session.mjs';
 
 const target = process.argv[2];
 if (!target) {
@@ -25,20 +24,8 @@ if (!target) {
   process.exit(2);
 }
 
-const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) '
-  + 'Chrome/131.0.0.0 Safari/537.36';
-
-function sessionCookies() {
-  const file = process.env.TTL_SESSION_FILE
-    || path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
-      'ttl-signer', 'session');
-  try {
-    return fs.readFileSync(file, 'utf8').trim();
-  } catch {
-    console.log('no session file — scanning as a guest');
-    return '';
-  }
-}
+const jar = sessionJar();
+if (!jar.size) console.log('no session file — scanning as a guest');
 
 // A room id alone has no page. The page lives under the creator's handle, so a numeric target is
 // resolved back to one through the unsigned room lookup.
@@ -63,7 +50,7 @@ const response = await fetch(url, {
     'user-agent': UA,
     'accept-language': 'en-US,en;q=0.9',
     accept: 'text/html,application/xhtml+xml',
-    cookie: sessionCookies(),
+    cookie: cookieHeader(jar),
   },
 });
 const html = await response.text();

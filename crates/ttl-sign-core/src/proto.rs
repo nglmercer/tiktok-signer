@@ -26,6 +26,8 @@
 
 use std::fmt;
 
+use crate::params::Identity;
+
 // --- Field numbers ----------------------------------------------------------------
 
 mod fetch_field {
@@ -54,14 +56,43 @@ mod map_entry_field {
     pub const VALUE: u32 = 2;
 }
 
-const ENTER_ROOM_FIELD_ROOM_ID: u32 = 1;
-const ENTER_ROOM_FIELD_ROOM_TYPE: u32 = 4;
-const ENTER_ROOM_ROOM_TYPE_AUDIENCE: u64 = 12;
-const ENTER_ROOM_FIELD_USER_TYPE: u32 = 5;
-const ENTER_ROOM_FIELD_FILTER_WELCOME: u32 = 9;
-const ENTER_ROOM_FILTER_WELCOME_DISABLED: &str = "0";
-const HEARTBEAT_FIELD_ROOM_ID: u32 = 1;
-const HEARTBEAT_FIELD_SEQUENCE_ID: u32 = 2;
+/// Fields of `webcast.im.EnterRoom`, from the IM SDK's own descriptor.
+///
+/// The names come from that descriptor rather than from guesswork: field 4 is `live_id` — whose
+/// value happens to be 12 — and field 5 is `identity`. They were called `room_type` and `user_type`
+/// here until the descriptor was read on 2026-08-18. The bytes were always right; the names were
+/// not, and a wrong name is what makes the next change to this function dangerous.
+mod enter_room_field {
+    // The whole message is written down, not just the four fields sent today: this is the reference
+    // for anyone adding one, and `scripts/headless/player-audit.mjs` checks these numbers against
+    // the descriptor the player ships. A field guessed here is a frame the server discards without
+    // complaint.
+    #![allow(dead_code)]
+
+    pub const ROOM_ID: u32 = 1;
+    pub const ROOM_TAG: u32 = 2;
+    pub const LIVE_REGION: u32 = 3;
+    pub const LIVE_ID: u32 = 4;
+    pub const IDENTITY: u32 = 5;
+    pub const CURSOR: u32 = 6;
+    pub const ACCOUNT_TYPE: u32 = 7;
+    pub const ENTER_UNIQ_ID: u32 = 8;
+    pub const FILTER_WELCOME_MSG: u32 = 9;
+    pub const IS_ANCHOR_CONTINUE_KEEP_MSG: u32 = 10;
+}
+
+/// Fields of `webcast.im.HeartBeat`.
+mod heartbeat_field {
+    #![allow(dead_code)]
+
+    pub const ROOM_ID: u32 = 1;
+    pub const SEND_PACKET_SEQ_ID: u32 = 2;
+}
+
+/// The web player's `live_id`. Constant across every room.
+const LIVE_ID: u64 = 12;
+/// `filter_welcome_msg`: keep the welcome messages, since they are events like any other.
+const FILTER_WELCOME_DISABLED: &str = "0";
 
 // --- Errors -----------------------------------------------------------------------
 
@@ -536,13 +567,10 @@ impl PushFrame {
     pub fn enter_room(room_id: u64) -> Self {
         let mut writer = Writer::new();
         writer
-            .u64_field(ENTER_ROOM_FIELD_ROOM_ID, room_id)
-            .u64_field(ENTER_ROOM_FIELD_ROOM_TYPE, ENTER_ROOM_ROOM_TYPE_AUDIENCE)
-            .str_field(ENTER_ROOM_FIELD_USER_TYPE, "audience")
-            .str_field(
-                ENTER_ROOM_FIELD_FILTER_WELCOME,
-                ENTER_ROOM_FILTER_WELCOME_DISABLED,
-            );
+            .u64_field(enter_room_field::ROOM_ID, room_id)
+            .u64_field(enter_room_field::LIVE_ID, LIVE_ID)
+            .str_field(enter_room_field::IDENTITY, Identity::Audience.as_str())
+            .str_field(enter_room_field::FILTER_WELCOME_MSG, FILTER_WELCOME_DISABLED);
 
         Self {
             payload_encoding: "pb".into(),
@@ -557,8 +585,8 @@ impl PushFrame {
     pub fn heartbeat(room_id: u64, sequence_id: u64) -> Self {
         let mut writer = Writer::new();
         writer
-            .u64_field(HEARTBEAT_FIELD_ROOM_ID, room_id)
-            .u64_field(HEARTBEAT_FIELD_SEQUENCE_ID, sequence_id);
+            .u64_field(heartbeat_field::ROOM_ID, room_id)
+            .u64_field(heartbeat_field::SEND_PACKET_SEQ_ID, sequence_id);
 
         Self {
             payload_encoding: "pb".into(),

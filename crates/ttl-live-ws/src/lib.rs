@@ -36,7 +36,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tracing::{debug, error, warn};
 
 use ttl_sign_core::proto::PushFrame;
-use ttl_sign_core::{CookieJar, FetchResult, Preset, SignedFetch, WsParams};
+use ttl_sign_core::{Compression, CookieJar, FetchResult, Preset, SignedFetch, WsParams};
 
 const DEFAULT_HEARTBEAT_SECONDS: u64 = 10;
 const INITIAL_HEARTBEAT_SEQUENCE: u64 = 1;
@@ -92,15 +92,15 @@ pub struct LiveMessage {
 pub struct ConnectConfig {
     /// Matches the `heartbeat_duration=10000` query parameter.
     pub heartbeat: Duration,
-    /// Request compressed frames. Empty means no compression.
-    pub compress: String,
+    /// Compression requested in the socket query, and applied by the server to `msg` payloads.
+    pub compress: Compression,
 }
 
 impl Default for ConnectConfig {
     fn default() -> Self {
         Self {
             heartbeat: Duration::from_secs(DEFAULT_HEARTBEAT_SECONDS),
-            compress: "gzip".into(),
+            compress: Compression::default(),
         }
     }
 }
@@ -185,7 +185,7 @@ impl LiveConnection {
         }
 
         let mut params = WsParams::new(room_id);
-        params.compress = config.compress.clone();
+        params.compress = config.compress;
         params.cursor = result.cursor.clone();
         params.internal_ext = result.internal_ext.clone();
         let uri = params.build_uri(&result.push_server, &result.route_params, preset);

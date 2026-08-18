@@ -24,10 +24,9 @@
 // Only names, status codes, and byte counts are printed. No signed URL, cookie, or token.
 
 import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { createSandbox } from './shim.mjs';
 import { createXhrClass } from './lib/xhr.mjs';
+import { USER_AGENT as UA, absorbCookies, cookieHeader as header, sessionPath } from './lib/session.mjs';
 
 const bundlePath = process.argv[2];
 const user = process.argv[3];
@@ -36,25 +35,10 @@ if (!bundlePath || !user) {
   process.exit(2);
 }
 
-const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) '
-  + 'Chrome/131.0.0.0 Safari/537.36';
-
-function sessionPath() {
-  if (process.env.TTL_SESSION_FILE) return process.env.TTL_SESSION_FILE;
-  const base = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
-  return path.join(base, 'ttl-signer', 'session');
-}
 
 const jar = new Map();
-const cookieHeader = () => [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
-const absorb = (response) => {
-  const lines = response.headers.getSetCookie ? response.headers.getSetCookie() : [];
-  for (const line of lines) {
-    const [pair] = line.split(';');
-    const eq = pair.indexOf('=');
-    if (eq > 0) jar.set(pair.slice(0, eq).trim(), pair.slice(eq + 1));
-  }
-};
+const cookieHeader = () => header(jar);
+const absorb = (response) => absorbCookies(jar, response);
 
 try {
   for (const part of fs.readFileSync(sessionPath(), 'utf8').trim().split(';')) {

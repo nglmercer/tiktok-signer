@@ -337,6 +337,69 @@
       "bytes": 0,
       "signed_lengths": {},
       "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "8a7610a7fb22",
+      "shim": "9957f0e3",
+      "variant": "baseline",
+      "what": "the current signer, unchanged — the reference row",
+      "outcome": "ACCEPTED",
+      "status": 200,
+      "bytes": 120290,
+      "signed_lengths": {
+        "X-Dynosaur": 388,
+        "msToken": 0,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "d2bf46face31",
+      "shim": "9957f0e3",
+      "variant": "params-project",
+      "what": "the query whose length matched the oracle exactly",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 388,
+        "msToken": 0,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "8a7610a7fb22",
+      "shim": "9957f0e3",
+      "variant": "baseline",
+      "what": "the current signer, unchanged — the reference row",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 388,
+        "msToken": 0,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "d79573ee7f6f",
+      "shim": "9957f0e3",
+      "variant": "no-mstoken",
+      "what": "msToken removed from the signed query after signing",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 388,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
     }
   ]
 }

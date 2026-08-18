@@ -36,6 +36,7 @@
 
 import fs from 'node:fs';
 import { createSandbox } from './shim.mjs';
+import { USER_AGENT as UA, absorbCookies, cookieHeader as header } from './lib/session.mjs';
 
 const bundlePath = process.argv[2];
 const user = process.argv[3];
@@ -44,18 +45,9 @@ if (!bundlePath || !user) {
   process.exit(2);
 }
 
-const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) '
-  + 'Chrome/131.0.0.0 Safari/537.36';
 const jar = new Map();
-const cookieHeader = () => [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
-const absorb = (response) => {
-  const lines = response.headers.getSetCookie ? response.headers.getSetCookie() : [];
-  for (const line of lines) {
-    const [pair] = line.split(';');
-    const eq = pair.indexOf('=');
-    if (eq > 0) jar.set(pair.slice(0, eq).trim(), pair.slice(eq + 1));
-  }
-};
+const cookieHeader = () => header(jar);
+const absorb = (response) => absorbCookies(jar, response);
 
 const lookup = await fetch(
   `https://www.tiktok.com/api-live/user/room/?aid=1988&sourceType=54&uniqueId=${user}`,

@@ -14,6 +14,7 @@
 
 import fs from 'node:fs';
 import { createSandbox } from './shim.mjs';
+import { USER_AGENT as UA, absorbCookies, cookieHeader as header } from './lib/session.mjs';
 
 const bundlePath = process.argv[2];
 const keyword = process.argv[3] || 'live';
@@ -24,19 +25,10 @@ if (!bundlePath) {
   process.exit(2);
 }
 
-const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) '
-  + 'Chrome/131.0.0.0 Safari/537.36';
 
 const jar = new Map();
-const cookieHeader = () => [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
-const absorb = (response) => {
-  const lines = response.headers.getSetCookie ? response.headers.getSetCookie() : [];
-  for (const line of lines) {
-    const [pair] = line.split(';');
-    const eq = pair.indexOf('=');
-    if (eq > 0) jar.set(pair.slice(0, eq).trim(), pair.slice(eq + 1));
-  }
-};
+const cookieHeader = () => header(jar);
+const absorb = (response) => absorbCookies(jar, response);
 
 // A plain GET of the live page issues the guest identity cookies. No browser needed.
 const page = await fetch('https://www.tiktok.com/live', {

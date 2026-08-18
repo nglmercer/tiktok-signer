@@ -12,32 +12,16 @@
 // booleans only — no cookie, token, or profile field is printed.
 
 import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
+import { USER_AGENT as UA, cookieHeader, sessionJar, sessionPath } from './lib/session.mjs';
 
-const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) '
-  + 'Chrome/131.0.0.0 Safari/537.36';
-
-function sessionPath() {
-  if (process.env.TTL_SESSION_FILE) return process.env.TTL_SESSION_FILE;
-  const base = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
-  return path.join(base, 'ttl-signer', 'session');
-}
 
 const file = sessionPath();
-let raw = '';
-try {
-  raw = fs.readFileSync(file, 'utf8').trim();
-} catch {
-  console.error(`no session file at ${file}`);
+const jar = sessionJar();
+if (!jar.size) {
+  console.error(`no session at ${file}`);
   process.exit(2);
 }
-const jar = new Map();
-for (const part of raw.split(';')) {
-  const eq = part.indexOf('=');
-  if (eq > 0) jar.set(part.slice(0, eq).trim(), part.slice(eq + 1).trim());
-}
-const cookie = [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
+const cookie = cookieHeader(jar);
 const stat = fs.statSync(file);
 const ageDays = Math.floor((Date.now() - stat.mtimeMs) / 86_400_000);
 console.log(`session file: ${jar.size} cookies, written ${ageDays} day(s) ago`);

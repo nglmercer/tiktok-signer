@@ -27,8 +27,6 @@
 // cookie, or token value is printed or retained.
 
 import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';

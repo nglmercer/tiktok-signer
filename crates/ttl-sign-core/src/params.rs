@@ -37,6 +37,19 @@ const WS_VERSION_CODE: &str = "180800";
 /// `270000` regardless of what the transport request carries.
 const TRAILING_VERSION_CODE: &str = "270000";
 const HEARTBEAT_DURATION_MS: &str = "10000";
+/// `device_platform`: the player is a web client and says so on every request.
+const DEVICE_PLATFORM_WEB: &str = "web";
+/// The player sends booleans as these strings, not as `1`/`0`.
+const YES: &str = "true";
+/// Flags the player sends as `1`, which is not the same spelling as its booleans.
+const ENABLED: &str = "1";
+/// `did_rule`: 3 when there is no device id to rule on, 0 when there is one.
+const DID_RULE_WITHOUT_DEVICE_ID: &str = "3";
+const DID_RULE_WITH_DEVICE_ID: &str = "0";
+/// `last_rtt` before any round trip has been measured.
+const LAST_RTT_UNMEASURED: &str = "-1";
+/// `resp_content_type`: the transport speaks protobuf.
+const RESPONSE_PROTOBUF: &str = "protobuf";
 /// The IM SDK's own version, sent alongside the two `version_code` values.
 const UPDATE_VERSION_CODE: &str = "2.0.0";
 
@@ -317,8 +330,7 @@ pub const FETCH_ENDPOINT: &str = "https://webcast.tiktok.com/webcast/im/fetch/";
 #[derive(Debug, Clone)]
 pub struct WsParams {
     pub room_id: String,
-    /// `gzip`, or empty to request no compression.
-    pub compress: String,
+    pub compress: Compression,
     pub last_rtt: u32,
     /// Cursor from the `/webcast/im/fetch/` response.
     ///
@@ -335,7 +347,7 @@ impl WsParams {
     pub fn new(room_id: impl Into<String>) -> Self {
         Self {
             room_id: room_id.into(),
-            compress: "gzip".into(),
+            compress: Compression::default(),
             // The current web player sends 0 on its first WebSocket request. A random
             // RTT is accepted by some older clients but makes the synthetic URI diverge
             // from the page URL we otherwise reproduce exactly.
@@ -361,7 +373,7 @@ impl WsParams {
             .set("browser_platform", &d.browser_platform)
             .set("browser_version", &d.browser_version)
             .set("client_enter", "1")
-            .set("compress", &self.compress)
+            .set("compress", self.compress.as_query_value().unwrap_or_default())
             .set("cookie_enabled", "true")
             .set("cursor", &self.cursor)
             .set("device_platform", "web")
@@ -416,6 +428,80 @@ impl WsParams {
     }
 }
 
+/// Who the client claims to be in the room.
+///
+/// An enum rather than a string because the two values are not interchangeable and a typo in one is
+/// a request the server answers differently, with nothing in the response to say why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Identity {
+    /// A viewer. Everything this project does.
+    #[default]
+    Audience,
+    /// The broadcaster's own client.
+    Anchor,
+}
+
+impl Identity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Identity::Audience => "audience",
+            Identity::Anchor => "anchor",
+        }
+    }
+}
+
+/// Frame compression the socket negotiates in its query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Compression {
+    /// What the player asks for, and what the server then applies to `msg` payloads.
+    #[default]
+    Gzip,
+    /// No compression. Sent as an absent parameter, not an empty one.
+    None,
+}
+
+impl Compression {
+    /// The query value, or `None` when the parameter should be omitted entirely — the player's
+    /// serializer deletes empty values rather than sending `compress=`.
+    pub fn as_query_value(self) -> Option<&'static str> {
+        match self {
+            Compression::Gzip => Some("gzip"),
+            Compression::None => None,
+        }
+    }
+
+    /// Parse what a frame or a handshake reports back.
+    pub fn from_frame_value(value: &str) -> Self {
+        match value {
+            "gzip" => Compression::Gzip,
+            _ => Compression::None,
+        }
+    }
+}
+
+/// The socket hosts the player picks between, by cluster region.
+///
+/// The player branches on its `clusterRegion`; these are the only three hosts it can produce, so
+/// they are an enum rather than a string a caller could get subtly wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SocketCluster {
+    /// Everywhere the US and EU clusters do not claim.
+    #[default]
+    Global,
+    Us,
+    Eu,
+}
+
+impl SocketCluster {
+    pub const fn host(self) -> &'static str {
+        match self {
+            SocketCluster::Global => "wss://webcast-ws.tiktok.com",
+            SocketCluster::Us => "wss://webcast-ws.us.tiktok.com",
+            SocketCluster::Eu => "wss://webcast-ws.eu.tiktok.com",
+        }
+    }
+}
+
 /// Query for the socket the current web player opens directly, with no `im/fetch` in front of it.
 ///
 /// The live room page configures its IM SDK with `wsDirect: "1"` and a `socketHost`, and the SDK
@@ -442,10 +528,10 @@ impl WsParams {
 pub struct DirectSocketParams {
     pub room_id: String,
     pub device_id: String,
-    /// `gzip`, or empty for uncompressed frames.
-    pub compress: String,
-    /// `audience`, unless connecting as the broadcaster.
-    pub identity: String,
+    pub compress: Compression,
+    pub identity: Identity,
+    /// Which cluster's socket host to open.
+    pub cluster: SocketCluster,
     /// Milliseconds between application heartbeats; echoed to the server in the query.
     pub heartbeat_duration: String,
 }
@@ -455,8 +541,9 @@ impl DirectSocketParams {
         Self {
             room_id: room_id.into(),
             device_id: random_device_id(),
-            compress: "gzip".into(),
-            identity: "audience".into(),
+            compress: Compression::default(),
+            identity: Identity::default(),
+            cluster: SocketCluster::default(),
             heartbeat_duration: HEARTBEAT_DURATION_MS.into(),
         }
     }
@@ -470,52 +557,61 @@ impl DirectSocketParams {
         let mut q = Query::new();
         // The SDK's browser block comes first, carrying its own `version_code`.
         q.push_raw("version_code", WS_VERSION_CODE);
-        q.push_raw("device_platform", "web");
-        q.push_raw("cookie_enabled", "true");
+        q.push_raw("device_platform", DEVICE_PLATFORM_WEB);
+        q.push_raw("cookie_enabled", YES);
         q.push_raw("screen_width", s.width.to_string());
         q.push_raw("screen_height", s.height.to_string());
         q.push_raw("browser_language", &l.browser_language);
         q.push_raw("browser_platform", &d.browser_platform);
         q.push_raw("browser_name", &d.browser_name);
         q.push_raw("browser_version", &d.browser_version);
-        q.push_raw("browser_online", "true");
+        q.push_raw("browser_online", YES);
         q.push_raw("tz_name", &l.tz_name);
         // Then the SDK's own fixed fields, then the page's config.
         q.push_raw("app_name", "tiktok_web");
-        q.push_raw("sup_ws_ds_opt", "1");
+        q.push_raw("sup_ws_ds_opt", ENABLED);
         q.push_raw("update_version_code", UPDATE_VERSION_CODE);
-        if !self.compress.is_empty() {
-            q.push_raw("compress", &self.compress);
+        if let Some(compress) = self.compress.as_query_value() {
+            q.push_raw("compress", compress);
         }
         q.push_raw("webcast_language", &l.language);
         q.push_raw("aid", APP_ID);
         q.push_raw("live_id", LIVE_ID);
         q.push_raw("version_code", TRAILING_VERSION_CODE);
         q.push_raw("app_language", &l.language);
-        q.push_raw("ws_direct", "1");
-        q.push_raw("client_enter", "1");
+        q.push_raw("ws_direct", ENABLED);
+        q.push_raw("client_enter", ENABLED);
         q.push_raw("room_id", &self.room_id);
-        q.push_raw("identity", &self.identity);
-        // `-1` because no round trip has been measured yet; the SDK sends the same on a cold start.
-        q.push_raw("last_rtt", "-1");
+        q.push_raw("identity", self.identity.as_str());
+        // No round trip has been measured yet; the SDK sends the same on a cold start.
+        q.push_raw("last_rtt", LAST_RTT_UNMEASURED);
         q.push_raw("heartbeat_duration", &self.heartbeat_duration);
         // The tail the SDK appends after the config, in this order.
-        q.push_raw("resp_content_type", "protobuf");
-        // `did_rule` is 3 only when there is no device id; with one it is 0.
-        q.push_raw("did_rule", if self.device_id.is_empty() { "3" } else { "0" });
+        q.push_raw("resp_content_type", RESPONSE_PROTOBUF);
+        q.push_raw(
+            "did_rule",
+            if self.device_id.is_empty() {
+                DID_RULE_WITHOUT_DEVICE_ID
+            } else {
+                DID_RULE_WITH_DEVICE_ID
+            },
+        );
         q.push_raw("device_id", &self.device_id);
         q
     }
 
     /// The unsigned socket URL. Append the signature as `&X-Gnarly=<percent-encoded>`.
     pub fn url(&self, preset: &Preset) -> String {
-        format!("{DIRECT_SOCKET_HOST}{WS_REUSE_PATH}?{}", self.build(preset).encode_raw())
+        format!(
+            "{}{WS_REUSE_PATH}?{}",
+            self.cluster.host(),
+            self.build(preset).encode_raw()
+        )
     }
 }
 
-/// Default socket host. The player picks `webcast-ws.us` / `.eu` by cluster region; this is the
-/// value it uses everywhere else.
-pub const DIRECT_SOCKET_HOST: &str = "wss://webcast-ws.tiktok.com";
+/// Default socket host, kept as a constant for callers that only need the one.
+pub const DIRECT_SOCKET_HOST: &str = SocketCluster::Global.host();
 /// The path the SDK opens when `wsDirect` is on.
 pub const WS_REUSE_PATH: &str = "/webcast/im/ws_proxy/ws_reuse_supplement/";
 

@@ -13,10 +13,8 @@
 // Values are returned to the caller, which is what a differential needs. Nothing is printed here;
 // callers report digests, lengths, and positions.
 
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { createSandbox } from '../shim.mjs';
+import { USER_AGENT, sessionJar } from './session.mjs';
 
 /// The clock every pinned profile reports, unless it overrides `now`.
 export const FIXED_NOW = 1787000000000;
@@ -24,25 +22,10 @@ export const FIXED_NOW = 1787000000000;
 /// The signature parameters the patched fetch appends, in the order it appends them.
 export const SIGNED_PARAMS = ['X-Dynosaur', 'msToken', 'X-Bogus', 'X-Gnarly'];
 
-const CHROME_LINUX_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) '
-  + 'Chrome/131.0.0.0 Safari/537.36';
+const CHROME_LINUX_UA = USER_AGENT;
 
 /** The session jar, if one is stored. Used as signing context, never printed. */
-export function sessionCookies() {
-  const file = process.env.TTL_SESSION_FILE
-    || path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
-      'ttl-signer', 'session');
-  try {
-    const jar = new Map();
-    for (const part of fs.readFileSync(file, 'utf8').trim().split(';')) {
-      const eq = part.indexOf('=');
-      if (eq > 0) jar.set(part.slice(0, eq).trim(), part.slice(eq + 1).trim());
-    }
-    return jar;
-  } catch {
-    return new Map();
-  }
-}
+export const sessionCookies = sessionJar;
 
 /**
  * Sign `url` under `profile` and return the parameters the SDK appended.
