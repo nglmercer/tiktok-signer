@@ -111,3 +111,32 @@ node scripts/headless/native-check.mjs /tmp/webmssdk.js josecompartiedopalabra
 Note that `/webcast/feed/` — the endpoint the `/live` page itself uses — answers `200` with an
 empty body for a guest identity, both on `webcast.tiktok.com` and `webcast.us.tiktok.com`, even
 when the issued `x-ms-token` is fed back. The search endpoint is the working route.
+
+## Transport bootstrap
+
+`transport.mjs` signs `/webcast/im/fetch/` and reads the push_server out of the response:
+
+```sh
+node scripts/headless/transport.mjs /tmp/webmssdk.js <unique_id>
+```
+
+```text
+session: 9 cookies, authenticated=true
+room_id=7675336599840393991
+sup_ws_ds_opt=0: http=200 bytes=74670 PUSH_SERVER
+  push_server: wss://webcast-ws.tiktok.com/webcast/im/ws_proxy/ws_reuse_supplement/
+```
+
+It requires an **authenticated account session** — a guest gets an empty 200, and
+`/webcast/room/ping/audience/` reports `"User doesn't login"`. The session comes from the same
+file the WebView uses (`TTL_SESSION_FILE`, else `~/.config/ttl-signer/session`). Cookie values are
+never printed.
+
+The endpoint often answers 200 with an empty body. When it does, the WebView oracle returns
+`Rejected(EmptyBody)` for the same room at the same time — the two paths succeed together and fail
+together, so that is upstream behaviour rather than a bug here. Confirm with:
+
+```sh
+cargo run -p ttl-sign-webview --example fetch-dump -- <user>
+node scripts/headless/transport.mjs /tmp/webmssdk.js <user>
+```

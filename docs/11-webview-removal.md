@@ -250,7 +250,7 @@ room on 2026-08-18:
 | `msToken` | page state | `im/fetch` 403 response | **issues a 124-byte token** |
 | `/webcast/room/info/` | page-signed | headless-signed | **200, `status_code=0`**, live viewer counts |
 | `/webcast/gift/list/` | page-signed | headless-signed | **200, 673 gifts** — identical to the WebView run |
-| `/webcast/im/fetch/` | not used (page relays its own socket) | headless-signed | **403** under the patched suffix; **200** under `frontierSign` — payload intermittent |
+| `/webcast/im/fetch/` | signed by the page | headless-signed + session | **74,670-byte protobuf with a `wss://` push_server** |
 | event stream | page WebSocket relay | — | blocked on the above |
 
 **This is L5 for the signed REST endpoints.** A native, browser-free, headlessly-signed request was
@@ -273,13 +273,32 @@ routes to the same signature, and the transport endpoint wants the *public* one.
 product produces a 403 that is indistinguishable from a broken signer, which is why this went
 unnoticed while the suffix was assumed to be the transport signature.
 
-One guest run returned a complete 56,724-byte protobuf from `im/fetch` **including a `wss://`
-push_server** — a usable transport bootstrap obtained with no browser. Roughly a dozen subsequent
-runs returned an empty 200. So the payload is reachable headlessly but not yet on demand, and two
-explanations remain open: rate limiting (the success came before the endpoint had been hit
-repeatedly from one address) or session gating (`room/enter` 403s under both products and
-`room/ping` reports `"User doesn't login"`). `scripts/headless/im-fetch-probe.mjs` reproduces the
-comparison.
+### The transport bootstraps headlessly
+
+`scripts/headless/transport.mjs` returned a **74,670-byte protobuf carrying
+`wss://webcast-ws.tiktok.com/webcast/im/ws_proxy/ws_reuse_supplement/`** with no browser. The
+WebView oracle returned 74,273 bytes for the same room minutes earlier.
+
+It needs two things, both established by measurement rather than assumption:
+
+- **An authenticated account session.** A guest gets an empty 200 no matter how well signed, and
+  `/webcast/room/ping/audience/` says `status_code=20003, "User doesn't login"` outright. The
+  session is read from the file the WebView path already uses.
+- **The public signing product**, as above. `room/enter` answers 403 under both products, with and
+  without a session, and is not required.
+
+**Empty responses are upstream.** This endpoint often answers 200 with an empty body — and when it
+does, the WebView oracle returns `Rejected(EmptyBody)` for the same room at the same moment,
+verified paired across two rooms and both `sup_ws_ds_opt` values. The two paths succeed together
+and fail together, so an empty response is a server-side condition, not a gap in the headless
+implementation. Which `sup_ws_ds_opt` value works also varies, so both are tried.
+
+That parity check is the right first step whenever this looks broken:
+
+```sh
+cargo run -p ttl-sign-webview --example fetch-dump -- <user>
+node scripts/headless/transport.mjs /tmp/webmssdk.js <user>
+```
 
 ### What is settled, and what is not
 
@@ -295,9 +314,10 @@ Two things worth noting before anyone attributes this to the signer:
 - The live page HTML contains no `wss://`, `push_server`, or `im/fetch` data. The transport URI is
   built client-side after load, which is precisely why the page relay exists.
 
-So the open problem is **transport bootstrap**, not signature generation. Either `im/fetch` needs
-state that only a running page accumulates, or the WebSocket URI must be obtained another way.
-That is the one question standing between this project and a browser-free build.
+Transport bootstrap is therefore **solved for authenticated sessions**: every step from discovery
+through the push_server URI now runs without a browser. What remains is opening the WebSocket with
+those parameters from Rust — `ttl-live-ws` already speaks that protocol — and the guest case, which
+this endpoint refuses by design.
 
 ## Risks and kill criteria
 
