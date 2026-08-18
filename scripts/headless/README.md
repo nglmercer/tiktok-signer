@@ -159,6 +159,41 @@ Note that `/webcast/feed/` — the endpoint the `/live` page itself uses — ans
 empty body for a guest identity, both on `webcast.tiktok.com` and `webcast.us.tiktok.com`, even
 when the issued `x-ms-token` is fed back. The search endpoint is the working route.
 
+## Keeping up with the player (run this first when something breaks)
+
+Everything the transport depends on was read out of TikTok's own JavaScript, and none of it is
+versioned. `player-audit.mjs` reads those facts back out of the shipped app and diffs them against
+`fixtures/research/player-transport-v1.json`:
+
+```sh
+node scripts/headless/player-audit.mjs           # 55 facts compared, exit 1 on drift
+node scripts/headless/player-audit.mjs --print    # the facts as JSON
+node scripts/headless/player-audit.mjs --update   # accept the new reality
+```
+
+It needs no room, no session and no bundle — it reads `https://www.tiktok.com/live` and the chunks
+that page references, so it is safe to run on a schedule. What it covers: the socket hosts, the
+`ws_reuse_supplement` path, `wsDirect` / `fetchBeforeWsSuccess`, both `version_code` values and
+`update_version_code`, the browser block's key order, whether the query serializer percent-encodes,
+the `registerWsSigner` header names, and the field numbers of `PushFrame`, `EnterRoom` and
+`HeartBeat`.
+
+The fixture is not decorative: `cargo test -p ttl-sign-core` asserts `DirectSocketParams` still
+agrees with it. So the chain is checked end to end —
+
+```text
+player's chunk  →  player-audit.mjs  →  fixture  →  cargo test  →  DirectSocketParams  →  the wire
+```
+
+— and a TikTok deploy that moves any of it fails a test instead of producing a socket that opens and
+never speaks. The three failure modes it catches, in order of how hard they are to diagnose without
+it: an encoding serializer (every signature silently wrong), a changed query key (handshake fine, no
+frames), and a moved proto field (frames arrive, decode into nothing).
+
+When a check does fail, the order of work is: `--print` to see what moved, fix
+`crates/ttl-sign-core/src/params.rs`, `--update`, then `ws-direct.mjs` against a live room to confirm
+frames arrive again.
+
 ## The transport
 
 `ws-direct.mjs` opens the message socket the way the current web player does — no `im/fetch`, no

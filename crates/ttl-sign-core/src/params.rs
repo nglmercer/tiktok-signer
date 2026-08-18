@@ -702,4 +702,65 @@ mod tests {
         assert!(url.contains("tz_name=America/New_York"));
     }
 
+    /// The builder is checked against the player's shipped code, not against itself.
+    ///
+    /// `scripts/headless/player-audit.mjs` reads these facts back out of the live app's JavaScript
+    /// and writes them to the fixture; this asserts the builder still agrees with them. Together
+    /// they cover the whole chain — player's chunk → fixture → `DirectSocketParams` → the wire —
+    /// so a TikTok deploy that moves any of it fails here instead of producing a socket that opens
+    /// and never speaks.
+    ///
+    /// Offline: the fixture is committed, and only the audit touches the network.
+    #[test]
+    fn direct_socket_builder_agrees_with_the_audited_player() {
+        let raw = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/research/player-transport-v1.json"
+        ))
+        .expect("player-transport fixture; regenerate with scripts/headless/player-audit.mjs");
+        let facts: serde_json::Value =
+            serde_json::from_str(&raw).expect("player-transport fixture is JSON");
+        let facts = &facts["facts"];
+
+        // The player still builds the socket itself. If this flips, the direct path is gone and no
+        // amount of query correctness will help.
+        assert_eq!(facts["ws_direct"], serde_json::json!(true));
+        assert_eq!(facts["ws_signer"], serde_json::json!("registerWsSigner"));
+        assert_eq!(facts["ws_sign_output"], serde_json::json!("X-Gnarly"));
+        // Our query is signed as raw bytes. An encoding serializer invalidates every signature.
+        assert_eq!(
+            facts["serializer_percent_encodes"],
+            serde_json::json!(false),
+            "the player now encodes its query; Query::encode_raw would sign the wrong bytes"
+        );
+
+        assert_eq!(facts["direct_socket_path"], serde_json::json!(WS_REUSE_PATH));
+        assert_eq!(facts["sdk_version_code"], serde_json::json!(WS_VERSION_CODE));
+        assert_eq!(
+            facts["config_version_code"],
+            serde_json::json!(TRAILING_VERSION_CODE)
+        );
+        assert_eq!(
+            facts["update_version_code"],
+            serde_json::json!(UPDATE_VERSION_CODE)
+        );
+        let hosts = facts["socket_hosts"].as_array().expect("socket_hosts");
+        assert!(
+            hosts.iter().any(|h| h == DIRECT_SOCKET_HOST),
+            "the default socket host is no longer one the player would pick: {hosts:?}"
+        );
+
+        // The browser block leads the query, in its order and under its spellings.
+        let expected: Vec<&str> = facts["browser_block_keys"]
+            .as_array()
+            .expect("browser_block_keys")
+            .iter()
+            .map(|key| key.as_str().expect("key"))
+            .collect();
+        let params = DirectSocketParams::new("7000000000000000000");
+        let query = params.build(&preset());
+        let ours: Vec<&str> = query.iter().take(expected.len()).map(|(k, _)| k).collect();
+        assert_eq!(ours, expected, "the player's browser block changed shape");
+    }
+
 }

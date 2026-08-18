@@ -63,6 +63,27 @@ serializer fails a test rather than a connection. `scripts/headless/room-page-sc
 the trail: the room page's rehydration data carries the `live_im_sdk_socket_link` experiment and the
 `imFrontier` host.
 
+### Keeping it from silently rotting
+
+None of the above is documented or versioned by TikTok, and each fact fails differently when it
+moves: an encoding serializer makes every signature wrong while everything still looks healthy, a
+changed query key gives a successful handshake with no frames, a moved proto field gives frames that
+decode into nothing. All three are expensive to diagnose from the outside — that is most of what the
+search below cost.
+
+So the facts are read back out of the shipped app and pinned:
+
+```sh
+node scripts/headless/player-audit.mjs            # 55 facts vs fixtures/research/player-transport-v1.json
+cargo test -p ttl-sign-core                        # the fixture vs DirectSocketParams
+node scripts/headless/ws-direct.mjs /tmp/webmssdk.js <room_id> 20   # and the socket vs reality
+```
+
+The audit needs no room, no session and no bundle, so it can run on a schedule; the other two are the
+static and live halves of the same check. Note that room pages now answer a bare client with a
+1155-byte anti-bot shell, which is why the audit reads `https://www.tiktok.com/live` instead — the
+same app bundle, no creator required.
+
 Everything below is the record of the search that preceded this, kept because its measurements stand
 on their own: `im/fetch` is unsigned by the page, `room/enter` verifies our signature and accepts it,
 and three read endpoints verify nothing at all.
