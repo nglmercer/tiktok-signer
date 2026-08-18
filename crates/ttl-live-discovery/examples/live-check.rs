@@ -67,7 +67,7 @@ async fn main() {
         if authenticated {
             "account — transport available"
         } else {
-            "guest — discovery works; the transport step needs an account"
+            "guest — discovery works; the socket needs an account"
         }
     );
 
@@ -154,6 +154,11 @@ async fn main() {
     // for a request shape `im/fetch` would answer: it answers 200 with zero bytes because nothing
     // depends on its answer any more.
     println!("\n[4/5] building and signing the socket URL…");
+    if !authenticated {
+        println!("      skipped: the message socket refuses a jar-less handshake — measured as an");
+        println!("      immediate 1006, before a frame is exchanged. Store a session and re-run.");
+        return;
+    }
     let mut params = DirectSocketParams::new(&lookup.room_id);
     if let Some(webid) = jar.get("tt_webid_v2").filter(|value| !value.is_empty()) {
         // The device id in the query is the page's own webid when it has one.

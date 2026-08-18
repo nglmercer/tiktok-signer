@@ -1,15 +1,26 @@
 //! TikTok LIVE WebSocket client.
 //!
-//! Consumes a `SignedFetch` and opens the connection. **It does not sign anything**:
-//! `route_params` are already signed by TikTok inside the protobuf.
+//! Opens the connection and keeps it alive. **It does not sign anything.**
+//!
+//! Two ways in, and the second is the live one:
+//!
+//! - [`LiveConnection::open`] consumes a `SignedFetch` — the `push_server` and `route_params` an
+//!   `/webcast/im/fetch/` response used to carry. Kept for fixtures and the replay example.
+//! - [`LiveConnection::open_uri`] takes a URI the caller built and signed. This is what the web
+//!   player does: with `wsDirect` on it builds the socket URI itself and signs the query with
+//!   `registerWsSigner`, so no `im/fetch` response is involved. See
+//!   [`ttl_sign_core::DirectSocketParams`].
 //!
 //! Two things this crate deliberately **does not** do:
 //!
-//! - **It does not reconnect.** Parameters expire after about 30 seconds, so reconnecting
-//!   means restarting the `/webcast/im/fetch/` flow. The orchestrator decides what to do
-//!   with the reported close reason.
+//! - **It does not reconnect.** The signature ages out, so a reconnect means re-signing the URI.
+//!   That is cheap on the direct path — build, sign, `open_uri` again — but the orchestrator owns
+//!   the policy, and it is the one that sees the close reason.
 //! - **It does not parse events.** It returns decompressed `msg` payloads; event schemas
 //!   belong to the consumer.
+//!
+//! A jar-less handshake is refused before the socket opens (measured: immediate 1006), which is
+//! why [`WsError::EmptyCookies`] is checked before anything is sent.
 
 use std::time::Duration;
 

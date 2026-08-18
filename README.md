@@ -329,16 +329,18 @@ heartbeats, and acknowledges, `sanitize_uri` escapes the raw spaces a browser em
 `browser_version` (which no Rust HTTP client will parse) without disturbing the signature, and
 `ttl-live-events` decodes the frames.
 
-### Accounts are optional
+### Discovery is guest-only-friendly; the socket is not
 
-Listening works as a **guest**. Verified anonymously against a real live room on
-2026-08-10: discovery, `unique_id` → `room_id`, `room/info`, `gift/list`, and the page
-WebSocket with its chat events all work with no cookies at all, because TikTok's page serves
-logged-out viewers.
+Discovery needs no account: live search, `unique_id` → `room_id`, `room/info` and `gift/list` all
+answer with no cookies at all, and none of them verifies a signature.
 
-Prefer guest. `sessionid` *is* the account, so using one attributes everything the automated
-browser does to it, and an account is not a fix for rate limiting — a fresh guest identity
-is. Log in only for what genuinely needs an identity, such as subscriber-only rooms.
+**The message socket does need a session.** A jar-less handshake to
+`/webcast/im/ws_proxy/ws_reuse_supplement/` is refused before the socket opens — an immediate 1006,
+measured 2026-08-18. The older claim here, that listening works as a guest, was about the page
+WebSocket the removed WebView captured, and does not hold on this path.
+
+`sessionid` *is* the account, so everything this sends is attributed to it, and an account is not a
+fix for rate limiting — pace the connections instead.
 
 ### Providing a session
 

@@ -251,11 +251,13 @@ try {
 socket.binaryType = 'arraybuffer';
 
 let heartbeat;
+let opened = false;
 let frames = 0;
 let bytes = 0;
 const started = Date.now();
 
 socket.addEventListener('open', () => {
+  opened = true;
   console.log(`open after ${Date.now() - started} ms`);
   // The server sends nothing until the client says which room it is in — `executeOpen` in the SDK
   // does exactly this, and then starts the heartbeat.
@@ -296,7 +298,13 @@ function report() {
   console.log(`\n${frames} frame(s), ${bytes} bytes in ${Math.round((Date.now() - started) / 1000)}s`);
   if (frames) {
     console.log('The socket carries traffic. This is the transport, and it needs no im/fetch.');
-  } else {
+  } else if (opened) {
     console.log('No frames. The socket opened and accepted the room frame but pushed nothing.');
+  } else {
+    console.log('The handshake was refused before the socket opened.');
+    if (!jar.size) {
+      console.log('No session was loaded, and this endpoint refuses a jar-less handshake outright');
+      console.log('(measured: immediate 1006). Store cookies and re-run.');
+    }
   }
 }
