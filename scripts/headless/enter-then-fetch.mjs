@@ -261,6 +261,15 @@ async function tryFetch(label, query, { host = HOST, extraHeaders = {} } = {}) {
   }
   console.log(`      ${label.padEnd(20)} HTTP ${String(response.status).padEnd(4)} `
     + `${String(buffer.length).padStart(7)} bytes push_server=${hasPush ? 'YES' : 'no'}${note}`);
+  // A zero-byte 200 carries its explanation in the headers if anywhere: TikTok's edge stamps
+  // routing and trace headers, and a redirect directive would name the data centre to retry in.
+  if (process.env.TTL_SHOW_HEADERS) {
+    for (const [key, value] of [...response.headers].sort()) {
+      if (/^(content-|x-|server|via|tt-|set-cookie)/i.test(key)) {
+        console.log(`        ${key}: ${String(value).slice(0, 100)}`);
+      }
+    }
+  }
   return { buffer, hasPush };
 }
 
@@ -274,11 +283,32 @@ await tryFetch('json (no resp_type)', fetchQuery.replace('&resp_content_type=pro
 // data centre that does not hold the session. This account's `tt-target-idc` is `alisg`, and the
 // room's page reports idc `my2`, so the edge this repository has always used may simply be the
 // wrong one for these two paths.
+// A full Chromium header set. These were measured to change nothing on the *signed* route, but the
+// signed route was refused for a different reason entirely, so the unsigned one deserves its own
+// test — `sec-fetch-site` in particular is what tells an edge the request came from a page.
+const CHROMIUM_HEADERS = {
+  accept: '*/*',
+  'accept-encoding': 'gzip, deflate, br',
+  'sec-ch-ua': '"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
+  'sec-ch-ua-mobile': '?0',
+  'sec-ch-ua-platform': '"Linux"',
+  'sec-fetch-dest': 'empty',
+  'sec-fetch-mode': 'cors',
+  'sec-fetch-site': 'same-site',
+  priority: 'u=1, i',
+};
+
 const routing = [
+  ['chromium headers', HOST, CHROMIUM_HEADERS],
   ['idc header', HOST, { 'x-tt-target-idc': jar.get('tt-target-idc') || 'alisg' }],
   ['webcast.us.', 'https://webcast.us.tiktok.com', {}],
-  ['webcast-va.', 'https://webcast-va.tiktok.com', {}],
   ['tiktokv.com', 'https://webcast.tiktokv.com', {}],
+  // This session is pinned to `alisg`, so try the hosts that data centre answers on. A name that
+  // does not resolve reports an error row, which is itself information.
+  ['alisg normal-c', 'https://webcast-normal-c-alisg.tiktokv.com', {}],
+  ['alisg 16', 'https://webcast16-normal-c-alisg.tiktokv.com', {}],
+  ['tiktokv.eu', 'https://webcast.tiktokv.eu', {}],
+  ['sg tiktok', 'https://webcast-sg.tiktok.com', {}],
 ];
 for (const [label, host, extraHeaders] of routing) {
   await new Promise((r) => setTimeout(r, 1200));
