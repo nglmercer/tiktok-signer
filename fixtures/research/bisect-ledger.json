@@ -1,0 +1,239 @@
+{
+  "ledger_version": 1,
+  "note": "Outcomes of im/fetch bisection variants. No secrets: variant names, input fingerprints, classified outcomes, and byte counts only.",
+  "runs": [
+    {
+      "fingerprint": "747c35ea4193",
+      "variant": "frontier-only",
+      "what": "the public frontierSign X-Bogus alone — the control, expected to answer empty",
+      "outcome": "empty",
+      "status": 200,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Bogus": 16
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "10258a03f594",
+      "variant": "baseline",
+      "what": "the current signer, unchanged — the reference row",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 392,
+        "msToken": 0,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "7593a7001a80",
+      "variant": "params-project",
+      "what": "the query whose length matched the oracle exactly",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 392,
+        "msToken": 124,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "c9abd58dcfcb",
+      "variant": "params-minimal",
+      "what": "only the parameters the transport chunk actually reads",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 392,
+        "msToken": 124,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "8bb91a22044e",
+      "variant": "no-webgl",
+      "what": "canvas absent, so the fingerprint field collapses — does a shorter signature fare better",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 384,
+        "msToken": 124,
+        "X-Bogus": 1,
+        "X-Gnarly": 324
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "ac74d55d3cca",
+      "variant": "ua-windows-coherent",
+      "what": "a Windows UA with the query moved to match it",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 392,
+        "msToken": 124,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "beaaf17cff66",
+      "variant": "ua-query-mismatch",
+      "what": "a Linux UA against a Windows query — is the pair cross-checked",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 392,
+        "msToken": 124,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "5e88190666fe",
+      "variant": "xmst-absent",
+      "what": "no stored token, so msToken goes out empty",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 392,
+        "msToken": 0,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "0abb646034bf",
+      "variant": "no-bogus",
+      "what": "the suffix with X-Bogus stripped after signing",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 392,
+        "msToken": 124,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "c0a72cc88282",
+      "variant": "no-client-hints",
+      "what": "without the Chromium client hints Node does not send",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 392,
+        "msToken": 124,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "bdb0ee643d29",
+      "variant": "fixed-entropy",
+      "what": "deterministic getRandomValues — are the entropy fields evaluated at all",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 392,
+        "msToken": 124,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "f35d656c41de",
+      "variant": "no-bogus",
+      "what": "the suffix with the X-Bogus=1 placeholder removed after signing",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 392,
+        "msToken": 0,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "df3c60ed7350",
+      "variant": "real-bogus",
+      "what": "the placeholder replaced by a genuine frontierSign X-Bogus",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 392,
+        "msToken": 124,
+        "X-Bogus": 16,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "b13d6ab35642",
+      "variant": "gnarly-only",
+      "what": "X-Dynosaur removed, X-Gnarly kept",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "msToken": 124,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "804256ecdbc2",
+      "variant": "dynosaur-only",
+      "what": "X-Gnarly removed, X-Dynosaur kept",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 392,
+        "msToken": 124,
+        "X-Bogus": 1
+      },
+      "observed_on": "2026-08-18"
+    },
+    {
+      "fingerprint": "f29c3d19f1ad",
+      "variant": "no-mstoken",
+      "what": "msToken removed from the signed query after signing",
+      "outcome": "refused",
+      "status": 403,
+      "bytes": 0,
+      "signed_lengths": {
+        "X-Dynosaur": 392,
+        "X-Bogus": 1,
+        "X-Gnarly": 332
+      },
+      "observed_on": "2026-08-18"
+    }
+  ]
+}

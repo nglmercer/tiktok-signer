@@ -342,25 +342,23 @@ Measured 2026-08-18, after the removal, with an account session and the correct 
 
 A nonexistent room returning the same empty 200 as a real one is the decisive observation: the
 endpoint is not evaluating the request. No parameter is the lever, and retrying is not a strategy.
-This is not new — `ttl_sign_core::ws_uri` has documented "TikTok answers `/webcast/im/fetch/` with
-an empty body for this signer" since 2026-08-10, well before any headless work. The two payloads
+This is not new — the note "TikTok answers `/webcast/im/fetch/` with an empty body for this signer"
+dates from 2026-08-10, well before any headless work. The two payloads
 seen on 2026-08-18 (74,273 bytes via the WebView, 74,670 headless) were the exception, not the rule.
 
 A self-built WebSocket URI does not substitute: the handshake needs the `wrss` and `imprp` route
 params that only `im/fetch` returns, and connecting without them fails immediately. Verified
 against both known push_server hosts.
 
-**What works today:** a URI the player already built. `ttl_sign_core::ws_uri::fetch_result_from_ws_uri`
-reconstructs a complete `FetchResult` from one — push_server, route params, cursor, `internal_ext` —
-and the client connects with it:
+**What used to work:** a URI the player had already built, pasted in with `live-check --ws-uri`.
+That path was removed on 2026-08-18 along with its parser, by decision: it kept the *runtime*
+browser-free while keeping the *workflow* dependent on someone opening devtools once, and it let the
+real problem sit behind a fallback. `/webcast/im/fetch/` is now the only transport, and
+[docs/12](12-transport-reverse-engineering.md) is the critical path rather than an optimization.
 
-```sh
-cargo run -p ttl-live-discovery --example live-check -- <user> --ws-uri '<wss://…>'
-```
-
-Copy the URI once from any browser's devtools (Network → WS → the webcast socket). That keeps the
-runtime browser-free; it does not keep the *workflow* browser-free, which is the honest cost of the
-removal.
+Note also that the "signing demonstrably works because `room/info` and `gift/list` accept it"
+reasoning used throughout this document does not hold: neither endpoint verifies a signature. See the
+correction in docs/12.
 
 ### The transport bootstrapped headlessly, twice
 

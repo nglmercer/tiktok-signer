@@ -10,10 +10,12 @@ path. That is now the only path; the WebView oracle has been removed.
 
 ## Status
 
-Verified against live rooms on 2026-08-18 with no browser: signed `room/info` and `gift/list`
-return live data, and `/webcast/im/fetch/` returns a `wss://` push_server. See
-[docs/11](docs/11-webview-removal.md) for the measured comparison against the WebView before it
-was removed.
+Verified against live rooms on 2026-08-18 with no browser: discovery, `room/info` and `gift/list`
+return live data. The transport does not: `/webcast/im/fetch/` refuses this signer, and the
+captured-URI fallback has been removed rather than kept, so there is currently **no working
+transport**. [docs/12](docs/12-transport-reverse-engineering.md) records what has been measured,
+including two claims withdrawn on 2026-08-18 — those read endpoints never verified a signature, and
+the refusal turns out to be insensitive to every input the signature reads.
 
 | Crate | Status |
 |---|---|
@@ -21,7 +23,7 @@ was removed.
 | `ttl-sign-replay` | Versioned, sanitized offline signing fixtures and `ReplayBackend`. |
 | `ttl-sign-native` | Deterministic staged native pipeline with an isolated signing-algorithm boundary. |
 | `ttl-sign-lab` | Safe structured observations and classified backend differential reports. |
-| `ttl-live-discovery` | Browser-free discovery: unsigned room lookup, plus signed `room/info` and `gift/list` through a `UrlSigner`. |
+| `ttl-live-discovery` | Browser-free discovery, entirely unsigned: room lookup, `room/info`, `gift/list`, and live channels. |
 | `ttl-sign-headless` | Browser-free `SignerBackend`: signs the transport through an external signer process. |
 | `ttl-live-ws` | WebSocket client with heartbeat, acknowledgements, and typed rejection handling. |
 | `ttl-sign-server` | `GET /webcast/fetch`, `GET /webcast/rooms/{room_id}/connect` (Node client), and `GET /healthz`. |
@@ -291,28 +293,27 @@ the Node client reads back.
 **Verified 2026-08-10 against live rooms: it works.** 203 events — chat, likes, members,
 follows, viewer counts — reached `tiktok-live-connector` with no Euler Stream involved.
 
-The interesting part is how, because `/webcast/im/fetch/` answers this signer with an empty
-body and cannot supply the `ProtoMessageFetchResult` the client expects. It is never asked
-to. The player signs its **own** WebSocket URI, and `bridge.js` records that URI before the
-connection is attempted, so with `block_page_websockets` enabled the engine captures a
-signed transport nothing has used. `ws_uri::fetch_result_from_ws_uri` rebuilds the protobuf
-from it: `push_server` from the URI base, `route_params` from its query, and a synthetic
-cursor, since the `ws_reuse_supplement` transport carries none and clients reject an empty
-one.
+That run predates the WebView's removal, and it worked the only way it could at the time:
+`/webcast/im/fetch/` answers this signer with an empty body, so the `ProtoMessageFetchResult`
+the client expects came from the WebSocket URI the player had signed for itself, which
+`bridge.js` recorded before the connection was attempted.
 
-Two details make the reconstruction survive:
+**That route no longer exists.** The engine that captured those URIs was deleted, and on
+2026-08-18 so were the parser and the `live-check --ws-uri` flag that accepted one by hand —
+deliberately, because a fallback that needs a browser once is still a browser dependency, and
+keeping it meant the real problem never had to be solved. The transport is `/webcast/im/fetch/`
+or nothing.
 
-- **Values are decoded.** Clients re-encode `route_params` when rebuilding the query, so a
-  stored `%2F` would become `%252F` and break the signature. Storing `/` round-trips.
-- **The client's own parameters are removed.** The example empties
-  `WebSocketConfigDefaults.DEFAULT_WS_CLIENT_PARAMS`; otherwise the connector merges ~27
-  parameters of its own and appends `&version_code=270000`, sending a query TikTok never
-  signed.
+`im/fetch` does not yet answer this signer with a `push_server`. What is known about why is in
+[docs/12](docs/12-transport-reverse-engineering.md), and one long-standing claim there has been
+withdrawn: `room/info` and `gift/list` were believed to prove the signer works, and they do not
+verify signatures at all — a one-character tamper and an unsigned request return identical data.
+They are now called unsigned, and `im/fetch` is the only signed request in the system.
 
-A browser also emits URIs that no Rust HTTP client will parse — `browser_version=5.0 (X11;
-Linux x86_64)` contains raw spaces, which fail with "invalid uri character".
-`ws_uri::sanitize_uri` percent-encodes only those, which does not disturb the signature, and
-`LiveConnection::open_uri` applies it automatically.
+Everything downstream of a `push_server` is built and tested: `ttl-live-ws` connects,
+heartbeats, and acknowledges, `sanitize_uri` escapes the raw spaces a browser emits in
+`browser_version` (which no Rust HTTP client will parse) without disturbing the signature, and
+`ttl-live-events` decodes the frames.
 
 ### Accounts are optional
 

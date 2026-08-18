@@ -13,7 +13,7 @@
 //! - [`proto`] — transport envelope decoding: `PushFrame`, `FetchResult`, and the batch
 //!   splitter. Event semantics live in `ttl-live-events`.
 //! - [`gift_streak`] — collapses a burst of gift messages into one gift with its true total.
-//! - [`ws_uri`] — rebuilds a `ProtoMessageFetchResult` from the player's signed socket URI.
+//! - [`uri`] — escapes a signed socket URI so a Rust HTTP client can parse it.
 
 pub mod backend;
 pub mod cookie;
@@ -23,7 +23,7 @@ pub mod params;
 pub mod preset;
 pub mod proto;
 pub mod room;
-pub mod ws_uri;
+pub mod uri;
 
 pub use backend::{BackendFuture, ClientIdentity, MockBackend, SignerBackend, TransportRequest};
 pub use cookie::CookieJar;
@@ -37,4 +37,4 @@ pub use room::{
     room_lookup_url, webcast_refusal, Gift, LiveChannel, RoomInfo, RoomLookup, RoomOwner,
     WebcastRefusal,
 };
-pub use ws_uri::{fetch_result_from_ws_uri, sanitize_uri};
+pub use uri::sanitize_uri;

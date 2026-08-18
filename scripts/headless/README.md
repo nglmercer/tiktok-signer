@@ -21,6 +21,41 @@ sha256sum /tmp/webmssdk.js   # must match fixtures/research/webmssdk-profile-202
 
 A digest mismatch means the bundle drifted; re-run the probes before trusting any prior finding.
 
+## The three that matter most
+
+```sh
+# Does an endpoint verify a signature at all? (room-info | gift-list | live-search | all)
+node scripts/headless/verify-probe.mjs /tmp/webmssdk.js <room_id> all
+
+# Which inputs does the signature value depend on? Offline, no network.
+node scripts/headless/value-differential.mjs /tmp/webmssdk.js
+
+# Bisect those inputs against the one endpoint that does verify. Sends real requests.
+node scripts/headless/im-fetch-bisect.mjs /tmp/webmssdk.js <unique_id> --budget 12
+```
+
+`verify-probe.mjs` answered a question nobody had asked: **none** of `room/info`, `gift/list` or
+`/api/search/live/full/` verifies a signature. A correct signature, one with a single character
+changed, and no signature at all return the same data. Every "the signer works" result in this
+repository came from an endpoint that does not check, and `/webcast/im/fetch/` is the only verifier
+available. Those reads are now unsigned.
+
+`value-differential.mjs` needs no oracle. Pin the clock, `performance`, `Math.random` and entropy and
+the signer is reproducible byte for byte — it fails loudly if two identical runs disagree, because an
+unstable baseline makes every row meaningless — so one mutation at a time gives the dependency map:
+
+| Signature | Reads |
+|---|---|
+| `X-Gnarly` | `navigator.userAgent`, the canvas/WebGL fingerprint, the query, the clock, `xmst` |
+| `X-Dynosaur` | `navigator.userAgent`, the canvas/WebGL fingerprint, the query, the clock |
+| `msToken` | `xmst` only, verbatim |
+| `X-Bogus` | nothing in the sweep |
+
+Not platform, screen, language, `plugins`, `webdriver`, `referrer`, `location.href`, or
+`document.cookie`. `im-fetch-bisect.mjs` then walks those five against the live endpoint, keeping a
+dated ledger in `fixtures/research/bisect-ledger.json` so no variant is spent twice. Fifteen
+variants, one outcome — see [docs/12](../../docs/12-transport-reverse-engineering.md).
+
 ## Probes
 
 ```sh

@@ -12,18 +12,31 @@
 //!
 //! # What it requires
 //!
-//! - **The public signing product.** `/webcast/im/fetch/` rejects the patched-fetch suffix with
-//!   403 and accepts the `frontierSign` product. The two are not interchangeable per route, so
-//!   this backend pins the correct one rather than leaving it to the caller.
-//! - **An authenticated session.** The endpoint answers a guest with an empty 200 however well
-//!   signed. Supply the account cookies; [`HeadlessConfig::session`] takes the same jar the
-//!   WebView path loads.
+//! - **The public signing product.** `/webcast/im/fetch/` answers the `frontierSign` product with
+//!   an empty 200, and refuses the patched-fetch suffix with a 403 — either `X-Gnarly` or
+//!   `X-Dynosaur`, alone, is enough to draw the 403. This backend pins the form that is at least
+//!   answered rather than leaving the choice to the caller. "Accepted" would be too strong a word
+//!   for it.
+//! - **An authenticated session.** Supply the account cookies; [`HeadlessConfig::session`] takes
+//!   the same jar the WebView path loaded.
 //!
-//! # Empty responses
+//! # This path does not yet reach a push_server
 //!
 //! An empty body is reported as [`RejectReason::EmptyBody`], matching the WebView's classification
-//! exactly. The two paths were measured returning empty for the same rooms at the same moments,
-//! so an empty response is an upstream condition rather than a defect here.
+//! exactly. What that empty body means is unresolved, and the shape of the open question changed on
+//! 2026-08-18:
+//!
+//! - The endpoints this crate's signature *was* verified against — `room/info`, `gift/list`, the
+//!   live search — do not verify signatures at all (`scripts/headless/verify-probe.mjs`). Their
+//!   success was never evidence that the suffix is correct.
+//! - The refusal on `im/fetch` does not respond to any input the signature is known to read:
+//!   fifteen variants over the user agent, the canvas fingerprint, three parameter sets, `msToken`,
+//!   entropy, client hints and `X-Bogus` all land on the same 403
+//!   (`scripts/headless/im-fetch-bisect.mjs`, and `fixtures/research/bisect-ledger.json` for the
+//!   dated outcomes).
+//!
+//! So this is not "one wrong field away". See `docs/12-transport-reverse-engineering.md` for the
+//! two levers that remain.
 
 use std::time::Duration;
 

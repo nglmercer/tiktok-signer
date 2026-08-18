@@ -1,28 +1,29 @@
 //! Browser-free discovery for the TikTok LIVE endpoints that need no signature.
 //!
 //! Phase 4 of `docs/11-webview-removal.md`. Discovery is one of the three dependencies the WebView
-//! carries, and unlike signing it does not converge — it *splits*. Some of it is plain HTTP and
-//! works natively today; some of it needs a signature; one part needs a renderer and cannot be
-//! made native at all.
-//!
-//! All of it is implemented here. The unsigned lookup needs nothing; the signed calls take a
-//! [`UrlSigner`], so this crate never signs and the choice of signer stays with the caller:
+//! carried, and it turns out to need no signing at all:
 //!
 //! | Operation | Requirement | Implemented |
 //! |---|---|---|
 //! | `unique_id` → `room_id` | none | [`DiscoveryClient::room_lookup`] |
-//! | `/webcast/room/info/` | a signature | [`DiscoveryClient::room_info`] |
-//! | `/webcast/gift/list/` | a signature | [`DiscoveryClient::gift_list`] |
-//! | who is live now | a signature | `scripts/headless/find-live.mjs` |
+//! | `/webcast/room/info/` | none | [`DiscoveryClient::room_info`] |
+//! | `/webcast/gift/list/` | none | [`DiscoveryClient::gift_list`] |
+//! | who is live now | none | [`DiscoveryClient::live_channels`] |
 //!
-//! [`CommandSigner`] drives an external signer process, so a browser-free build works today:
-//! `scripts/headless/sign-url.mjs` runs the real bundle under a synthetic environment. Verified
-//! against live rooms on 2026-08-18 — `room/info` returned live viewer counts and `gift/list`
-//! returned 668 gifts, matching what the WebView reports for the same room.
+//! The last three were signed until 2026-08-18, when a one-character tamper test showed that none
+//! of them verifies a signature: a correct signature, one with a single character changed, and no
+//! signature at all return the same data. Run `scripts/headless/verify-probe.mjs` to reproduce it.
+//! Dropping the signature removed a signer subprocess from every read, and removed a false success
+//! signal — "room/info accepts our signature" was the evidence the transport diagnosis rested on,
+//! and it never meant anything.
+//!
+//! [`CommandSigner`] remains for the one request that *is* verified, `/webcast/im/fetch/`, which
+//! `ttl-sign-headless` owns. It drives `scripts/headless/sign-url.mjs` running the real bundle
+//! under a synthetic environment, so a browser-free build works today.
 //!
 //! "Who is live now" was previously believed to need a rendering engine, because the `/live` page
 //! ships no channel data in its HTML. It does not: `/api/search/live/full/` returns the same
-//! information as JSON, and it is signable. See `scripts/headless/find-live.mjs`.
+//! information as JSON. See also `scripts/headless/find-live.mjs`.
 //!
 //! Parsing and URL construction live in [`ttl_sign_core::room`] and are shared with the WebView
 //! path, so a native lookup and a page lookup cannot disagree about what "live" means.
@@ -760,57 +761,43 @@ pub fn interpret_live_search(body: &str) -> Result<Vec<LiveRoom>, DiscoveryError
 }
 
 impl DiscoveryClient {
-    /// Rooms broadcasting right now, most watched first. Signed.
+    /// Rooms broadcasting right now, most watched first. Unsigned.
     ///
     /// Results depend on the keyword, so this samples live rooms rather than enumerating them.
-    pub async fn live_channels(
-        &self,
-        keyword: &str,
-        signer: &dyn UrlSigner,
-    ) -> Result<Vec<LiveRoom>, DiscoveryError> {
-        let body = self
-            .signed_get(&live_search_url(keyword, 0), signer)
-            .await?;
+    pub async fn live_channels(&self, keyword: &str) -> Result<Vec<LiveRoom>, DiscoveryError> {
+        let body = self.read(&live_search_url(keyword, 0)).await?;
         let mut rooms = interpret_live_search(&body)?;
         rooms.sort_by(|a, b| b.viewers.cmp(&a.viewers));
         Ok(rooms)
     }
 
-    /// Full room metadata. Signed.
-    pub async fn room_info(
-        &self,
-        room_id: &str,
-        signer: &dyn UrlSigner,
-    ) -> Result<RoomInfo, DiscoveryError> {
-        let body = self
-            .signed_get(&room::room_info_url(room_id), signer)
-            .await?;
+    /// Full room metadata. Unsigned.
+    pub async fn room_info(&self, room_id: &str) -> Result<RoomInfo, DiscoveryError> {
+        let body = self.read(&room::room_info_url(room_id)).await?;
         interpret_room_info(room_id, &body)
     }
 
-    /// Every gift the room offers, with its diamond cost. Signed.
+    /// Every gift the room offers, with its diamond cost. Unsigned.
     ///
     /// The response is several megabytes; the client's timeout applies to it.
-    pub async fn gift_list(
-        &self,
-        room_id: &str,
-        signer: &dyn UrlSigner,
-    ) -> Result<Vec<Gift>, DiscoveryError> {
-        let body = self
-            .signed_get(&room::gift_list_url(room_id), signer)
-            .await?;
+    pub async fn gift_list(&self, room_id: &str) -> Result<Vec<Gift>, DiscoveryError> {
+        let body = self.read(&room::gift_list_url(room_id)).await?;
         interpret_gift_list(room_id, &body)
     }
 
-    async fn signed_get(
-        &self,
-        unsigned: &str,
-        signer: &dyn UrlSigner,
-    ) -> Result<String, DiscoveryError> {
-        let signed = signer.sign(unsigned).await?;
+    /// Read a webcast endpoint that does not verify a signature.
+    ///
+    /// These three were signed until it was measured that they do not check: `room/info`,
+    /// `gift/list` and the live search each return identical data whether the request carries a
+    /// correct signature, one with a single character changed, or none at all
+    /// (`scripts/headless/verify-probe.mjs`, 2026-08-18). Signing them cost a subprocess per call
+    /// and, worse, produced a success that was mistaken for evidence that the signer works —
+    /// which is how the transport diagnosis went wrong. Only `/webcast/im/fetch/` evaluates a
+    /// signature, and that path lives in `ttl-sign-headless`.
+    async fn read(&self, url: &str) -> Result<String, DiscoveryError> {
         let mut request = self
             .http
-            .get(&signed)
+            .get(url)
             // These endpoints are read from the web app, and reject a request that does not look
             // like it came from one.
             .header("referer", "https://www.tiktok.com/")

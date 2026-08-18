@@ -23,7 +23,7 @@ use std::time::Duration;
 use ttl_live_events::{decode_batch, LiveEvent};
 use ttl_live_ws::{ConnectConfig, LiveConnection};
 
-use ttl_live_discovery::{CommandSigner, DiscoveryClient, DiscoveryError, SigningProduct};
+use ttl_live_discovery::{CommandSigner, DiscoveryClient, DiscoveryError};
 use ttl_sign_core::{
     CookieJar, DevicePreset, LocationPreset, Preset, RejectReason, ScreenPreset, SignOutcome,
     SignerBackend, TransportRequest,
@@ -46,17 +46,7 @@ fn session() -> CookieJar {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let mut args = std::env::args().skip(1);
-    let mut requested = None;
-    let mut captured_uri = None;
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            // A URI the player already built and signed. It carries the route params and cursor
-            // that `/webcast/im/fetch/` would otherwise supply, so the transport works without it.
-            "--ws-uri" => captured_uri = args.next(),
-            _ => requested = Some(arg),
-        }
-    }
+    let requested = std::env::args().skip(1).find(|arg| !arg.starts_with("--"));
     let bundle = std::env::var("TTL_BUNDLE").unwrap_or_else(|_| "/tmp/webmssdk.js".into());
     let script =
         std::env::var("TTL_SIGN_SCRIPT").unwrap_or_else(|_| "scripts/headless/sign-url.mjs".into());
@@ -85,12 +75,7 @@ async fn main() {
     let client = DiscoveryClient::new(&preset)
         .expect("discovery client")
         .with_session(jar.to_cookie_string());
-    let signer = CommandSigner::node(script.clone(), bundle.clone())
-        .with_product(SigningProduct::FetchPatch)
-        .with_user_agent(preset.user_agent())
-        .with_cookie(jar.to_cookie_string());
-
-    // [1/5] who is live now — signed search, no rendering engine.
+    // [1/5] who is live now — no signature, no rendering engine.
     let user = match requested {
         Some(user) => {
             println!("\n[1/5] using the requested channel: @{user}");
@@ -98,7 +83,7 @@ async fn main() {
         }
         None => {
             println!("\n[1/5] listing channels that are live now…");
-            match client.live_channels("live", &signer).await {
+            match client.live_channels("live").await {
                 Ok(rooms) if !rooms.is_empty() => {
                     for room in rooms.iter().take(8) {
                         println!("      @{} ({} viewers)", room.unique_id, room.viewers);
@@ -139,16 +124,17 @@ async fn main() {
         lookup.is_live()
     );
 
-    // [3/5] room metadata and gift table — signed.
+    // [3/5] room metadata and gift table. Unsigned: these endpoints do not verify a signature,
+    // measurable with `scripts/headless/verify-probe.mjs`.
     println!("\n[3/5] reading room metadata…");
-    match client.room_info(&lookup.room_id, &signer).await {
+    match client.room_info(&lookup.room_id).await {
         Ok(info) => println!(
             "      title={:?} viewers={} likes={}",
             info.title, info.viewer_count, info.like_count
         ),
         Err(error) => println!("      room/info unavailable: {error}"),
     }
-    match client.gift_list(&lookup.room_id, &signer).await {
+    match client.gift_list(&lookup.room_id).await {
         Ok(gifts) => {
             println!("      gifts: {} available", gifts.len());
             if let Some(cheapest) = gifts.iter().min_by_key(|gift| gift.diamond_count) {
@@ -163,30 +149,6 @@ async fn main() {
 
     // [4/5] transport bootstrap.
     println!("\n[4/5] bootstrapping the transport…");
-    if let Some(uri) = captured_uri {
-        let Some(result) = ttl_sign_core::ws_uri::fetch_result_from_ws_uri(&uri) else {
-            println!("      that URI carries no query, so it is not a usable transport");
-            std::process::exit(2);
-        };
-        println!(
-            "      using the captured URI: {} ({} route params)",
-            result.push_server,
-            result.route_params.len()
-        );
-        listen(
-            LiveConnection::open_with(
-                &result,
-                &jar,
-                &preset.user_agent(),
-                &preset,
-                &lookup.room_id,
-                &ConnectConfig::default(),
-            )
-            .await,
-        )
-        .await;
-        return;
-    }
     if !authenticated {
         println!("      skipped: /webcast/im/fetch/ refuses guests. Provide a session to try it.");
         return;
@@ -215,32 +177,38 @@ async fn main() {
         SignOutcome::Rejected(RejectReason::EmptyBody) => {
             println!("      rejected: empty body (silent rejection)");
             println!();
-            println!("      Why: the service verifies the two computed signatures and rejects");
-            println!("      ours. Sending only X-Bogus gets an empty 200; adding either X-Gnarly");
-            println!("      or X-Dynosaur turns that into a 403. An absent signature is merely");
-            println!("      unauthenticated, a wrong one is refused — and this backend sends the");
-            println!("      X-Bogus-only form, hence the empty body rather than the 403.");
+            println!("      What is established, and what is not:");
             println!();
-            println!("      Already ruled out, so do not spend time on them: identity (a request");
-            println!("      with no cookies at all is refused the same as an authenticated one),");
-            println!("      fetch versus XMLHttpRequest, browser client hints, msToken freshness,");
-            println!("      the sup_ws_ds_opt value, and the room itself.");
+            println!("      /webcast/im/fetch/ is the only endpoint here known to evaluate a");
+            println!("      signature. room/info, gift/list and the live search return identical");
+            println!("      data signed, deliberately corrupted, or not signed at all — so their");
+            println!("      success says nothing about the signer:");
             println!();
-            println!("      Also not the signature *shape*: the signing input matches the oracle");
-            println!("      exactly — X-Gnarly is 332 bytes, the recorded value — checkable with");
-            println!("      no browser and no network:");
+            println!("        node scripts/headless/verify-probe.mjs /tmp/webmssdk.js {} all", lookup.room_id);
             println!();
-            println!(
-                "        TTL_URL=\"$(cargo run -q -p ttl-sign-core --example print-fetch-url \\"
-            );
-            println!("          -- {})\" \\", lookup.room_id);
-            println!("          node scripts/headless/canonical-input.mjs /tmp/webmssdk.js 124");
+            println!("      On im/fetch, X-Bogus alone gets an empty 200. Adding X-Gnarly or");
+            println!("      X-Dynosaur — either one, alone — turns that into a 403. This backend");
+            println!("      sends the X-Bogus-only form, hence an empty body rather than a 403.");
             println!();
-            println!("      What remains is the signature *value*, which needs one known-good");
-            println!("      signed request to differential against. See docs/12.");
+            println!("      The refusal does not move. Fifteen variants, one outcome, covering");
+            println!("      every input the signature is known to read: the user agent (matched to");
+            println!("      the query and deliberately mismatched), the canvas fingerprint (a");
+            println!("      332-byte and a 324-byte X-Gnarly alike), three parameter sets, msToken");
+            println!("      present, absent and stripped, fixed versus real entropy, the Chromium");
+            println!("      client hints, and a genuine 16-byte X-Bogus in place of the");
+            println!("      placeholder. Identity was ruled out before: no cookies at all is");
+            println!("      refused exactly like a full account session.");
             println!();
-            println!("      `--ws-uri <wss://…>` accepts a push_server URI from any source and");
-            println!("      runs the rest of this check against it.");
+            println!("        node scripts/headless/im-fetch-bisect.mjs /tmp/webmssdk.js <user>");
+            println!("        fixtures/research/bisect-ledger.json   # every outcome, dated");
+            println!();
+            println!("      Because the outcome is insensitive to the signature's content, \"right");
+            println!("      shape, wrong value\" is no longer supported by anything measured. What");
+            println!("      is true is narrower: no reachable black-box dimension changes it.");
+            println!();
+            println!("      Two levers remain, and both are in docs/12: per-byte field mapping of");
+            println!("      the signature itself, or one known-good signed request imported as a");
+            println!("      differential target.");
             return;
         }
         SignOutcome::Rejected(reason) => {

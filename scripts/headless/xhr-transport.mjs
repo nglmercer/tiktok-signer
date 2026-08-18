@@ -27,6 +27,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createSandbox } from './shim.mjs';
+import { createXhrClass } from './lib/xhr.mjs';
 
 const bundlePath = process.argv[2];
 const user = process.argv[3];
@@ -81,131 +82,19 @@ console.log(`room_id=${roomId}`);
 
 // --- a real XMLHttpRequest for the sandbox ----------------------------------------------------
 //
-// The SDK wraps these methods. A stub that dropped writes would make its hooks no-ops and look
-// exactly like an SDK that adds nothing — the same trap the Headers stub set earlier.
+// `lib/xhr.mjs` carries the implementation and the reasoning; it is shared with
+// `im-fetch-bisect.mjs` so the probe that measures a variant and the probe that sends it cannot
+// drift apart.
 const observed = [];
-
-function makeXhr() {
-  return class XMLHttpRequest {
-    constructor() {
-      this.readyState = 0;
-      this.status = 0;
-      this.statusText = '';
-      this.response = null;
-      this.responseText = '';
-      this.responseURL = '';
-      this.responseType = '';
-      this.withCredentials = false;
-      this.timeout = 0;
-      this._headers = {};
-      this._listeners = {};
-      // The SDK reads and reassigns the whole handler surface while wrapping `send`; a missing
-      // slot surfaces as "cannot read properties of undefined", not as a clear error.
-      this.onreadystatechange = null;
-      this.onload = null;
-      this.onloadstart = null;
-      this.onloadend = null;
-      this.onprogress = null;
-      this.onerror = null;
-      this.onabort = null;
-      this.ontimeout = null;
-      this.upload = {
-        onloadstart: null, onprogress: null, onload: null, onloadend: null,
-        onerror: null, onabort: null, ontimeout: null,
-        addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true,
-      };
-    }
-
-    dispatchEvent() {
-      return true;
-    }
-
-    overrideMimeType() {}
-
-    open(method, url, async = true) {
-      this._method = String(method).toUpperCase();
-      this._url = String(url);
-      this._async = async;
-      this.readyState = 1;
-    }
-
-    setRequestHeader(name, value) {
-      this._headers[String(name)] = String(value);
-    }
-
-    addEventListener(type, handler) {
-      (this._listeners[type] ||= []).push(handler);
-    }
-
-    removeEventListener() {}
-
-    abort() {}
-
-    getAllResponseHeaders() {
-      return this._responseHeaders || '';
-    }
-
-    getResponseHeader(name) {
-      return this._responseHeaderMap?.get(String(name).toLowerCase()) ?? null;
-    }
-
-    send(body) {
-      // Everything the SDK added is visible here: the final URL and the final header set.
-      const added = this._headers;
-      (async () => {
-        const headers = {
-          'user-agent': UA,
-          origin: 'https://www.tiktok.com',
-          referer: ROOM_URL,
-          'accept-language': 'en-US,en;q=0.9',
-          // Headers a Chromium XHR sends that Node does not. Listed in docs/12 as a Phase C
-          // suspect; TTL_NO_CLIENT_HINTS drops them so the difference stays measurable.
-          ...(process.env.TTL_NO_CLIENT_HINTS ? {} : {
-            accept: '*/*',
-            'accept-encoding': 'gzip, deflate, br',
-            'sec-ch-ua': '"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Linux"',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-site',
-          }),
-          ...added,
-        };
-        if (this.withCredentials) {
-          const cookie = cookieHeader();
-          if (cookie) headers.cookie = cookie;
-        }
-        let record = { url: this._url, method: this._method, sdk_headers: Object.keys(added),
-          with_credentials: this.withCredentials };
-        try {
-          const response = await fetch(this._url, { method: this._method, headers, body });
-          absorb(response);
-          const buffer = Buffer.from(await response.arrayBuffer());
-          this.status = response.status;
-          this.readyState = 4;
-          this.response = this.responseType === 'arraybuffer'
-            ? buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
-            : buffer.toString('utf8');
-          this._responseHeaderMap = new Map([...response.headers].map(([k, v]) => [k.toLowerCase(), v]));
-          this._responseHeaders = [...response.headers].map(([k, v]) => `${k}: ${v}`).join('\r\n');
-          record = { ...record, status: response.status, bytes: buffer.length,
-            push_server: buffer.toString('latin1').includes('wss://') };
-          observed.push(record);
-          if (this.onreadystatechange) this.onreadystatechange();
-          if (this.onload) this.onload();
-          for (const handler of this._listeners.load || []) handler({});
-        } catch (error) {
-          record = { ...record, error: String(error?.message).slice(0, 80) };
-          observed.push(record);
-          this.readyState = 4;
-          if (this.onerror) this.onerror(error);
-          for (const handler of this._listeners.error || []) handler(error);
-        }
-      })();
-    }
-  };
-}
+const XhrClass = createXhrClass({
+  userAgent: UA,
+  referer: ROOM_URL,
+  cookieHeader,
+  absorb,
+  onRecord: (record) => observed.push(record),
+  // TTL_NO_CLIENT_HINTS drops the Chromium hints so the difference stays measurable.
+  clientHints: !process.env.TTL_NO_CLIENT_HINTS,
+});
 
 const env = createSandbox();
 const w = env.windowTarget;
@@ -221,7 +110,7 @@ Object.defineProperty(w.document, 'cookie', {
 });
 Object.defineProperty(w.navigator, 'userAgent', { configurable: true, get: () => UA });
 Object.defineProperty(w.location, 'href', { configurable: true, get: () => ROOM_URL });
-w.XMLHttpRequest = makeXhr();
+w.XMLHttpRequest = XhrClass;
 
 if (env.load(fs.readFileSync(bundlePath, 'utf8'))) {
   console.error('bundle failed to load');
@@ -229,7 +118,6 @@ if (env.load(fs.readFileSync(bundlePath, 'utf8'))) {
 }
 // The path allowlist gates the hooks; `/webcast/` covers the transport route.
 await Promise.resolve(w.byted_acrawler.init({ aid: 1988, enablePathList: ['/webcast/'] }));
-const patched = w.XMLHttpRequest !== makeXhr;
 console.log(`XMLHttpRequest present after init: ${typeof w.XMLHttpRequest}`);
 
 // The parameter set the player builds, in its own order (see chunk 9894).

@@ -48,151 +48,155 @@ The XHR route adds the same four parameters as the fetch route and no extra head
 fetch-versus-XHR is not the difference. Feeding back the `msToken` the service issues on rejection
 (a real 124-byte token, confirmed non-empty in the signed query) does not change it.
 
-## The lead that opened it: signatures shorter than the oracle's
+## What the length work established, and what it was worth
 
-The starting observation was that the shim's *computed* signatures were short while its
-*passthrough* values were exact — `X-Gnarly` 324 against a recorded 332, `X-Dynosaur` 384 against
-388/392/444, with `msToken` and `X-Bogus` correct. That pointed at the signing input rather than
-the algorithm, and the committed profile still held the target: a **1274-byte** canonical input for
-`X-Gnarly` at baseline, surviving the oracle's own removal.
+The first lead was that the shim's *computed* signatures were short while its *passthrough* values
+were exact — `X-Gnarly` 324 against a recorded 332, `X-Dynosaur` 384 against 388/392/444, with
+`msToken` and `X-Bogus` correct. Two phases of measurement closed that gap, and both findings stand
+as facts about the signer even though the conclusion drawn from them did not:
 
-Phases A and B below closed that gap. `X-Gnarly` is now 332 bytes, exactly the recorded value, and
-`X-Dynosaur` lands inside the recorded set. The transport is still refused, which is the useful
-part: it means the remaining difference is **not** the signature.
+- **The canonical input tracks the query one byte for one byte.** Padding the query by 50 bytes moved
+  the input by exactly 50, and `document.cookie` does not enter it at all — 679 bytes of real session
+  cookies changed nothing. The earlier "cookie moves `X-Gnarly` by +8" reading was the `msToken`
+  *query parameter* moving, not the jar. `scripts/headless/canonical-input.mjs` measures this.
+- **The last 4 bytes were the canvas.** The shim's `getContext` returned `null`, so the SDK's WebGL
+  collection came back empty — which *shortens* the fingerprint instead of failing. Giving the shim a
+  WebGL and 2D context put `X-Gnarly` at exactly 332 and `X-Dynosaur` at 392, inside the recorded
+  set. Bisecting `devicePixelRatio`, screen metrics, `hardwareConcurrency`, language, platform,
+  `location.href` and `document.referrer` had moved the input by zero.
+- **Real entropy was restored.** `crypto.getRandomValues` had been a fixed sequence for
+  reproducibility, which is wrong for anything but differential work; `TTL_DETERMINISTIC` brings the
+  fixed sequence back when runs need to be comparable.
 
-## Plan
+What that work did *not* buy is any change in the service's answer — see below. A 324-byte `X-Gnarly`
+and the converged 332-byte one are refused identically, so length convergence turned out to be a
+proxy that measured nothing the verifier cares about.
 
-### Phase A — Measure the canonical input, not just the output — **done**
+## Correction, 2026-08-18: the premise was false
 
-`scripts/headless/canonical-input.mjs` patches the VM's call wrapper to record the argument length
-at each route entry and prints it beside the oracle's recorded value. Lengths only; no value is
-retained. The committed subgraph already names entry 48886 and records its input as a 1274-byte
-string, so the comparison needed no new oracle.
+This document used to argue from an asymmetry — `room/info` accepts the suffix that `im/fetch`
+refuses — to the conclusion that our signatures are the right *shape* and the wrong *value*. That
+argument assumed `room/info` verifies the signature.
 
-**Gate met.** It also established the shape of the input: the canonical string tracks the query
-**one byte for one byte** (padding the query by 50 bytes moved the input by exactly 50), and
-`document.cookie` does not enter it at all — 679 bytes of real session cookies changed nothing.
-The earlier "cookie moves X-Gnarly by +8" observation was the `msToken` *query* parameter moving,
-not the cookie jar.
+It does not. A one-character tamper inside `X-Gnarly`, preserving length and alphabet, returns
+byte-identical data. So does removing the signature entirely. So does never signing at all:
 
-That immediately explained most of the gap: the probe's hand-written query was 659 bytes while the
-project's own `FetchParams` builds 741. With the real parameter set, the fetch-composition input
-matched the oracle **exactly** (786 = 786) and `X-Gnarly` came within 4 bytes.
-
-### Phase B — Close the gap by bisection — **done**
-
-The canonical input is assembled from environment values. Vary one at a time — `navigator`
-properties, `screen`, `Intl` timezone, `document.cookie` contents, `location` — and watch the input
-length. The controlled corpus already records how the oracle's length moved under the same
-mutations (cookie +8, query duplicate +28, timezone −4, platform −9), so each experiment has an
-expected answer rather than a guess.
-
-Eight bytes is a small, specific gap: one absent property, or one value shorter than a browser's.
-
-**Gate met: `X-Gnarly` is 332 bytes, exactly the oracle's recorded value.**
-
-The remaining 4 bytes were not where the plan guessed. Bisecting `devicePixelRatio`, screen
-metrics, `hardwareConcurrency`, language, platform, `location.href`, and `document.referrer` moved
-the input by zero. `X-Gnarly` signs over the query *including* `X-Dynosaur`, so its 4-byte deficit
-was inherited: `X-Dynosaur` was 384 against a recorded 388/392/444.
-
-The cause was the canvas. The shim's `getContext` returned `null`, so the SDK's WebGL collection —
-it keeps a `WEBGL` field in its state — came back empty, which **shortens** the fingerprint instead
-of failing. Giving the shim a WebGL and 2D context put both signatures in the oracle's
-distribution:
-
-| Field | Oracle | Before | After |
-|---|---|---|---|
-| `X-Gnarly` | 332 | 324 | **332** |
-| `X-Dynosaur` | 388 / 392 / 444 | 384 | **392** |
-
-Real entropy was also restored — `crypto.getRandomValues` had been a fixed sequence for
-reproducibility, which is wrong for anything but differential work. `TTL_DETERMINISTIC` brings it
-back when comparing runs.
-
-### Phase C — Re-run the transport — **not achieved**
-
-With matching signature lengths, re-issue the XHR-signed request. If it still fails, the difference
-is outside the signature and the next suspects are ordered: the `ttwid` value's provenance, the
-`device_id`/`ttwid` binding, and request headers a browser sends that Node does not (`sec-ch-ua`,
-`sec-fetch-*`, `accept`).
-
-**Gate not met**, but the failure is now precisely located.
-
-Holding the converged signature fixed and moving only the identity — `scripts/headless/identity-probe.mjs`
-— changes nothing:
-
-| Identity | Result |
+| Request to `room/info` | Result |
 |---|---|
-| account session + fresh page cookies | 403 |
-| page cookies only, no session | 403 |
-| `ttwid` alone | 403 |
-| **no cookies at all** | 403 |
-| session with `device_id=0` | 403 |
+| signed, untouched | 200, `status_code=0` |
+| `X-Gnarly` tampered, one character | 200, `status_code=0` |
+| `X-Dynosaur` tampered, one character | 200, `status_code=0` |
+| signature removed | 200, `status_code=0` |
+| never signed | 200, `status_code=0` |
 
-Every row carries `X-Gnarly` at 332 bytes. Identity is not the lever: a request with no cookies at
-all is refused identically to a fully authenticated one. Chromium client hints (`accept`,
-`sec-ch-ua*`, `sec-fetch-*`) change nothing either.
+`gift/list` and `/api/search/live/full/` behave the same way. Reproduce it with:
 
-Removing parameters one at a time locates it exactly:
+```sh
+node scripts/headless/verify-probe.mjs /tmp/webmssdk.js <room_id> all
+```
 
-| Request | Result |
+Three consequences, and they matter more than anything above:
+
+1. **Our suffix has never been validated by anything.** Every "the signer works" result in this
+   repository came from an endpoint that does not check. The signing path has been carrying a
+   success signal that was never a signal.
+2. **`im/fetch` is the only verifier available.** It is a binary oracle — refused, answered empty, or
+   answered with a `push_server` — and it is the only one.
+3. **"Right shape, wrong value" is unsupported.** It may still be true. Nothing measured implies it.
+
+Those endpoints are now called unsigned, which removed a signer subprocess from every read.
+
+## What the only verifier says
+
+`scripts/headless/im-fetch-bisect.mjs` walks the inputs against `im/fetch`, and
+`scripts/headless/value-differential.mjs` establishes what those inputs are. With the clock,
+`performance`, `Math.random` and entropy pinned, our signer is reproducible byte for byte, so one
+mutation at a time yields the dependency map — no oracle required:
+
+| Signature | Reads |
 |---|---|
-| real `X-Bogus` only | **200**, empty |
-| `X-Dynosaur` + `X-Bogus` | **403** |
-| `X-Gnarly` + `X-Bogus` | **403** |
-| full suffix, with or without a real `X-Bogus` | **403** |
-| full suffix with `notice=CUSTOM_SIGN_SERVER` removed | **403** |
+| `X-Gnarly` | `navigator.userAgent`, the canvas/WebGL fingerprint, the query, the clock, `xmst` |
+| `X-Dynosaur` | `navigator.userAgent`, the canvas/WebGL fingerprint, the query, the clock |
+| `msToken` | `xmst` only, verbatim |
+| `X-Bogus` | nothing in the sweep |
 
-**Either computed signature present flips an empty 200 into a 403.** The service verifies
-`X-Dynosaur` and `X-Gnarly` and rejects ours. An absent signature is merely unauthenticated —
-answered, and answered with nothing; a *wrong* one is refused outright.
+Nothing else reaches the signature — not platform, screen, language, `plugins`, `webdriver`,
+`referrer`, `location.href`, nor `document.cookie`. Also dead, measured the same day: the SDK
+performs no `mssdk` `/web/common` handshake under any `init` shape, `report()` sends nothing, and
+`setTTWid` / `setTTWebid` / `setTTWebidV2` neither populate `_mssdk._sharedCache` nor move the
+signature, so the ttwid-binding thesis is gone.
 
-That is the real conclusion, and it is sharper than "the transport is blocked": the signatures are
-now the right **shape** and the wrong **value**. Length convergence was necessary and is not
-sufficient.
+Fifteen variants against the live endpoint, one outcome. Every dated row is in
+`fixtures/research/bisect-ledger.json`:
 
-## What that means for the goal
+| Variant | Result |
+|---|---|
+| baseline | 403 |
+| three different parameter sets | 403 |
+| canvas absent — a 324-byte `X-Gnarly` instead of 332 | 403 |
+| Windows UA, query moved to match | 403 |
+| Linux UA against a Windows query | 403 |
+| `msToken` absent, and stripped after signing | 403 |
+| fixed entropy instead of real | 403 |
+| without the Chromium client hints | 403 |
+| `X-Bogus=1` placeholder removed | 403 |
+| a genuine 16-byte `X-Bogus` in its place | 403 |
+| `X-Dynosaur` removed, `X-Gnarly` kept | 403 |
+| `X-Gnarly` removed, `X-Dynosaur` kept | 403 |
+| `frontierSign` `X-Bogus` alone, no suffix | **200, empty** |
 
-Reaching a valid value is level L2/L3 on the ladder in [09](09-signing-research.md) — reproducing
-deterministic intermediates, then a complete field — and that work needs an oracle to compare
-values against, one signed request whose bytes are known-good. The WebView provided exactly that
-and has been removed.
+Either computed signature, alone, is enough to turn an empty 200 into a 403 — and its content makes
+no difference. A signature 8 bytes shorter fares identically to the converged one, which means the
+length convergence Phases A and B achieved bought nothing measurable.
 
-So the honest position: from zero, with no browser and no captured URI, the remaining step is
-value-level signature convergence, and the tooling for it is a differential against a known-good
-signature that this repository no longer has a way to produce. The measurable proxies — canonical
-input length, output length, parameter set, identity dimensions — are all exhausted and all match.
+Identity was already ruled out: a request with no cookies at all is refused exactly like a fully
+authenticated one.
 
-Options, in the order they would settle it:
+## Where that leaves it
 
-1. **One known-good signed request**, from any source, retained as bytes. That restores the
-   differential and makes L2 approachable. It does not need to be repeatable; it needs to exist.
-2. **Native execution of the two routes.** The subgraph already names their entries (48886, 55188)
-   and the extractor reduces them; implementing their opcodes would let the value be derived rather
-   than compared. Bounded by reachability, but a large piece of work.
-3. **Accept the captured-URI path** as the supported route, and treat `im/fetch` as closed.
+Content-insensitivity is the important part. If the service were checking our value against a
+correct one, some content dimension would be expected to move the verdict; none does. What is
+established is narrower than either "the value is wrong" or "the value is right": **no black-box
+dimension reachable from here changes the answer.**
 
-### Phase D — Only then, the socket
+Two levers remain, and neither is a proxy measurement:
 
-`ttl_sign_core::ws_uri::fetch_result_from_ws_uri` and `ttl-live-ws` already handle everything after
-`push_server` exists, and `live-check` decodes five seconds of events. No work is expected here; it
-is listed so the finish line is explicit.
+1. **Per-byte introspection of the signature.** Pin the clock and entropy, vary one input, and diff
+   the output *by byte position*. That yields a field map — which bytes carry the timestamp, which
+   the fingerprint, which are structural — and a field map localizes a wrong field without any
+   known-good value to compare against.
+2. **One known-good signed request**, imported as bytes from any source and kept as a sanitized
+   fixture. It does not need to be repeatable; it needs to exist. With the byte map, one capture
+   answers a great deal.
+
+Native execution of routes 48886 and 55188 remains the third option and remains weeks of work.
+
+## After `push_server`, nothing is missing
+
+`ttl-live-ws` handles everything downstream, `ttl_sign_core::sanitize_uri` makes the rebuilt socket
+URI parseable by a Rust HTTP client, and `live-check` decodes five seconds of events. Listed so the
+finish line is explicit: the transport is one accepted `im/fetch` away from working.
 
 ## Tools
 
 | Tool | What it does |
 |---|---|
-| `scripts/headless/xhr-transport.mjs` | Drives `im/fetch` over a real `XMLHttpRequest`, so the SDK's XHR signing hook runs; reports the parameters and headers it adds |
-| `scripts/headless/sign-probe.mjs` | Signature lengths per route — the measurement Phase B iterates on |
-| `scripts/headless/transport.mjs` | The `frontierSign` route, for comparison |
-| `scripts/headless/emit-surface.mjs` | The environment surface, which is what Phase B mutates |
+| `scripts/headless/verify-probe.mjs` | Does an endpoint verify a signature at all — the tamper test that overturned the premise |
+| `scripts/headless/im-fetch-bisect.mjs` | Bisects the signature's inputs against `im/fetch`, with a request budget and a dated ledger |
+| `scripts/headless/value-differential.mjs` | Which inputs the signature value depends on, offline, with a stability gate on the baseline |
+| `scripts/headless/canonical-input.mjs` | Signing-input length per route, against the recorded values |
+| `scripts/headless/xhr-transport.mjs` | Drives `im/fetch` over a real `XMLHttpRequest`, so the SDK's XHR hook runs |
+| `scripts/headless/sign-probe.mjs` | Signature lengths per route |
+| `scripts/headless/emit-surface.mjs` | The environment surface the bundle touches |
 | `scripts/headless/find-live.mjs` | Live rooms to test against |
+| `scripts/headless/lib/xhr.mjs` | The shared XHR implementation, so probe and sender cannot drift |
 | `cargo run -p ttl-live-discovery --example live-check` | The end-to-end flow, including the socket and event decode |
 
-## What would make this unnecessary
+Every live tool prints statuses, byte counts and digests only — never a signed URL, cookie or token.
 
-A `push_server` obtained any other way is a complete substitute, because everything downstream is
-built. `live-check --ws-uri` accepts one directly. That is the pragmatic fallback if the phases
-above stall, and it is the honest reason this document exists: the reverse-engineering is a way to
-stop needing a browser **once**, not a prerequisite for the rest of the system.
+## No fallback any more
+
+A `push_server` obtained any other way used to be a complete substitute: `live-check --ws-uri`
+accepted one directly, and everything downstream is built. That flag and its parser are gone, by
+decision — the transport is `im/fetch` or nothing, so this document is the critical path rather than
+an optimization.
