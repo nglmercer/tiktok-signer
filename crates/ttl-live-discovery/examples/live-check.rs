@@ -47,7 +47,16 @@ fn session() -> CookieJar {
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let mut args = std::env::args().skip(1);
-    let requested = args.next();
+    let mut requested = None;
+    let mut captured_uri = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            // A URI the player already built and signed. It carries the route params and cursor
+            // that `/webcast/im/fetch/` would otherwise supply, so the transport works without it.
+            "--ws-uri" => captured_uri = args.next(),
+            _ => requested = Some(arg),
+        }
+    }
     let bundle = std::env::var("TTL_BUNDLE").unwrap_or_else(|_| "/tmp/webmssdk.js".into());
     let script =
         std::env::var("TTL_SIGN_SCRIPT").unwrap_or_else(|_| "scripts/headless/sign-url.mjs".into());
@@ -152,8 +161,32 @@ async fn main() {
         Err(error) => println!("      gifts: unavailable ({error})"),
     }
 
-    // [4/5] transport bootstrap — signed with the *other* product, and account-gated.
+    // [4/5] transport bootstrap.
     println!("\n[4/5] bootstrapping the transport…");
+    if let Some(uri) = captured_uri {
+        let Some(result) = ttl_sign_core::ws_uri::fetch_result_from_ws_uri(&uri) else {
+            println!("      that URI carries no query, so it is not a usable transport");
+            std::process::exit(2);
+        };
+        println!(
+            "      using the captured URI: {} ({} route params)",
+            result.push_server,
+            result.route_params.len()
+        );
+        listen(
+            LiveConnection::open_with(
+                &result,
+                &jar,
+                &preset.user_agent(),
+                &preset,
+                &lookup.room_id,
+                &ConnectConfig::default(),
+            )
+            .await,
+        )
+        .await;
+        return;
+    }
     if !authenticated {
         println!("      skipped: /webcast/im/fetch/ refuses guests. Provide a session to try it.");
         return;
@@ -181,8 +214,19 @@ async fn main() {
         }
         SignOutcome::Rejected(RejectReason::EmptyBody) => {
             println!("      rejected: empty body (silent rejection)");
-            println!("      this endpoint answers this way intermittently; retry, or try a room");
-            println!("      with more traffic. Nothing downstream can run without a push_server.");
+            println!();
+            println!("      This is not a retry situation and not a property of this room: the");
+            println!("      endpoint answers an empty 200 for any input from this client — even a");
+            println!("      nonexistent room id — so it is not evaluating the request at all.");
+            println!("      `ttl_sign_core::ws_uri` has recorded the same behaviour since");
+            println!("      2026-08-10, before any of the headless work.");
+            println!();
+            println!("      Working transport today needs a URI the player built. Copy one from a");
+            println!("      browser's devtools (Network → WS → the webcast socket → its URL) and");
+            println!("      hand it to this example:");
+            println!();
+            println!("        cargo run -p ttl-live-discovery --example live-check -- \\");
+            println!("          {} --ws-uri '<wss://…>'", lookup.unique_id);
             return;
         }
         SignOutcome::Rejected(reason) => {
@@ -195,18 +239,25 @@ async fn main() {
         }
     };
 
-    // [5/5] the point of all of it: real events off the socket.
+    listen(
+        LiveConnection::open(&signed, &preset, &lookup.room_id, &ConnectConfig::default()).await,
+    )
+    .await;
+}
+
+/// Connect, decode [`LISTEN_SECONDS`] of events, and report what arrived.
+///
+/// Shared by both transport routes: the signed `im/fetch` result and a URI captured from a
+/// browser. Once a `FetchResult` exists, nothing downstream cares where it came from.
+async fn listen(opened: Result<LiveConnection, ttl_live_ws::WsError>) {
     println!("\n[5/5] listening for {LISTEN_SECONDS}s of live events…");
-    let mut connection =
-        match LiveConnection::open(&signed, &preset, &lookup.room_id, &ConnectConfig::default())
-            .await
-        {
-            Ok(connection) => connection,
-            Err(error) => {
-                println!("      could not open the WebSocket: {error}");
-                std::process::exit(1);
-            }
-        };
+    let mut connection = match opened {
+        Ok(connection) => connection,
+        Err(error) => {
+            println!("      could not open the WebSocket: {error}");
+            std::process::exit(1);
+        }
+    };
     println!(
         "      connected to {}",
         connection.uri().split('?').next().unwrap_or_default()

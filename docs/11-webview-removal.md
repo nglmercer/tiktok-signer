@@ -328,7 +328,41 @@ gift/list  668 gifts
 That is the same cheapest gift the WebView `live-check` reports for the same room. When an
 embedded engine replaces the subprocess, only the `UrlSigner` implementation changes.
 
-### The transport bootstraps headlessly
+### The transport endpoint blanks this client
+
+Measured 2026-08-18, after the removal, with an account session and the correct signing product:
+
+| Request | Result |
+|---|---|
+| valid live room, protobuf | 200, 0 bytes |
+| valid live room, JSON | 200, 0 bytes |
+| **`room_id=1` (does not exist)** | **200, 0 bytes** |
+| `notice=CUSTOM_SIGN_SERVER` removed | 200, 0 bytes |
+| `sup_ws_ds_opt` 1, 0, or absent | 200, 0 bytes |
+
+A nonexistent room returning the same empty 200 as a real one is the decisive observation: the
+endpoint is not evaluating the request. No parameter is the lever, and retrying is not a strategy.
+This is not new — `ttl_sign_core::ws_uri` has documented "TikTok answers `/webcast/im/fetch/` with
+an empty body for this signer" since 2026-08-10, well before any headless work. The two payloads
+seen on 2026-08-18 (74,273 bytes via the WebView, 74,670 headless) were the exception, not the rule.
+
+A self-built WebSocket URI does not substitute: the handshake needs the `wrss` and `imprp` route
+params that only `im/fetch` returns, and connecting without them fails immediately. Verified
+against both known push_server hosts.
+
+**What works today:** a URI the player already built. `ttl_sign_core::ws_uri::fetch_result_from_ws_uri`
+reconstructs a complete `FetchResult` from one — push_server, route params, cursor, `internal_ext` —
+and the client connects with it:
+
+```sh
+cargo run -p ttl-live-discovery --example live-check -- <user> --ws-uri '<wss://…>'
+```
+
+Copy the URI once from any browser's devtools (Network → WS → the webcast socket). That keeps the
+runtime browser-free; it does not keep the *workflow* browser-free, which is the honest cost of the
+removal.
+
+### The transport bootstrapped headlessly, twice
 
 `scripts/headless/transport.mjs` returned a **74,670-byte protobuf carrying
 `wss://webcast-ws.tiktok.com/webcast/im/ws_proxy/ws_reuse_supplement/`** with no browser. The
