@@ -202,12 +202,14 @@ node scripts/headless/tools/build-bootstrap.mjs crates/ttl-sign-embedded/bootstr
 
 ## Shared modules
 
-Three files under `lib/`, and everything else imports them rather than re-deriving them:
+Files under `lib/`, and everything else imports them rather than re-deriving them. Two of them
+moved into the Node package — that is the thing that ships them — and stayed importable from here
+as one-line re-exports, so there is still one statement of the player's transport in the tree:
 
 | Module | What it owns |
 |---|---|
-| `lib/session.mjs` | the user agent, the session file path, the jar, the cookie header, `Set-Cookie` absorption |
-| `lib/player.mjs` | the player's transport constants, its query serializer, and the socket frames |
+| `lib/session.mjs` | re-export of `packages/tiktok-live/src/session.mjs` — the user agent, the session file path, the jar, the cookie header, `Set-Cookie` absorption |
+| `lib/player.mjs` | re-export of `packages/tiktok-live/src/player.mjs` — the player's transport constants, its query serializer, and the socket frames |
 | `lib/sign.mjs` | signing one URL under a described, reproducible environment |
 | `lib/xhr.mjs` | the real `XMLHttpRequest` the SDK's hooks operate on |
 | `lib/canvas.mjs` | **generated** — the canvas fingerprint as data, from `tools/gen-canvas.mjs` |

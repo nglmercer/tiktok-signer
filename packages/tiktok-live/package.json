@@ -1,0 +1,23 @@
+{
+  "name": "ttl-live",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "TikTok LIVE events in Node, with no sign server, no native module and no browser.",
+  "license": "MIT",
+  "main": "./src/index.mjs",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./src/index.mjs"
+    }
+  },
+  "files": ["src", "vendor", "index.d.ts", "README.md"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test test/",
+    "sync-bootstrap": "node ../../scripts/headless/tools/build-bootstrap.mjs vendor/bootstrap.js",
+    "listen": "node examples/listen.mjs"
+  }
+}

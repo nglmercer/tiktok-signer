@@ -80,10 +80,27 @@ Both produce byte-identical signatures — that is the acceptance test, not a ho
 behind it are `cargo test -p ttl-sign-embedded --features v8`, and the measurements are in
 [docs/13](docs/13-embedded-runtime.md).
 
-Using this from Node needs no native module: run the sign server and talk HTTP to it (that is what
-`examples/node-connector` does), or load `crates/ttl-sign-embedded/bootstrap.js` into a `node:vm`
-context and sign in-process — plain JavaScript, no `napi`. See
-[scripts/headless/README.md](scripts/headless/README.md#signing-one-url).
+### From Node, without any of this
+
+[`packages/tiktok-live`](packages/tiktok-live/README.md) is the whole flow as a Node library —
+discovery, signing, socket, protobuf, reconnect — with **no server, no native module and no
+runtime dependencies**:
+
+```js
+import { TikTokLive, label } from 'ttl-live';
+
+const live = new TikTokLive('@someone');
+live.on('chat', (event) => console.log(`${label(event.user)}: ${event.comment}`));
+await live.connect();
+```
+
+It embeds no engine because it does not need one: the only signed thing is a query string, the code
+that signs it is TikTok's own JavaScript bundle, and Node already has V8. The bundle runs in a bare
+`node:vm` context, through the same `bootstrap.js` sandbox the Rust engines run — so a `napi`
+addon would put a JavaScript engine inside a JavaScript runtime for no gain.
+
+The sign server remains the right boundary for callers that are not Node, or that want the Rust
+transport and event decoding.
 
 End-to-end check, no browser:
 
