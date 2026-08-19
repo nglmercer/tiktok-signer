@@ -6,6 +6,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# Run `live-check`'s embedded signer in V8 rather than QuickJS, matching the sign server's own
+# `--features v8`. Affects the example only; the library never embeds an engine.
+v8 = ["ttl-sign-embedded/v8"]
+
 [dependencies]
 ttl-sign-core = { workspace = true }
 

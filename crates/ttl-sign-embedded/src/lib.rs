@@ -5,31 +5,73 @@
 //! Docker image carries a Node runtime, and it is why nothing here can be packaged as a desktop
 //! application.
 //!
-//! This is the same signer with the process removed. QuickJS runs the same sandbox — literally the
-//! same source: `bootstrap.js` is generated from `scripts/headless/shim.mjs` by
+//! This is the same signer with the process removed. The engine runs the same sandbox — literally
+//! the same source: `bootstrap.js` is generated from `scripts/headless/shim.mjs` by
 //! `scripts/headless/tools/build-bootstrap.mjs`, so there is one sandbox in the repository, not two.
 //!
-//! Measured against the subprocess on 2026-08-18 (`docs/13-embedded-runtime.md`): 137 ms to load
-//! the bundle once, then 76 ms per signature, against 118 ms per signature for a fresh `node`.
-//! QuickJS was chosen because it produces **byte-identical** signatures to Node under a pinned
-//! profile, in 1.9 MB, without a JIT. Boa fails inside the bundle's own interpreter; V8 is faster
-//! but cannot target `wasm32`.
+//! # Two engines
+//!
+//! Both pass the same acceptance test — a **byte-identical** signature under a pinned profile — and
+//! they trade off against each other rather than one being better (`docs/13-embedded-runtime.md`):
+//!
+//! | Feature | Engine | Per signature | Binary cost |
+//! |---|---|---|---|
+//! | `quickjs` (default) | QuickJS via `rquickjs` | 28 ms | 3.1 MB |
+//! | `v8` | V8 via `deno_core` | 3 ms | 69.9 MB |
+//!
+//! QuickJS is the default because it is small and needs no JIT, and it is already several times
+//! faster than the 118 ms a fresh `node` costs. Turn on `v8` where binary size does not matter and
+//! throughput does — it costs about 67 MB of binary and returns roughly nine times the throughput.
+//! Both are exposed as [`QuickJsSigner`] and [`V8Signer`]; `EmbeddedSigner` names the one this
+//! build signs with, which is V8 when the `v8` feature is on and QuickJS otherwise.
 //!
 //! # The thread
 //!
-//! A QuickJS context is not [`Send`], so the engine lives on its own thread and this type is a
-//! handle to it. Requests go over a channel and replies come back on a oneshot, which keeps the
+//! Neither engine's context is [`Send`], so it lives on its own thread and the signer is a handle
+//! to it. Requests go over a channel and replies come back on a oneshot, which keeps the
 //! [`UrlSigner`] signature — an async `sign(&str)` — exactly as it was.
 
+use std::marker::PhantomData;
 use std::sync::mpsc;
 use std::thread;
 
-use rand::RngCore;
-use rquickjs::{Context, Function, Runtime};
 use ttl_live_discovery::{DiscoveryError, SignFuture, SigningProduct, UrlSigner};
 
+#[cfg(feature = "quickjs")]
+mod quickjs;
+#[cfg(feature = "v8")]
+mod v8;
+
+#[cfg(feature = "quickjs")]
+pub use quickjs::QuickJs;
+#[cfg(feature = "v8")]
+pub use v8::V8;
+
 /// The sandbox, flattened into one script. Generated; see the module docs.
-const BOOTSTRAP: &str = include_str!("../bootstrap.js");
+pub(crate) const BOOTSTRAP: &str = include_str!("../bootstrap.js");
+
+/// The most entropy an engine hands the sandbox in one draw.
+///
+/// Bundle 1.0.0.388 draws none at all — `tests/entropy.rs` measures it, and the V8 pool is sized
+/// from that number — so this is a ceiling on a request that should never arrive, not a budget.
+pub(crate) const MAX_RANDOM_BYTES: usize = 8192;
+
+/// A JavaScript engine that can hold a prepared bundle and sign URLs with it.
+///
+/// Deliberately narrow. Everything an engine could differ about — how the sandbox is built, which
+/// products exist, how a reply is read — is above this line and shared, so a second engine cannot
+/// quietly grow a second behaviour. What is below it is engine-specific and nothing else.
+pub trait Engine: Sized {
+    /// For error messages, so a failure names the engine that produced it.
+    const NAME: &'static str;
+
+    /// Start an engine, install the sandbox, and load `bundle` under `options` (a [`Profile`] as
+    /// JSON). Returns only once the bundle is ready to sign.
+    fn start(bundle: &str, options: &str) -> Result<Self, EmbeddedError>;
+
+    /// Sign one URL. `product` is the driver's name for it — see [`product_arg`].
+    fn sign(&mut self, url: &str, product: &str) -> Result<String, String>;
+}
 
 /// Environment the sandbox reports while signing.
 ///
@@ -79,13 +121,45 @@ struct Request {
     reply: tokio::sync::oneshot::Sender<Result<String, String>>,
 }
 
-/// A signer holding a warm QuickJS context on its own thread.
-pub struct EmbeddedSigner {
+/// A signer holding a warm engine on its own thread.
+pub struct Signer<E: Engine> {
     requests: mpsc::Sender<Request>,
     product: SigningProduct,
+    // The engine never crosses the thread, so this is a type tag and nothing more.
+    engine: PhantomData<fn() -> E>,
 }
 
-impl EmbeddedSigner {
+/// QuickJS: small, interpreted, byte-identical to V8.
+#[cfg(feature = "quickjs")]
+pub type QuickJsSigner = Signer<QuickJs>;
+
+/// V8: an order of magnitude faster per signature, at tens of megabytes.
+#[cfg(feature = "v8")]
+pub type V8Signer = Signer<V8>;
+
+/// The engine this build signs with by default.
+///
+/// QuickJS unless `v8` was asked for. `quickjs` is a default feature and arrives without anyone
+/// choosing it; `v8` only ever arrives because someone did, so it wins when both are present —
+/// which is what lets a dependent turn on `ttl-sign-embedded/v8` and get V8, without having to
+/// reach in and switch the default feature off.
+#[cfg(feature = "v8")]
+pub type EmbeddedSigner = Signer<V8>;
+/// The engine this build signs with by default.
+#[cfg(all(feature = "quickjs", not(feature = "v8")))]
+pub type EmbeddedSigner = Signer<QuickJs>;
+
+/// The engine [`EmbeddedSigner`] runs in, for logs and error messages.
+#[cfg(feature = "v8")]
+pub const ENGINE: &str = V8::NAME;
+/// The engine [`EmbeddedSigner`] runs in, for logs and error messages.
+#[cfg(all(feature = "quickjs", not(feature = "v8")))]
+pub const ENGINE: &str = QuickJs::NAME;
+
+#[cfg(not(any(feature = "quickjs", feature = "v8")))]
+compile_error!("ttl-sign-embedded needs an engine: enable the `quickjs` or `v8` feature");
+
+impl<E: Engine + 'static> Signer<E> {
     /// Load `bundle` into a fresh context and keep it warm.
     ///
     /// Returns once the bundle is loaded and `byted_acrawler.init` has run, so a constructed signer
@@ -94,7 +168,7 @@ impl EmbeddedSigner {
         Self::with_product(bundle, profile, SigningProduct::WsDirect)
     }
 
-    /// As [`EmbeddedSigner::new`], with the product this signer applies by default.
+    /// As [`Signer::new`], with the product this signer applies by default.
     ///
     /// The products are not interchangeable: the socket verifies `registerWsSigner`'s `X-Gnarly`,
     /// and the patched-fetch suffix or `frontierSign` produce parameters it ignores.
@@ -109,12 +183,16 @@ impl EmbeddedSigner {
         let (ready, started) = mpsc::channel::<Result<(), EmbeddedError>>();
 
         thread::Builder::new()
-            .name("ttl-sign-embedded".into())
-            .spawn(move || worker(bundle, options, ready, incoming))
+            .name(format!("ttl-sign-{}", E::NAME.to_lowercase()))
+            .spawn(move || worker::<E>(bundle, options, ready, incoming))
             .map_err(|error| EmbeddedError::Engine(error.to_string()))?;
 
         started.recv().map_err(|_| EmbeddedError::Stopped)??;
-        Ok(Self { requests, product })
+        Ok(Self {
+            requests,
+            product,
+            engine: PhantomData,
+        })
     }
 
     /// Sign under a product other than this signer's default.
@@ -138,102 +216,36 @@ impl EmbeddedSigner {
     }
 }
 
-impl UrlSigner for EmbeddedSigner {
+impl<E: Engine + 'static> UrlSigner for Signer<E> {
     fn sign<'a>(&'a self, url: &'a str) -> SignFuture<'a> {
         Box::pin(async move { self.sign_with(url, self.product).await })
     }
 }
 
-/// The engine thread. Owns the runtime for its whole life; nothing else touches it.
-fn worker(
+/// The engine thread. Owns the engine for its whole life; nothing else touches it.
+fn worker<E: Engine>(
     bundle: String,
     options: String,
     ready: mpsc::Sender<Result<(), EmbeddedError>>,
     incoming: mpsc::Receiver<Request>,
 ) {
-    let runtime = match Runtime::new() {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            let _ = ready.send(Err(EmbeddedError::Engine(error.to_string())));
-            return;
+    let mut engine = match E::start(&bundle, &options) {
+        Ok(engine) => {
+            let _ = ready.send(Ok(()));
+            engine
         }
-    };
-    let context = match Context::full(&runtime) {
-        Ok(context) => context,
         Err(error) => {
-            let _ = ready.send(Err(EmbeddedError::Engine(error.to_string())));
+            let _ = ready.send(Err(error));
             return;
         }
     };
 
-    context.with(|ctx| {
-        // The engine has no `crypto`, and the SDK's entropy is not decoration: signatures built
-        // from a counter come out short, which was measured. The bootstrap wires its random source
-        // to this function when it finds no `crypto`, so it must exist before the script runs.
-        let random = Function::new(ctx.clone(), |count: usize| {
-            let mut bytes = vec![0u8; count.min(4096)];
-            rand::thread_rng().fill_bytes(&mut bytes);
-            bytes
-        });
-        match random {
-            Ok(random) => {
-                if let Err(error) = ctx.globals().set("__ttl_random_bytes", random) {
-                    let _ = ready.send(Err(EmbeddedError::Engine(error.to_string())));
-                    return;
-                }
-            }
-            Err(error) => {
-                let _ = ready.send(Err(EmbeddedError::Engine(error.to_string())));
-                return;
-            }
-        }
-
-        if let Err(error) = ctx.eval::<(), _>(BOOTSTRAP) {
-            let _ = ready.send(Err(EmbeddedError::Engine(describe(&ctx, error))));
-            return;
-        }
-
-        let prepare: Function = match ctx.globals().get("ttlPrepare") {
-            Ok(function) => function,
-            Err(error) => {
-                let _ = ready.send(Err(EmbeddedError::Engine(describe(&ctx, error))));
-                return;
-            }
-        };
-        let prepared: Result<String, _> = prepare.call((bundle.as_str(), options.as_str()));
-        match prepared {
-            Ok(out) => {
-                if let Err(reason) = read_error(&out) {
-                    let _ = ready.send(Err(EmbeddedError::Bundle(reason)));
-                    return;
-                }
-            }
-            Err(error) => {
-                let _ = ready.send(Err(EmbeddedError::Bundle(describe(&ctx, error))));
-                return;
-            }
-        }
-
-        let sign: Function = match ctx.globals().get("ttlSignUrl") {
-            Ok(function) => function,
-            Err(error) => {
-                let _ = ready.send(Err(EmbeddedError::Engine(describe(&ctx, error))));
-                return;
-            }
-        };
-        let _ = ready.send(Ok(()));
-
-        // One request at a time, in arrival order. The channel closing ends the thread, which is
-        // how a dropped signer shuts its engine down.
-        while let Ok(request) = incoming.recv() {
-            let out: Result<String, _> = sign.call((request.url.as_str(), product_arg(request.product)));
-            let answer = match out {
-                Ok(out) => read(&out),
-                Err(error) => Err(describe(&ctx, error)),
-            };
-            let _ = request.reply.send(answer);
-        }
-    });
+    // One request at a time, in arrival order. The channel closing ends the thread, which is how a
+    // dropped signer shuts its engine down.
+    while let Ok(request) = incoming.recv() {
+        let answer = engine.sign(&request.url, product_arg(request.product));
+        let _ = request.reply.send(answer);
+    }
 }
 
 /// The driver's argument for a product. Same three names `sign-url.mjs` takes.
@@ -245,21 +257,9 @@ fn product_arg(product: SigningProduct) -> &'static str {
     }
 }
 
-/// QuickJS reports "Exception generated by QuickJS" and leaves the real error on the context.
-fn describe(ctx: &rquickjs::Ctx, error: rquickjs::Error) -> String {
-    if !matches!(error, rquickjs::Error::Exception) {
-        return error.to_string();
-    }
-    let value = ctx.catch();
-    match value.as_exception() {
-        Some(exception) => exception.message().unwrap_or_else(|| "unknown error".into()),
-        None => "unknown error".into(),
-    }
-}
-
 /// The driver's replies carry an `error` or they succeeded. `ttlPrepare` answers `{"ok":true}`,
 /// which carries nothing else worth reading.
-fn read_error(out: &str) -> Result<(), String> {
+pub(crate) fn read_error(out: &str) -> Result<(), String> {
     match out.find("\"error\":\"") {
         Some(at) => {
             let rest = &out[at + 9..];
@@ -275,7 +275,7 @@ fn read_error(out: &str) -> Result<(), String> {
 /// Parsed by hand rather than with `serde_json`: the shapes are two, they are ours, and the
 /// signature must not be re-encoded on the way through — a URL that survives a JSON round trip with
 /// its escapes rewritten is a different URL.
-fn read(out: &str) -> Result<String, String> {
+pub(crate) fn read(out: &str) -> Result<String, String> {
     if let Some(at) = out.find("\"error\":\"") {
         let rest = &out[at + 9..];
         let end = rest.find('"').unwrap_or(rest.len());
@@ -369,49 +369,5 @@ mod tests {
         assert!(BOOTSTRAP.contains("function createSandbox()"));
         assert!(BOOTSTRAP.contains("globalThis.ttlPrepare"));
         assert!(BOOTSTRAP.contains("globalThis.ttlSignUrl"));
-    }
-}
-
-#[cfg(test)]
-mod engine_tests {
-    use super::*;
-
-    /// The random source is injected from Rust and wired up by the bootstrap. If that wiring
-    /// breaks, the SDK swallows the exception inside its own interpreter and quietly omits parts of
-    /// its API — which is a far harder failure to read than an error here.
-    #[test]
-    fn the_injected_random_source_reaches_the_sandbox() {
-        let runtime = Runtime::new().expect("runtime");
-        let context = Context::full(&runtime).expect("context");
-        context.with(|ctx| {
-            let random = Function::new(ctx.clone(), |count: usize| {
-                let mut bytes = vec![0u8; count.min(4096)];
-                rand::thread_rng().fill_bytes(&mut bytes);
-                bytes
-            })
-            .expect("random function");
-            ctx.globals()
-                .set("__ttl_random_bytes", random)
-                .expect("install");
-            ctx.eval::<(), _>(BOOTSTRAP).expect("bootstrap");
-
-            let kind: String = ctx
-                .eval("typeof globalThis.TTL_RANDOM_SOURCE")
-                .expect("read the source");
-            assert_eq!(kind, "function", "the bootstrap did not wire the random source");
-
-            let filled: String = ctx
-                .eval(
-                    "(function () { const a = new Uint8Array(8); \
-                     globalThis.TTL_RANDOM_SOURCE(a); \
-                     return Array.from(a).join(','); })()",
-                )
-                .expect("fill an array");
-            assert_eq!(filled.split(',').count(), 8, "got: {filled}");
-            assert!(
-                filled.split(',').any(|byte| byte != "0"),
-                "every byte was zero: {filled}"
-            );
-        });
     }
 }

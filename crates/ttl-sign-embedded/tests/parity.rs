@@ -164,3 +164,36 @@ async fn pinning_decides_whether_a_signature_repeats() {
         "an unpinned signature must not equal the frozen one"
     );
 }
+
+/// The two embedded engines against each other, with no Node in the picture.
+///
+/// This is the check that keeps a second engine honest: it needs nothing installed, so it runs in
+/// CI on a clone with a cached bundle, and it fails on the difference that matters — the bytes.
+#[cfg(all(feature = "quickjs", feature = "v8"))]
+#[tokio::test(flavor = "current_thread")]
+async fn both_embedded_engines_sign_the_same_bytes() {
+    use ttl_sign_embedded::{QuickJsSigner, V8Signer};
+
+    let Some(bundle) = bundle_path() else {
+        eprintln!("skipped: no signing bundle at TTL_BUNDLE or /tmp/webmssdk.js");
+        return;
+    };
+    let source = std::fs::read_to_string(&bundle).expect("read the bundle");
+    let pinned = || Profile {
+        pinned: true,
+        ..Profile::default()
+    };
+
+    for (product, url) in CASES {
+        // A fresh context per engine per product: the SDK carries per-call state, so the first
+        // signature out of each is the only one the two engines can be asked to agree on.
+        let quickjs = QuickJsSigner::with_product(source.clone(), pinned(), product)
+            .expect("prepare QuickJS");
+        let v8 = V8Signer::with_product(source.clone(), pinned(), product).expect("prepare V8");
+        assert_eq!(
+            quickjs.sign(url).await.expect("QuickJS signature"),
+            v8.sign(url).await.expect("V8 signature"),
+            "{product:?} differs between the embedded engines"
+        );
+    }
+}

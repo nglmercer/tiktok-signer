@@ -1,4 +1,6 @@
-# Throwaway: measures three engines against one acceptance test. Not a workspace member, and
+# Throwaway: measures the engines that did not ship against one acceptance test. V8 moved into
+# `crates/ttl-sign-embedded` behind `--features v8`, and its numbers now come from that crate's
+# `tests/latency.rs`, so it is no longer here. Not a workspace member, and
 # nothing here is meant to be merged — the result is a table, not code.
 [package]
 name = "embed-spike"
@@ -13,12 +15,10 @@ publish = false
 [features]
 quickjs = ["dep:rquickjs"]
 boa = ["dep:boa_engine"]
-deno = ["dep:deno_core"]
 
 [dependencies]
 rquickjs = { version = "0.12", optional = true }
 boa_engine = { version = "0.21", optional = true }
-deno_core = { version = "0.410", optional = true }
 
 [[bin]]
 name = "embed-spike"

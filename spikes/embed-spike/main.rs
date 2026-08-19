@@ -4,7 +4,6 @@
 //! node scripts/headless/tools/build-bootstrap.mjs
 //! cargo run --release --features quickjs -- /tmp/webmssdk.js
 //! cargo run --release --features boa     -- /tmp/webmssdk.js
-//! cargo run --release --features deno    -- /tmp/webmssdk.js
 //! ```
 //!
 //! One acceptance test, the same for all three: sign the canonical URL under the pinned profile and
@@ -226,7 +225,7 @@ fn sign(bootstrap: &str, bundle: &str, url: &str) -> Result<String, String> {
     })
 }
 
-#[cfg(any(feature = "boa", feature = "deno"))]
+#[cfg(feature = "boa")]
 fn warm(_: &str, _: &str, _: &str, _: usize, _: &str) -> Result<(u128, u128, bool), String> {
     Err("only measured for the engine that passes the acceptance test".into())
 }
@@ -280,65 +279,6 @@ fn sign(bootstrap: &str, bundle: &str, url: &str) -> Result<String, String> {
     decode(&out)
 }
 
-#[cfg(feature = "deno")]
-const ENGINE: &str = "V8 (deno_core)";
-
-#[cfg(feature = "deno")]
-fn probe(source: &str) -> Result<String, String> {
-    use deno_core::{v8, JsRuntime, RuntimeOptions};
-    let mut runtime = JsRuntime::new(RuntimeOptions::default());
-    let value = runtime
-        .execute_script("probe.js", source.to_string())
-        .map_err(|e| e.to_string())?;
-    let scope = &mut runtime.handle_scope();
-    Ok(v8::Local::new(scope, value).to_rust_string_lossy(scope))
-}
-
-#[cfg(feature = "deno")]
-fn sign(bootstrap: &str, bundle: &str, url: &str) -> Result<String, String> {
-    use deno_core::{v8, JsRuntime, RuntimeOptions};
-
-    let mut runtime = JsRuntime::new(RuntimeOptions::default());
-    runtime
-        .execute_script("bootstrap.js", bootstrap.to_string())
-        .map_err(|e| format!("bootstrap: {e}"))?;
-
-    // The driver is a global function; call it with the two strings and read back its JSON.
-    let call = format!(
-        "ttlSign({}, {})",
-        serde_literal(bundle),
-        serde_literal(url)
-    );
-    let value = runtime
-        .execute_script("call.js", call)
-        .map_err(|e| format!("ttlSign threw: {e}"))?;
-    let scope = &mut runtime.handle_scope();
-    let local = v8::Local::new(scope, value);
-    let out = local.to_rust_string_lossy(scope);
-    decode(&out)
-}
-
-/// JSON-quote a string so it can be embedded in a script. Only used by the deno path, which has no
-/// direct argument passing without more scaffolding than a spike deserves.
-#[cfg(feature = "deno")]
-fn serde_literal(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('"');
-    for character in value.chars() {
-        match character {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
 /// The driver returns `{"signed": …}` or `{"error": …}`. Parsed by hand for the same reason.
 fn decode(out: &str) -> Result<String, String> {
     if let Some(at) = out.find("\"error\":\"") {
@@ -358,5 +298,5 @@ fn decode(out: &str) -> Result<String, String> {
     Ok(signed.replace("\\u0026", "&").replace("\\/", "/"))
 }
 
-#[cfg(not(any(feature = "quickjs", feature = "boa", feature = "deno")))]
-compile_error!("pick an engine: --features quickjs | boa | deno");
+#[cfg(not(any(feature = "quickjs", feature = "boa")))]
+compile_error!("pick an engine: --features quickjs | boa");

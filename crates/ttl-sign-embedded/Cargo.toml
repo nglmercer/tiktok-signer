@@ -1,16 +1,24 @@
 [package]
 name = "ttl-sign-embedded"
-description = "Signs in-process by running the real bundle in an embedded QuickJS context."
+description = "Signs in-process by running the real bundle in an embedded JavaScript engine."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = ["quickjs"]
+# Small and interpreted: ~1.9 MB, 76 ms per signature.
+quickjs = ["dep:rquickjs"]
+# The engine the bundle was built for: tens of megabytes, 8 ms per signature.
+v8 = ["dep:deno_core", "tokio/rt"]
+
 [dependencies]
 ttl-live-discovery = { workspace = true }
 
+deno_core = { version = "0.410", optional = true }
 rand = { workspace = true }
-rquickjs = "0.12"
+rquickjs = { version = "0.12", optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 

@@ -46,7 +46,7 @@ client will parse) without disturbing the signature, and `ttl-live-events` decod
 | `ttl-sign-lab` | Safe structured observations and classified backend differential reports. |
 | `ttl-live-discovery` | Browser-free discovery, entirely unsigned: room lookup, `room/info`, `gift/list`, and live channels. |
 | `ttl-sign-headless` | Browser-free `SignerBackend`: builds and signs the socket URL, and describes it in TikTok's own `ProtoMessageFetchResult` shape. |
-| `ttl-sign-embedded` | The same signing, in-process: the real bundle in a warm QuickJS context, no `node` subprocess. |
+| `ttl-sign-embedded` | The same signing, in-process: the real bundle in a warm QuickJS or V8 context, no `node` subprocess. |
 | `ttl-live-ws` | WebSocket client with heartbeat, acknowledgements, typed rejection handling, and a reconnecting stream that re-signs each attempt. |
 | `ttl-sign-server` | `GET /webcast/fetch`, `GET /webcast/rooms/{room_id}/connect` (Node client), and `GET /healthz`. |
 
@@ -66,10 +66,19 @@ curl -s -o /tmp/webmssdk.js \
 cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless
 ```
 
-`TTL_SIGNER=embedded` signs in-process instead, running the same sandbox in a QuickJS context held
-warm — no `node` per signature (95–105 ms → 70–89 ms, and no Node needed on the host at all). It is
-opt-in until it has more mileage; the parity test that justifies it is
-`cargo test -p ttl-sign-embedded`, and the measurements are in
+`TTL_SIGNER=embedded` signs in-process instead, running the same sandbox in an engine held warm —
+no `node` per signature — 95–105 ms through the server becomes 70–89 ms under QuickJS and 19 ms
+under V8, with no Node needed on the host at all. Which engine is a build choice, not an
+environment one:
+
+```sh
+cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless      # QuickJS, 3.1 MB, 28 ms/sig
+cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless,v8   # V8, +67 MB, 3 ms/sig
+```
+
+Both produce byte-identical signatures — that is the acceptance test, not a hope. It is opt-in
+until it has more mileage; the parity tests that justify it are
+`cargo test -p ttl-sign-embedded --features v8`, and the measurements are in
 [docs/13](docs/13-embedded-runtime.md).
 
 End-to-end check, no browser:

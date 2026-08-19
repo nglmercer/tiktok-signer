@@ -82,13 +82,15 @@ async fn main() -> Result<()> {
         LocationPreset::us_east(),
         ScreenPreset::FHD,
     );
-    // Two signers, one trait. `TTL_SIGNER=embedded` runs the bundle in an in-process QuickJS
-    // context instead of spawning `node` per signature: same sandbox source, byte-identical output
-    // under a pinned profile (`cargo test -p ttl-sign-embedded`), and no 235 KB parse each time.
+    // Two signers, one trait. `TTL_SIGNER=embedded` runs the bundle in an in-process engine
+    // instead of spawning `node` per signature: same sandbox source, byte-identical output under a
+    // pinned profile (`cargo test -p ttl-sign-embedded`), and no 235 KB parse each time. Which
+    // engine that is comes from the build — QuickJS, or V8 with `--features v8` — not from the
+    // environment, so the names below are aliases for "whichever was compiled in".
     // The subprocess stays the default until the parity test has been green for a while.
     let embedded = matches!(
         std::env::var("TTL_SIGNER").as_deref(),
-        Ok("embedded") | Ok("quickjs")
+        Ok("embedded") | Ok("quickjs") | Ok("v8")
     );
     let signer: Box<dyn UrlSigner> = if embedded {
         let source = std::fs::read_to_string(&bundle)
@@ -98,7 +100,7 @@ async fn main() -> Result<()> {
             cookie: Some(session.to_cookie_string()),
             ..Profile::default()
         };
-        info!(%bundle, "signing in-process with an embedded engine");
+        info!(%bundle, engine = ttl_sign_embedded::ENGINE, "signing in-process with an embedded engine");
         Box::new(
             EmbeddedSigner::with_product(source, profile, TRANSPORT_PRODUCT)
                 .context("could not start the embedded signer")?,

@@ -20,6 +20,8 @@ required-features = ["replay"]
 default = []
 replay = ["dep:ttl-sign-replay"]
 headless = ["dep:ttl-sign-headless", "dep:ttl-live-discovery", "dep:ttl-sign-embedded"]
+# Sign in V8 rather than QuickJS: ~9x the throughput, ~67 MB more binary.
+v8 = ["ttl-sign-embedded?/v8"]
 
 [dependencies]
 ttl-sign-core = { workspace = true }

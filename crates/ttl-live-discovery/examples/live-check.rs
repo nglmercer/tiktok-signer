@@ -165,16 +165,20 @@ async fn main() {
     }
     // Through the same backend the sign server uses, so this example exercises the production path
     // rather than a parallel copy of it. It builds the socket URL, has it signed, and describes it.
-    // `TTL_SIGNER=embedded` runs the bundle in-process instead of spawning `node` per signature.
+    // `TTL_SIGNER=embedded` runs the bundle in-process instead of spawning `node` per signature;
+    // which engine that is comes from the build (`--features v8`), not from the environment.
     let signer: Box<dyn UrlSigner> = if matches!(
         std::env::var("TTL_SIGNER").as_deref(),
-        Ok("embedded") | Ok("quickjs")
+        Ok("embedded") | Ok("quickjs") | Ok("v8")
     ) {
         let source = std::fs::read_to_string(&bundle).unwrap_or_else(|error| {
             eprintln!("\nFAILED: could not read {bundle}: {error}");
             std::process::exit(1);
         });
-        println!("      signing in-process with an embedded engine");
+        println!(
+            "      signing in-process with an embedded engine ({})",
+            ttl_sign_embedded::ENGINE
+        );
         Box::new(
             EmbeddedSigner::with_product(
                 source,
