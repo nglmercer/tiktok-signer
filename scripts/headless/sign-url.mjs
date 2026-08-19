@@ -1,7 +1,9 @@
 // Sign one URL with the webmssdk bundle, headlessly, and print the signed URL.
 //
-// This exists to be driven as a subprocess by `ttl_live_discovery::CommandSigner`, so Rust can
-// reach the signer without embedding a JavaScript engine and without a browser.
+// Rust no longer drives this: `crates/ttl-sign-embedded` runs the same sandbox in an embedded
+// engine, and the `CommandSigner` that used to spawn this script is gone. What is left is a
+// hand tool — one URL, one signature, from a shell — and the signer for anything already running
+// on Node, which needs no native module to use it. `verify-probe.mjs` drives it too.
 //
 //   node scripts/headless/sign-url.mjs <webmssdk.js> <url> [product]
 //

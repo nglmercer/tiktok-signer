@@ -314,6 +314,10 @@ signs: `room_info` and `gift_list` take a `UrlSigner`, and `CommandSigner` drive
 `scripts/headless/sign-url.mjs` as a subprocess, so Rust reaches the signer without embedding a
 JavaScript engine and without a WebView.
 
+> Superseded on 2026-08-19. `CommandSigner` has been deleted: the engine is embedded now, and
+> `UrlSigner` is implemented by `ttl-sign-embedded`. The trait boundary described here is what made
+> that a constructor change. See [13 — Embedded runtime](13-embedded-runtime.md).
+
 ```sh
 cargo run -p ttl-live-discovery --example discover -- <unique_id>
 ```

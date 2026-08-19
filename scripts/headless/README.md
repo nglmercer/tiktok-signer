@@ -310,10 +310,10 @@ together, so that was upstream behaviour rather than a bug here.
 That comparison is no longer runnable: the WebView oracle has been deleted. It is recorded in
 `docs/11-webview-removal.md`, which is now the only evidence that the two paths agreed.
 
-## Signing one URL (subprocess protocol)
+## Signing one URL
 
-`sign-url.mjs` signs a single URL and prints it on stdout, so Rust can reach the signer without
-embedding a JavaScript engine:
+`sign-url.mjs` signs a single URL and prints it on stdout. Rust no longer drives it — the engine is
+in-process now — so this is a hand tool, and the signer for anything already running on Node:
 
 ```sh
 node scripts/headless/sign-url.mjs /tmp/webmssdk.js "<url>" fetch      # room/info, gift/list
@@ -325,9 +325,12 @@ The product argument is explicit because the two are **not** interchangeable —
 `TTL_USER_AGENT`) so they never appear in the process table.
 
 stdout carries the signed URL and nothing else: the bundle prints while it loads, so its console
-is redirected to stderr. `ttl_live_discovery::CommandSigner` drives this, and
-`cargo run -p ttl-live-discovery --example discover -- <unique_id>` is the end-to-end path from
-Rust with no browser.
+is redirected to stderr.
+
+For a long-lived Node process, do not spawn this per signature — it reparses 235 KB every time.
+Load `crates/ttl-sign-embedded/bootstrap.js` into a `node:vm` context once and call `ttlPrepare`
+then `ttlSignUrl`, which is what `tools/sign-pinned.mjs` does in about thirty lines and what the
+Rust engines do through the same file. It is plain JavaScript: no native module, no `napi`.
 
 ## Transport reverse engineering
 

@@ -1,12 +1,11 @@
 //! Signing without a subprocess: the real bundle, inside this process.
 //!
-//! [`ttl_live_discovery::CommandSigner`] spawns `node scripts/headless/sign-url.mjs` for every
-//! signature, which parses 235 KB of bundle each time and needs Node on the host. That is why the
-//! Docker image carries a Node runtime, and it is why nothing here can be packaged as a desktop
-//! application.
+//! Until 2026-08-19 every signature spawned `node scripts/headless/sign-url.mjs`, which parsed
+//! 235 KB of bundle each time and needed Node on the host. That is why the Docker image carried a
+//! Node runtime, and it is why nothing here could be packaged as a desktop application.
 //!
-//! This is the same signer with the process removed. The engine runs the same sandbox — literally
-//! the same source: `bootstrap.js` is generated from `scripts/headless/shim.mjs` by
+//! This is the same signer with the process removed, and it is now the only one. The engine runs
+//! the same sandbox — literally the same source: `bootstrap.js` is generated from `scripts/headless/shim.mjs` by
 //! `scripts/headless/tools/build-bootstrap.mjs`, so there is one sandbox in the repository, not two.
 //!
 //! # Two engines
@@ -248,7 +247,7 @@ fn worker<E: Engine>(
     }
 }
 
-/// The driver's argument for a product. Same three names `sign-url.mjs` takes.
+/// The driver's argument for a product. Same three names the reference driver takes.
 fn product_arg(product: SigningProduct) -> &'static str {
     match product {
         SigningProduct::FetchPatch => "fetch",

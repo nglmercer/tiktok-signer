@@ -5,10 +5,13 @@ process, and does it produce the same signature Node does?
 
 ## Why it matters
 
-Every signature today costs a process. `CommandSigner` spawns `node scripts/headless/sign-url.mjs`,
-which parses the 235 KB bundle from scratch, and the host must have Node — the Docker image exists
-as a `node:22` runtime for that one reason. A packaged desktop app cannot do that, and neither can
-anything that wants more than a handful of signatures a second.
+Every signature used to cost a process. `CommandSigner` spawned `node scripts/headless/sign-url.mjs`,
+which parsed the 235 KB bundle from scratch, and the host had to have Node — the Docker image
+existed as a `node:22` runtime for that one reason. A packaged desktop app cannot do that, and
+neither can anything that wants more than a handful of signatures a second.
+
+That signer is gone as of 2026-08-19: the engine is in-process, the Docker runtime is
+`debian:bookworm-slim`, and nothing in the Rust tree spawns `node` any more.
 
 ## What the sandbox actually needs
 
@@ -102,10 +105,9 @@ flattened bootstrap through `wasm-bindgen`.
 ## What was built on that decision
 
 `crates/ttl-sign-embedded` holds a warm context on its own thread — neither engine's context is
-`Send` — and implements the same `UrlSigner` trait as `CommandSigner`, so the sign server and
-`live-check` swap between them with `TTL_SIGNER=embedded` and nothing else changes. It signs all
-three products, and its `Profile` carries the user agent, cookie jar and stored token the sandbox
-should report.
+`Send` — and implements the `UrlSigner` trait the sign server and `live-check` already took, so
+adopting it changed a constructor and nothing else. It signs all three products, and its `Profile`
+carries the user agent, cookie jar and stored token the sandbox should report.
 
 The engines sit behind one four-line trait:
 
@@ -177,8 +179,8 @@ cargo run --release --manifest-path spikes/embed-spike/Cargo.toml --features boa
 cargo test -p ttl-sign-embedded                     # QuickJS against Node, and the warm-context regressions
 cargo test -p ttl-sign-embedded --features v8      # and the two embedded engines against each other
 cargo test --release -p ttl-sign-embedded --features v8 --test latency -- --ignored --nocapture
-TTL_SIGNER=embedded cargo run -p ttl-live-discovery --example live-check
-TTL_SIGNER=embedded cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless
+cargo run -p ttl-live-discovery --example live-check --features v8
+cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless,v8
 ```
 
 `spikes/embed-spike` is deliberately not a workspace member: these dependencies are heavy and must

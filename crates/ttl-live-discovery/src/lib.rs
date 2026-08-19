@@ -17,9 +17,9 @@
 //! signal — "room/info accepts our signature" was the evidence the transport diagnosis rested on,
 //! and it never meant anything.
 //!
-//! [`CommandSigner`] remains for the one request that *is* verified, `/webcast/im/fetch/`, which
-//! `ttl-sign-headless` owns. It drives `scripts/headless/sign-url.mjs` running the real bundle
-//! under a synthetic environment, so a browser-free build works today.
+//! The one request that *is* verified — the direct message socket — is signed by
+//! [`UrlSigner`], which `ttl-sign-embedded` implements by running the real bundle in an embedded
+//! engine. This crate never signs and never spawns a process to do it.
 //!
 //! "Who is live now" was previously believed to need a rendering engine, because the `/live` page
 //! ships no channel data in its HTML. It does not: `/api/search/live/full/` returns the same
@@ -435,15 +435,6 @@ mod tests {
         ));
     }
 
-    /// Records the per-route rule as an executable fact, since sending the wrong product yields a
-    /// 403 indistinguishable from a broken signer.
-    #[test]
-    fn signing_products_map_to_the_signer_argument() {
-        assert_eq!(SigningProduct::FetchPatch.as_arg(), "fetch");
-        assert_eq!(SigningProduct::FrontierSign.as_arg(), "frontier");
-        assert_eq!(SigningProduct::WsDirect.as_arg(), "ws");
-    }
-
     struct StubSigner;
 
     impl UrlSigner for StubSigner {
@@ -463,26 +454,6 @@ mod tests {
         );
     }
 
-    /// A signer that cannot run must surface as a signing failure, never as a discovery result.
-    #[tokio::test]
-    async fn a_missing_signer_binary_is_a_signing_error() {
-        let signer = CommandSigner::node("no-such-script.mjs", "no-such-bundle.js");
-        let outcome = signer
-            .sign("https://example.invalid/webcast/gift/list/")
-            .await;
-        assert!(matches!(outcome, Err(DiscoveryError::Signer(_))));
-    }
-
-    /// Cookies must travel in the environment, not in the argument list where the process table
-    /// would expose them.
-    #[test]
-    fn signer_credentials_are_not_command_arguments() {
-        let signer = CommandSigner::node("script.mjs", "bundle.js")
-            .with_cookie("sessionid=secret-value")
-            .with_stored_token("stored-secret");
-        assert!(!signer.args.iter().any(|a| a.contains("secret")));
-        assert_eq!(signer.cookie.as_deref(), Some("sessionid=secret-value"));
-    }
 }
 
 // --- Signed discovery ---------------------------------------------------------------------
@@ -518,118 +489,6 @@ pub enum SigningProduct {
     /// message socket verifies; it signs the query exactly as sent, so the URL must not be
     /// re-encoded on the way in or out.
     WsDirect,
-}
-
-impl SigningProduct {
-    fn as_arg(self) -> &'static str {
-        match self {
-            SigningProduct::FetchPatch => "fetch",
-            SigningProduct::FrontierSign => "frontier",
-            SigningProduct::WsDirect => "ws",
-        }
-    }
-}
-
-/// A [`UrlSigner`] that shells out to an external signer process.
-///
-/// This is how a browser-free build reaches the signer today: `scripts/headless/sign-url.mjs`
-/// runs the real bundle under a synthetic environment and prints the signed URL. Cookies travel
-/// in the environment rather than in the argument list, so they do not appear in the process
-/// table.
-#[derive(Debug, Clone)]
-pub struct CommandSigner {
-    program: String,
-    args: Vec<String>,
-    product: SigningProduct,
-    cookie: Option<String>,
-    stored_token: Option<String>,
-    user_agent: Option<String>,
-}
-
-impl CommandSigner {
-    /// Drive `node <script> <bundle> <url> <product>`.
-    pub fn node(script: impl Into<String>, bundle: impl Into<String>) -> Self {
-        Self {
-            program: "node".into(),
-            args: vec![script.into(), bundle.into()],
-            product: SigningProduct::FetchPatch,
-            cookie: None,
-            stored_token: None,
-            user_agent: None,
-        }
-    }
-
-    pub fn with_product(mut self, product: SigningProduct) -> Self {
-        self.product = product;
-        self
-    }
-
-    /// Cookie header presented to the signer. Passed through the environment, never as an
-    /// argument.
-    pub fn with_cookie(mut self, cookie: impl Into<String>) -> Self {
-        self.cookie = Some(cookie.into());
-        self
-    }
-
-    /// The stored `xmst` token. `msToken` is a verbatim passthrough of it.
-    pub fn with_stored_token(mut self, token: impl Into<String>) -> Self {
-        self.stored_token = Some(token.into());
-        self
-    }
-
-    pub fn with_user_agent(mut self, user_agent: impl Into<String>) -> Self {
-        self.user_agent = Some(user_agent.into());
-        self
-    }
-}
-
-impl UrlSigner for CommandSigner {
-    fn sign<'a>(&'a self, url: &'a str) -> SignFuture<'a> {
-        Box::pin(async move {
-            let mut command = tokio::process::Command::new(&self.program);
-            command.args(&self.args).arg(url).arg(self.product.as_arg());
-            if let Some(cookie) = &self.cookie {
-                command.env("TTL_COOKIE", cookie);
-            }
-            if let Some(token) = &self.stored_token {
-                command.env("TTL_XMST", token);
-            }
-            if let Some(agent) = &self.user_agent {
-                command.env("TTL_USER_AGENT", agent);
-            }
-            let output = command
-                .output()
-                .await
-                .map_err(|error| DiscoveryError::Signer(error.to_string()))?;
-            if !output.status.success() {
-                // The signer prints diagnostics on stderr and the URL on stdout, so a failure
-                // message never carries a signed URL.
-                let reason = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                return Err(DiscoveryError::Signer(if reason.is_empty() {
-                    format!("signer exited with {}", output.status)
-                } else {
-                    reason
-                }));
-            }
-            // The signed URL is the last non-empty line: a signer that leaks stray output on
-            // stdout should not corrupt the result, and the bundle is known to print while it
-            // loads.
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let signed = stdout
-                .lines()
-                .map(str::trim)
-                .rfind(|line| !line.is_empty())
-                .unwrap_or_default()
-                .to_string();
-            // `http` for the request signers, `ws` for the socket one.
-            if !(signed.starts_with("http") || signed.starts_with("ws")) {
-                return Err(DiscoveryError::Signer(
-                    "signer produced no URL on stdout".into(),
-                ));
-            }
-            Ok(signed)
-        })
-    }
 }
 
 /// URL of the live search endpoint, which lists rooms that are broadcasting now.

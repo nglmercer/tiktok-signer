@@ -1,16 +1,20 @@
 # 07 — Deploying the sign server
 
-The signer no longer runs a browser. It executes the real `webmssdk` bundle under a synthetic
-environment in Node, so a deployment needs no WebKit, no GTK, and no X server — the three things
-this document used to be almost entirely about.
+The signer runs neither a browser nor Node. It executes the real `webmssdk` bundle under a
+synthetic environment in a JavaScript engine linked into the server process, so a deployment needs
+no WebKit, no GTK, no X server — the three things this document used to be almost entirely about —
+and no runtime on the host at all.
 
-What it does need: the Rust binary, Node 19.7 or newer (for `Headers.getSetCookie`), the signer
-script, the signing bundle, and an account session.
+What it does need, in full: **the Rust binary, the signing bundle, and an account session.**
 
-**`TTL_SIGNER=embedded` removes the Node requirement too.** The same sandbox then runs in a QuickJS
-context inside the server process — no subprocess per signature, and 70–89 ms instead of 95–105 ms.
-It is opt-in for now; see [13 — Embedded runtime](13-embedded-runtime.md) for the measurements and
-the parity test behind it. With it set, a deployment is the binary, the bundle and the session.
+Which engine is a build choice. QuickJS by default (3.1 MB, ~70–89 ms per signature through the
+server); `--features v8` links V8 instead (+67 MB, ~19 ms). Both produce byte-identical signatures —
+that is the acceptance test. See [13 — Embedded runtime](13-embedded-runtime.md).
+
+```sh
+cargo build --release -p ttl-sign-server --bin ttl-sign-headless-server --features headless
+cargo build --release -p ttl-sign-server --bin ttl-sign-headless-server --features headless,v8
+```
 
 ## Container
 
@@ -19,9 +23,10 @@ docker compose up --build
 curl -fsS http://127.0.0.1:8080/healthz
 ```
 
-The image is a Rust builder plus a `node:22-bookworm-slim` runtime. The bundle is fetched at build
-time from its public static URL and pinned into the image; override `WEBMSSDK_URL` at build time,
-or `TTL_BUNDLE` at run time, to use another.
+The image is a Rust builder plus a `debian:bookworm-slim` runtime holding the binary, a CA bundle
+and `curl` for the healthcheck. The signing bundle is fetched at build time from its public static
+URL and pinned into the image; override `WEBMSSDK_URL` at build time, or `TTL_BUNDLE` at run time,
+to use another.
 
 There is no entrypoint script any more. The server is PID 1 and receives the stop signal directly.
 `STOPSIGNAL SIGINT` is set because graceful shutdown is wired to `tokio::signal::ctrl_c`, and
@@ -30,7 +35,7 @@ There is no entrypoint script any more. The server is PID 1 and receives the sto
 ## Bare metal
 
 ```sh
-sudo apt install -y nodejs ca-certificates    # node >= 19.7
+sudo apt install -y ca-certificates
 cargo build --release -p ttl-sign-server --bin ttl-sign-headless-server --features headless
 
 curl -s -o /opt/webmssdk.js \
@@ -48,7 +53,6 @@ Wants=network-online.target
 User=signer
 Environment=TTL_BIND=127.0.0.1:8080
 Environment=TTL_BUNDLE=/opt/webmssdk.js
-Environment=TTL_SIGN_SCRIPT=/opt/headless/sign-url.mjs
 Environment=RUST_LOG=ttl_sign_server=info,ttl_sign_headless=info
 ExecStart=/usr/local/bin/ttl-sign-headless-server
 KillSignal=SIGINT
@@ -58,8 +62,6 @@ Restart=always
 WantedBy=multi-user.target
 ```
 
-Copy `scripts/headless/` to `/opt/headless/`; the signer script imports `shim.mjs` from beside it.
-
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -67,7 +69,6 @@ Copy `scripts/headless/` to `/opt/headless/`; the signer script imports `shim.mj
 | `TTL_BIND` | `127.0.0.1:8080` | Listen address; `0.0.0.0:8080` inside a container |
 | `TTL_MAX_CONCURRENT` | `4` | Concurrent signing requests |
 | `TTL_BUNDLE` | `/tmp/webmssdk.js` | Signing bundle path |
-| `TTL_SIGN_SCRIPT` | `scripts/headless/sign-url.mjs` | Signer entry point |
 | `TTL_SESSION_FILE` | `$XDG_CONFIG_HOME/ttl-signer/session` | Session path |
 | `RUST_LOG` | `ttl_sign_server=info,ttl_sign_headless=info` | Log filter |
 
@@ -76,7 +77,7 @@ front; anything that can reach it can sign with the deployed identity.
 
 ## Sessions
 
-`/webcast/im/fetch/` answers a guest with an empty body, so an account session is **required**, not
+The message socket refuses a jar-less handshake, so an account session is **required**, not
 optional. The server refuses to start without one rather than serving requests that would all come
 back empty.
 
@@ -103,12 +104,10 @@ around one: that turns a block into a hammering client. Rotate the identity, or 
 
 ## Operational notes
 
-Signing is one subprocess launch plus one HTTPS round trip — roughly 1 s in validation, against
-6–12 s for the old page navigation. Each request spawns a Node process, so `TTL_MAX_CONCURRENT`
-bounds process count as well as concurrency.
+Signing is a call into a warm engine — 70–89 ms under QuickJS, 19 ms under V8, against 6–12 s for
+the old page navigation. There is no process per signature any more. The engine holds one context
+on one thread and serves requests in arrival order, so `TTL_MAX_CONCURRENT` bounds how many
+callers queue rather than how many processes exist.
 
-`/webcast/im/fetch/` intermittently answers 200 with an empty body, which the server reports as a
-rejection rather than an error. That behaviour was measured identically on the WebView path before
-it was removed, so it is upstream. See [06 — Risks and operations](06-risks-and-ops.md) for rate
-limits and session hygiene, and [11 — Removing the WebView](11-webview-removal.md) for the
-evidence behind this architecture.
+See [06 — Risks and operations](06-risks-and-ops.md) for rate limits and session hygiene, and
+[11 — Removing the WebView](11-webview-removal.md) for the evidence behind this architecture.

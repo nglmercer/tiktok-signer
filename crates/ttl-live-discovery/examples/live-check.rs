@@ -10,10 +10,10 @@
 //! cargo run -p ttl-live-discovery --example live-check -- <user>    # or name one
 //! ```
 //!
-//! Discovery is unsigned. The last step signs the socket query with
-//! `scripts/headless/sign-url.mjs`, which runs the real bundle under a synthetic environment, and
-//! then opens the message socket directly — the same thing the web player does, with no
-//! `/webcast/im/fetch/` in front of it.
+//! Discovery is unsigned. The last step signs the socket query in-process — the real bundle in an
+//! embedded engine, under a synthetic environment — and then opens the message socket directly,
+//! the same thing the web player does, with no `/webcast/im/fetch/` in front of it. Nothing here
+//! needs Node; `--features v8` swaps QuickJS for V8.
 //!
 //! AUTHORIZED USE ONLY: this sends real signed requests.
 
@@ -25,7 +25,7 @@ use std::time::Duration;
 use ttl_live_events::{decode_batch, LiveEvent};
 use ttl_live_ws::{ConnectConfig, ReconnectPolicy, ReconnectingConnection};
 
-use ttl_live_discovery::{CommandSigner, DiscoveryClient, DiscoveryError, UrlSigner};
+use ttl_live_discovery::{DiscoveryClient, DiscoveryError, UrlSigner};
 use ttl_sign_core::{
     CookieJar, DevicePreset, LocationPreset, Preset, ScreenPreset, DIRECT_SOCKET_HOST as SOCKET_HOST,
     WS_REUSE_PATH,
@@ -51,9 +51,6 @@ fn session() -> CookieJar {
 async fn main() {
     let requested = std::env::args().skip(1).find(|arg| !arg.starts_with("--"));
     let bundle = std::env::var("TTL_BUNDLE").unwrap_or_else(|_| "/tmp/webmssdk.js".into());
-    let script =
-        std::env::var("TTL_SIGN_SCRIPT").unwrap_or_else(|_| "scripts/headless/sign-url.mjs".into());
-
     if !PathBuf::from(&bundle).is_file() {
         eprintln!("signing bundle not found at {bundle}; see scripts/headless/README.md");
         std::process::exit(2);
@@ -165,43 +162,27 @@ async fn main() {
     }
     // Through the same backend the sign server uses, so this example exercises the production path
     // rather than a parallel copy of it. It builds the socket URL, has it signed, and describes it.
-    // `TTL_SIGNER=embedded` runs the bundle in-process instead of spawning `node` per signature;
-    // which engine that is comes from the build (`--features v8`), not from the environment.
-    let signer: Box<dyn UrlSigner> = if matches!(
-        std::env::var("TTL_SIGNER").as_deref(),
-        Ok("embedded") | Ok("quickjs") | Ok("v8")
-    ) {
-        let source = std::fs::read_to_string(&bundle).unwrap_or_else(|error| {
-            eprintln!("\nFAILED: could not read {bundle}: {error}");
+    // The bundle runs in-process; which engine that is comes from the build (`--features v8`).
+    let source = std::fs::read_to_string(&bundle).unwrap_or_else(|error| {
+        eprintln!("\nFAILED: could not read {bundle}: {error}");
+        std::process::exit(1);
+    });
+    println!("      signing in-process with {}", ttl_sign_embedded::ENGINE);
+    let signer: Box<dyn UrlSigner> = Box::new(
+        EmbeddedSigner::with_product(
+            source,
+            Profile {
+                user_agent: Some(preset.user_agent()),
+                cookie: Some(jar.to_cookie_string()),
+                ..Profile::default()
+            },
+            TRANSPORT_PRODUCT,
+        )
+        .unwrap_or_else(|error| {
+            eprintln!("\nFAILED: could not start the embedded signer: {error}");
             std::process::exit(1);
-        });
-        println!(
-            "      signing in-process with an embedded engine ({})",
-            ttl_sign_embedded::ENGINE
-        );
-        Box::new(
-            EmbeddedSigner::with_product(
-                source,
-                Profile {
-                    user_agent: Some(preset.user_agent()),
-                    cookie: Some(jar.to_cookie_string()),
-                    ..Profile::default()
-                },
-                TRANSPORT_PRODUCT,
-            )
-            .unwrap_or_else(|error| {
-                eprintln!("\nFAILED: could not start the embedded signer: {error}");
-                std::process::exit(1);
-            }),
-        )
-    } else {
-        Box::new(
-            CommandSigner::node(script, bundle)
-                .with_product(TRANSPORT_PRODUCT)
-                .with_user_agent(preset.user_agent())
-                .with_cookie(jar.to_cookie_string()),
-        )
-    };
+        }),
+    );
     let backend = match HeadlessBackend::new(
         HeadlessConfig::new(preset.clone(), jar.clone()),
         signer,

@@ -1,8 +1,9 @@
 # Sign server in a container. No browser.
 #
-# The signer runs the real webmssdk bundle under a synthetic environment in Node, so this image
-# carries no WebKit, no GTK, and no virtual display — the previous image needed all three because
-# the engine was a real browser. See docs/07-deploy.md.
+# The signer runs the real webmssdk bundle under a synthetic environment inside the server process
+# itself, so this image carries no WebKit, no GTK, no virtual display, and no Node. The first three
+# went when the browser did; Node went when the JavaScript engine moved in-process. See
+# docs/07-deploy.md.
 
 # `rust-version` is 1.82, but the locked dependency tree needs more than the workspace does: the
 # 2024 edition (1.85) and `time` 0.3.55 (1.88). Pin the builder above both.
@@ -15,8 +16,8 @@ RUN cargo build --release -p ttl-sign-server \
         --bin ttl-sign-headless-server --features headless
 
 
-# Node 22: the signer uses `Headers.getSetCookie`, which needs 19.7 or newer.
-FROM node:22-bookworm-slim AS runtime
+# Nothing but the binary and a CA bundle: the JavaScript engine is linked into the server.
+FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -29,11 +30,9 @@ ARG WEBMSSDK_URL=https://sf16-website-login.neutral.ttwstatic.com/obj/tiktok_web
 RUN curl -fsS -o /opt/webmssdk.js "$WEBMSSDK_URL"
 
 COPY --from=builder /src/target/release/ttl-sign-headless-server /usr/local/bin/ttl-sign-server
-COPY scripts/headless /opt/headless
 
 ENV TTL_BIND=0.0.0.0:8080 \
     TTL_BUNDLE=/opt/webmssdk.js \
-    TTL_SIGN_SCRIPT=/opt/headless/sign-url.mjs \
     HOME=/home/signer
 
 # Create the config directory before declaring the volume: Docker would otherwise create it as
@@ -50,7 +49,7 @@ EXPOSE 8080
 # asking for SIGINT instead runs the real shutdown path.
 STOPSIGNAL SIGINT
 
-# `/webcast/im/fetch/` refuses guests, so the session file is required rather than optional: mount
+# The message socket refuses guests, so the session file is required rather than optional: mount
 # it read-only at /home/signer/.config/ttl-signer/session as a cookie header containing sessionid.
 VOLUME ["/home/signer/.config/ttl-signer"]
 

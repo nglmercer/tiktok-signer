@@ -5,10 +5,10 @@
 //! decodes the response into the same [`SignedFetch`] every other backend returns — so the sign
 //! server, the connector, and the contract tests are unchanged.
 //!
-//! It does not sign. Signing is a [`UrlSigner`], which today is
-//! [`ttl_live_discovery::CommandSigner`] driving `scripts/headless/sign-url.mjs`. Replacing that
-//! subprocess with an embedded JavaScript engine changes one constructor argument and nothing
-//! else.
+//! It does not sign. Signing is a [`UrlSigner`], which today is `ttl_sign_embedded::EmbeddedSigner`
+//! running the real bundle in an embedded JavaScript engine. Swapping in another implementation is
+//! one constructor argument and nothing else — which is how the Node subprocess that used to fill
+//! this slot was removed without touching this crate.
 //!
 //! # The transport request is not signed
 //!
@@ -345,8 +345,7 @@ impl SignerBackend for HeadlessBackend {
 
 /// The signing product the transport requires.
 ///
-/// Exposed so a caller configuring [`ttl_live_discovery::CommandSigner`] cannot pick another by
-/// accident. The socket is signed by `registerWsSigner` over the query bytes; the patched-fetch
+/// Exposed so a caller configuring a [`UrlSigner`] cannot pick another by accident. The socket is signed by `registerWsSigner` over the query bytes; the patched-fetch
 /// suffix and `frontierSign` produce parameters this endpoint ignores, and the handshake is then
 /// refused with a bare 1006 that looks like a dead room.
 pub const TRANSPORT_PRODUCT: SigningProduct = SigningProduct::WsDirect;

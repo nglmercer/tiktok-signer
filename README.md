@@ -46,7 +46,7 @@ client will parse) without disturbing the signature, and `ttl-live-events` decod
 | `ttl-sign-lab` | Safe structured observations and classified backend differential reports. |
 | `ttl-live-discovery` | Browser-free discovery, entirely unsigned: room lookup, `room/info`, `gift/list`, and live channels. |
 | `ttl-sign-headless` | Browser-free `SignerBackend`: builds and signs the socket URL, and describes it in TikTok's own `ProtoMessageFetchResult` shape. |
-| `ttl-sign-embedded` | The same signing, in-process: the real bundle in a warm QuickJS or V8 context, no `node` subprocess. |
+| `ttl-sign-embedded` | Signing, in-process: the real bundle in a warm QuickJS or V8 context. The only signer; there is no `node` subprocess any more. |
 | `ttl-live-ws` | WebSocket client with heartbeat, acknowledgements, typed rejection handling, and a reconnecting stream that re-signs each attempt. |
 | `ttl-sign-server` | `GET /webcast/fetch`, `GET /webcast/rooms/{room_id}/connect` (Node client), and `GET /healthz`. |
 
@@ -66,20 +66,24 @@ curl -s -o /tmp/webmssdk.js \
 cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless
 ```
 
-`TTL_SIGNER=embedded` signs in-process instead, running the same sandbox in an engine held warm —
-no `node` per signature — 95–105 ms through the server becomes 70–89 ms under QuickJS and 19 ms
-under V8, with no Node needed on the host at all. Which engine is a build choice, not an
-environment one:
+Signing runs in-process, in an engine held warm: the same sandbox source, no `node` on the host and
+no process per signature. The Node subprocess signer was removed on 2026-08-19; what used to cost
+95–105 ms through the server is 70–89 ms under QuickJS and 19 ms under V8. Which engine is a build
+choice:
 
 ```sh
 cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless      # QuickJS, 3.1 MB, 28 ms/sig
 cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless,v8   # V8, +67 MB, 3 ms/sig
 ```
 
-Both produce byte-identical signatures — that is the acceptance test, not a hope. It is opt-in
-until it has more mileage; the parity tests that justify it are
-`cargo test -p ttl-sign-embedded --features v8`, and the measurements are in
+Both produce byte-identical signatures — that is the acceptance test, not a hope. The parity tests
+behind it are `cargo test -p ttl-sign-embedded --features v8`, and the measurements are in
 [docs/13](docs/13-embedded-runtime.md).
+
+Using this from Node needs no native module: run the sign server and talk HTTP to it (that is what
+`examples/node-connector` does), or load `crates/ttl-sign-embedded/bootstrap.js` into a `node:vm`
+context and sign in-process — plain JavaScript, no `napi`. See
+[scripts/headless/README.md](scripts/headless/README.md#signing-one-url).
 
 End-to-end check, no browser:
 

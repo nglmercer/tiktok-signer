@@ -1,9 +1,8 @@
 //! Live sign-server with no browser.
 //!
 //! Same HTTP surface as the WebView server it replaced; the difference is entirely in the backend.
-//! Signing
-//! runs through an external signer process rather than a page, so this binary's dependency tree
-//! contains no `wry`.
+//! Signing runs the real bundle in an embedded JavaScript engine on a worker thread rather than in
+//! a page, so this binary's dependency tree contains no `wry` — and the host needs no Node.
 //!
 //! ```sh
 //! curl -s -o /tmp/webmssdk.js \
@@ -23,7 +22,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use tracing::{info, warn};
-use ttl_live_discovery::{CommandSigner, UrlSigner};
+use ttl_live_discovery::UrlSigner;
 use ttl_sign_embedded::{EmbeddedSigner, Profile};
 use ttl_sign_core::{CookieJar, DevicePreset, LocationPreset, Preset, ScreenPreset};
 use ttl_sign_headless::{HeadlessBackend, HeadlessConfig, TRANSPORT_PRODUCT};
@@ -54,18 +53,10 @@ async fn main() -> Result<()> {
         .and_then(|value| value.parse().ok())
         .unwrap_or(4);
     let bundle = std::env::var("TTL_BUNDLE").unwrap_or_else(|_| "/tmp/webmssdk.js".into());
-    let script =
-        std::env::var("TTL_SIGN_SCRIPT").unwrap_or_else(|_| "scripts/headless/sign-url.mjs".into());
-
     anyhow::ensure!(
         PathBuf::from(&bundle).is_file(),
         "signing bundle not found at {bundle}; set TTL_BUNDLE (see scripts/headless/README.md)"
     );
-    anyhow::ensure!(
-        PathBuf::from(&script).is_file(),
-        "signer script not found at {script}; set TTL_SIGN_SCRIPT"
-    );
-
     let session = session_path()
         .and_then(|path| std::fs::read_to_string(path).ok())
         .map(|raw| CookieJar::parse(raw.trim()))
@@ -82,44 +73,35 @@ async fn main() -> Result<()> {
         LocationPreset::us_east(),
         ScreenPreset::FHD,
     );
-    // Two signers, one trait. `TTL_SIGNER=embedded` runs the bundle in an in-process engine
-    // instead of spawning `node` per signature: same sandbox source, byte-identical output under a
-    // pinned profile (`cargo test -p ttl-sign-embedded`), and no 235 KB parse each time. Which
-    // engine that is comes from the build — QuickJS, or V8 with `--features v8` — not from the
-    // environment, so the names below are aliases for "whichever was compiled in".
-    // The subprocess stays the default until the parity test has been green for a while.
-    let embedded = matches!(
-        std::env::var("TTL_SIGNER").as_deref(),
-        Ok("embedded") | Ok("quickjs") | Ok("v8")
-    );
-    let signer: Box<dyn UrlSigner> = if embedded {
-        let source = std::fs::read_to_string(&bundle)
-            .with_context(|| format!("could not read the signing bundle at {bundle}"))?;
-        let profile = Profile {
-            user_agent: Some(preset.user_agent()),
-            cookie: Some(session.to_cookie_string()),
-            ..Profile::default()
-        };
-        info!(%bundle, engine = ttl_sign_embedded::ENGINE, "signing in-process with an embedded engine");
-        Box::new(
-            EmbeddedSigner::with_product(source, profile, TRANSPORT_PRODUCT)
-                .context("could not start the embedded signer")?,
-        )
-    } else {
-        Box::new(
-            CommandSigner::node(script.clone(), bundle.clone())
-                .with_product(TRANSPORT_PRODUCT)
-                .with_user_agent(preset.user_agent())
-                .with_cookie(session.to_cookie_string()),
-        )
+    // One signer. The bundle runs in an embedded engine on a worker thread: same sandbox source
+    // the reference driver uses, byte-identical output under a pinned profile
+    // (`cargo test -p ttl-sign-embedded --features v8`), and no 235 KB parse per signature. Which
+    // engine that is comes from the build — QuickJS, or V8 with `--features v8` — so there is
+    // nothing to choose at runtime and no `node` on the host.
+    let source = std::fs::read_to_string(&bundle)
+        .with_context(|| format!("could not read the signing bundle at {bundle}"))?;
+    let profile = Profile {
+        user_agent: Some(preset.user_agent()),
+        cookie: Some(session.to_cookie_string()),
+        ..Profile::default()
     };
+    let signer: Box<dyn UrlSigner> = Box::new(
+        EmbeddedSigner::with_product(source, profile, TRANSPORT_PRODUCT)
+            .context("could not start the embedded signer")?,
+    );
     let backend = HeadlessBackend::new(HeadlessConfig::new(preset, session), signer)
         .context("could not build the headless backend")?;
 
     if !backend.is_authenticated() {
         warn!("session has no sessionid; transport requests will be refused");
     }
-    info!(%bind, max_concurrent, %bundle, %script, "starting headless live sign server");
+    info!(
+        %bind,
+        max_concurrent,
+        %bundle,
+        engine = ttl_sign_embedded::ENGINE,
+        "starting headless live sign server"
+    );
 
     let state = AppState::new(backend, max_concurrent);
     let listener = tokio::net::TcpListener::bind(&bind)
