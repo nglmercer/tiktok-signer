@@ -10,6 +10,9 @@
 # Generated from shim.mjs by scripts/headless/tools/build-bootstrap.mjs.
 /spikes/*/bootstrap.js
 **/node_modules
+/packages/tiktok-live/dist/
+/packages/tiktok-live/.test-dist/
+/packages/tiktok-live/.example-dist/
 # fixtures and NOTES.md.
 /fixtures/*
 !/fixtures/NOTES.md

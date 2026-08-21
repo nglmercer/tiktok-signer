@@ -19,12 +19,13 @@
 //     and reused. A signature per reconnect is then free.
 
 import fs from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
-import { USER_AGENT } from './session.mjs';
+import { USER_AGENT } from './session.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -36,9 +37,30 @@ export const BOOTSTRAP_PATH = path.join(HERE, '..', 'vendor', 'bootstrap.js');
 /// when the player moves to another one.
 export const BUNDLE_URL =
   'https://sf16-website-login.neutral.ttwstatic.com/obj/tiktok_web_login_static/webmssdk/1.0.0.388/webmssdk.js';
+export const BUNDLE_SHA256 = 'dee22566273d398e074df6db40f39cfd827f6b8efd6fc382de03c44c501299ac';
+
+const VM_TIMEOUT_MS = 10_000;
 
 /// Which signature to produce. The socket verifies `ws` and ignores the other two.
-export const PRODUCT = Object.freeze({ fetch: 'fetch', frontier: 'frontier', ws: 'ws' });
+export const PRODUCT = Object.freeze({ fetch: 'fetch', frontier: 'frontier', ws: 'ws' } as const);
+export type Product = (typeof PRODUCT)[keyof typeof PRODUCT];
+
+export interface LoadBundleOptions {
+  url?: string;
+  cachePath?: string;
+  maxAgeMs?: number;
+  expectedSha256?: string;
+}
+
+export interface SignerOptions {
+  bundleSource?: string;
+  bundlePath?: string;
+  bundleUrl?: string;
+  userAgent?: string;
+  cookie?: string;
+  storedToken?: string;
+  pinned?: boolean;
+}
 
 /// Fetch the bundle once and keep it in the temp directory.
 ///
@@ -49,11 +71,13 @@ export async function loadBundle({
   url = BUNDLE_URL,
   cachePath = path.join(os.tmpdir(), 'ttl-webmssdk.js'),
   maxAgeMs = 24 * 60 * 60 * 1000,
-} = {}) {
+  expectedSha256 = url === BUNDLE_URL ? BUNDLE_SHA256 : undefined,
+}: LoadBundleOptions = {}): Promise<string> {
   try {
     const stat = fs.statSync(cachePath);
     if (Date.now() - stat.mtimeMs < maxAgeMs && stat.size > 0) {
-      return fs.readFileSync(cachePath, 'utf8');
+      const cached = fs.readFileSync(cachePath, 'utf8');
+      if (matchesDigest(cached, expectedSha256)) return cached;
     }
   } catch {
     // No cache yet.
@@ -63,19 +87,34 @@ export async function loadBundle({
     throw new Error(`could not download the signing bundle: HTTP ${response.status} from ${url}`);
   }
   const source = await response.text();
+  if (!matchesDigest(source, expectedSha256)) {
+    throw new Error(`the signing bundle from ${url} did not match its expected SHA-256`);
+  }
+  const temporary = `${cachePath}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    fs.writeFileSync(cachePath, source);
+    fs.writeFileSync(temporary, source, { mode: 0o600 });
+    fs.renameSync(temporary, cachePath);
   } catch {
     // A read-only temp directory is not a reason to fail a signature.
+    try {
+      fs.rmSync(temporary, { force: true });
+    } catch {
+      // Nothing was written.
+    }
   }
   return source;
 }
 
+function matchesDigest(source: string, expectedSha256?: string): boolean {
+  if (!expectedSha256) return true;
+  return createHash('sha256').update(source).digest('hex') === expectedSha256.toLowerCase();
+}
+
 /// A warm signing context.
 export class Signer {
-  #context;
+  readonly #context: vm.Context;
 
-  constructor(context) {
+  private constructor(context: vm.Context) {
     this.#context = context;
   }
 
@@ -91,28 +130,73 @@ export class Signer {
     cookie = '',
     storedToken,
     pinned = false,
-  } = {}) {
+  }: SignerOptions = {}): Promise<Signer> {
     const source =
       bundleSource ??
       (bundlePath ? fs.readFileSync(bundlePath, 'utf8') : await loadBundle({ url: bundleUrl }));
 
     const context = vm.createContext({});
-    vm.runInContext(fs.readFileSync(BOOTSTRAP_PATH, 'utf8'), context);
+    vm.runInContext(fs.readFileSync(BOOTSTRAP_PATH, 'utf8'), context, { timeout: VM_TIMEOUT_MS });
 
-    const options = { pinned, userAgent, cookie };
+    const options: { pinned: boolean; userAgent: string; cookie: string; xmst?: string } = {
+      pinned,
+      userAgent,
+      cookie,
+    };
     if (storedToken) options.xmst = storedToken;
-    const prepared = JSON.parse(
-      vm.runInContext('ttlPrepare', context)(source, JSON.stringify(options)),
-    );
+    context.__ttlBundleSource = source;
+    context.__ttlEncodedOptions = JSON.stringify(options);
+    let encoded: string;
+    try {
+      encoded = vm.runInContext(
+        'ttlPrepare(__ttlBundleSource, __ttlEncodedOptions)',
+        context,
+        { timeout: VM_TIMEOUT_MS },
+      ) as string;
+    } finally {
+      delete context.__ttlBundleSource;
+      delete context.__ttlEncodedOptions;
+    }
+    const prepared = parseAnswer(encoded);
     if (prepared.error) throw new Error(`the signing bundle failed to load: ${prepared.error}`);
     return new Signer(context);
   }
 
   /// Sign one URL. Returns the signed URL, with its query bytes untouched.
-  sign(url, product = PRODUCT.ws) {
-    const answer = JSON.parse(vm.runInContext('ttlSignUrl', this.#context)(url, product));
+  sign(url: string, product: Product = PRODUCT.ws): string {
+    this.#context.__ttlUnsignedUrl = url;
+    this.#context.__ttlProduct = product;
+    let encoded: string;
+    try {
+      encoded = vm.runInContext(
+        'ttlSignUrl(__ttlUnsignedUrl, __ttlProduct)',
+        this.#context,
+        { timeout: VM_TIMEOUT_MS },
+      ) as string;
+    } finally {
+      delete this.#context.__ttlUnsignedUrl;
+      delete this.#context.__ttlProduct;
+    }
+    const answer = parseAnswer(encoded);
     if (answer.error) throw new Error(`signing failed: ${answer.error}`);
     if (!answer.signed) throw new Error('the signer produced no URL');
     return answer.signed;
   }
+}
+
+interface SignerAnswer {
+  error?: string;
+  signed?: string;
+}
+
+function parseAnswer(encoded: string): SignerAnswer {
+  const value: unknown = JSON.parse(encoded);
+  if (!value || typeof value !== 'object') {
+    throw new Error('the signer returned a malformed response');
+  }
+  const answer = value as Record<string, unknown>;
+  return {
+    ...(typeof answer.error === 'string' ? { error: answer.error } : {}),
+    ...(typeof answer.signed === 'string' ? { signed: answer.signed } : {}),
+  };
 }

@@ -11,7 +11,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { BOOTSTRAP_PATH, PRODUCT, Signer } from '../src/signer.mjs';
+import { BOOTSTRAP_PATH, PRODUCT, Signer, loadBundle } from '../dist/signer.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BUNDLE = process.env.TTL_BUNDLE ?? '/tmp/webmssdk.js';
@@ -19,10 +19,22 @@ const URL_UNDER_TEST =
   'wss://webcast-ws.tiktok.com/webcast/im/ws_proxy/ws_reuse_supplement/?room_id=7300000000000000001&aid=1988';
 
 const bundle = fs.existsSync(BUNDLE) ? fs.readFileSync(BUNDLE, 'utf8') : null;
+const bundleSource = bundle ?? undefined;
 const needsBundle = { skip: bundle ? false : `no signing bundle at ${BUNDLE}` };
 
+test('a downloaded bundle must match its expected digest', async () => {
+  await assert.rejects(
+    () => loadBundle({
+      url: 'data:text/javascript,wrong',
+      cachePath: path.join(os_tmpdir(), 'ttl-deliberately-invalid-bundle.js'),
+      expectedSha256: '0'.repeat(64),
+    }),
+    /did not match its expected SHA-256/,
+  );
+});
+
 test('a signed socket URL keeps its query and gains a signature', needsBundle, async () => {
-  const signer = await Signer.create({ bundleSource: bundle, cookie: 'sessionid=test' });
+  const signer = await Signer.create({ bundleSource, cookie: 'sessionid=test' });
   const signed = signer.sign(URL_UNDER_TEST, PRODUCT.ws);
   assert.ok(signed.startsWith(URL_UNDER_TEST), 'the signed bytes must be the bytes that were signed');
   assert.match(signed, /&X-Gnarly=/);
@@ -32,7 +44,7 @@ test('a signed socket URL keeps its query and gains a signature', needsBundle, a
 // never notices; a connection that reconnects does, and the second signature fails. This is the
 // regression that kept the Rust engine honest and it is the same driver here.
 test('a warm signer keeps signing', needsBundle, async () => {
-  const signer = await Signer.create({ bundleSource: bundle, cookie: 'sessionid=test' });
+  const signer = await Signer.create({ bundleSource, cookie: 'sessionid=test' });
   const signatures = new Set();
   for (let round = 0; round < 10; round += 1) {
     signatures.add(signer.sign(URL_UNDER_TEST, PRODUCT.ws));
@@ -44,15 +56,15 @@ test('a warm signer keeps signing', needsBundle, async () => {
 // one must not agree with them.
 test('pinning decides whether a signature repeats', needsBundle, async () => {
   const pinned = async () =>
-    (await Signer.create({ bundleSource: bundle, pinned: true })).sign(URL_UNDER_TEST, PRODUCT.ws);
+    (await Signer.create({ bundleSource, pinned: true })).sign(URL_UNDER_TEST, PRODUCT.ws);
   assert.equal(await pinned(), await pinned());
 
-  const live = await Signer.create({ bundleSource: bundle });
+  const live = await Signer.create({ bundleSource });
   assert.notEqual(live.sign(URL_UNDER_TEST, PRODUCT.ws), await pinned());
 });
 
 test('all three products sign', needsBundle, async () => {
-  const signer = await Signer.create({ bundleSource: bundle, cookie: 'sessionid=test' });
+  const signer = await Signer.create({ bundleSource, cookie: 'sessionid=test' });
   for (const product of Object.values(PRODUCT)) {
     const url = product === PRODUCT.ws
       ? URL_UNDER_TEST

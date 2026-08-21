@@ -1,12 +1,12 @@
 // The unsigned endpoints: their URLs, and the shapes they answer with.
 //
 // Parsing is pinned against recorded shapes rather than live responses, so this runs offline. The
-// live half is `examples/listen.mjs`.
+// live half is `examples/listen.ts` through `npm run listen`.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Discovery, ROOM_STATUS_LIVE, giftListUrl, roomInfoUrl, roomLookupUrl, liveSearchUrl } from '../src/discovery.mjs';
+import { Discovery, ROOM_STATUS_LIVE, giftListUrl, roomInfoUrl, roomLookupUrl, liveSearchUrl } from '../dist/discovery.js';
 
 test('the endpoints are the ones the player uses', () => {
   assert.equal(
@@ -58,6 +58,7 @@ test('the gift table is keyed by id and keeps what a gift event omits', async ()
   });
   const gifts = await discovery.giftList('7300');
   const rose = gifts.get('5655');
+  assert.ok(rose);
   assert.equal(rose.name, 'Rose');
   assert.equal(rose.diamondCount, 1);
   assert.equal(rose.combo, true, 'streakable gifts must be identifiable, or diamonds double-count');
@@ -84,10 +85,10 @@ test('live search reads the room out of raw_data', async () => {
   });
 });
 
-function withResponse(body) {
+function withResponse(body: unknown): Discovery {
   const discovery = new Discovery();
-  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => body });
+  globalThis.fetch = async () => Response.json(body);
   return discovery;
 }
 
-const parse = async (body) => withResponse(body).roomLookup('@someone');
+const parse = async (body: unknown) => withResponse(body).roomLookup('@someone');

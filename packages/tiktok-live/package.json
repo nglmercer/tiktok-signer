@@ -5,19 +5,29 @@
   "type": "module",
   "description": "TikTok LIVE events in Node, with no sign server, no native module and no browser.",
   "license": "MIT",
-  "main": "./src/index.mjs",
-  "types": "./index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./index.d.ts",
-      "default": "./src/index.mjs"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     }
   },
-  "files": ["src", "vendor", "index.d.ts", "README.md"],
+  "files": ["dist", "src", "vendor", "README.md"],
   "engines": { "node": ">=22" },
   "scripts": {
-    "test": "node --test test/",
+    "clean": "node -e \"const fs=require('node:fs'); for (const path of ['dist','.test-dist','.example-dist']) fs.rmSync(path,{recursive:true,force:true})\"",
+    "prebuild": "npm run clean",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "npm run build && tsc -p tsconfig.test.json --noEmit && tsc -p tsconfig.example.json --noEmit",
+    "test": "npm run build && tsc -p tsconfig.test.json && node --test .test-dist/*.test.js",
+    "check": "npm run typecheck && npm test",
+    "prepack": "npm run check",
     "sync-bootstrap": "node ../../scripts/headless/tools/build-bootstrap.mjs vendor/bootstrap.js",
-    "listen": "node examples/listen.mjs"
+    "listen": "npm run build && tsc -p tsconfig.example.json && node .example-dist/listen.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.9.3"
   }
 }

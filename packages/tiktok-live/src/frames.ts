@@ -5,13 +5,14 @@
 // a `ProtoMessageFetchResult` — the same envelope `/webcast/im/fetch/` used to return — usually
 // gzipped, and it must be acknowledged or the server stops pushing.
 //
-// The encoders (`pushFrame`, `enterRoomFrame`, `heartbeatFrame`) are in `player.mjs`, beside the
+// The encoders (`pushFrame`, `enterRoomFrame`, `heartbeatFrame`) are in `player.ts`, beside the
 // constants they serialise. This file only reads, plus the one frame that is a reply.
 
 import { gunzipSync } from 'node:zlib';
 
-import { asCount, asId, asString, fields, read } from './protobuf.mjs';
-import { FRAME_TYPE, PUSH_FRAME_FIELD, pushFrame } from './player.mjs';
+import { asCount, asId, asString, fields, read } from './protobuf.js';
+import type { MessageShape, WireValue } from './protobuf.js';
+import { FRAME_TYPE, PUSH_FRAME_FIELD, pushFrame } from './player.js';
 
 /// `payload_type` of a frame that carries events. Everything else is transport.
 export const MESSAGE_PAYLOAD_TYPE = 'msg';
@@ -19,37 +20,76 @@ export const MESSAGE_PAYLOAD_TYPE = 'msg';
 /// Header the server sets when the payload is compressed.
 const COMPRESS_TYPE_HEADER = 'compress_type';
 
-const MAP_ENTRY = { 1: ['key', asString], 2: ['value', asString] };
+interface HeaderEntry { key: string; value: string }
+interface DecodedPushFrame {
+  seqId: string;
+  logId: string;
+  headers: HeaderEntry[];
+  payloadEncoding: string;
+  payloadType: string;
+  payload: Uint8Array;
+}
+export interface PushFrame {
+  seqId: string;
+  logId: string;
+  headers: Map<string, string>;
+  payloadEncoding: string;
+  payloadType: string;
+  payload: Uint8Array;
+  compressType: string;
+  carriesEvents: boolean;
+}
+export interface BatchMessage {
+  method: string;
+  payload: Uint8Array;
+  msgId: string;
+  isHistory: boolean;
+}
+interface DecodedBatch {
+  messages: BatchMessage[];
+  cursor: string;
+  internalExt: string;
+  heartbeatDuration: number;
+  needAck: boolean;
+  pushServer: string;
+}
+export interface EventBatch extends DecodedBatch {}
+
+const bytes = (value: WireValue): Uint8Array =>
+  value instanceof Uint8Array ? value : new Uint8Array();
+
+const MAP_ENTRY = { 1: ['key', asString], 2: ['value', asString] } satisfies MessageShape;
 
 const PUSH_FRAME = {
   [PUSH_FRAME_FIELD.seqId]: ['seqId', asId],
   [PUSH_FRAME_FIELD.logId]: ['logId', asId],
-  [PUSH_FRAME_FIELD.headers]: ['headers[]', (value) => read(value, MAP_ENTRY)],
+  [PUSH_FRAME_FIELD.headers]: ['headers[]', (value: WireValue) =>
+    read<HeaderEntry>(bytes(value), MAP_ENTRY)],
   [PUSH_FRAME_FIELD.payloadEncoding]: ['payloadEncoding', asString],
   [PUSH_FRAME_FIELD.payloadType]: ['payloadType', asString],
-  [PUSH_FRAME_FIELD.payload]: ['payload', (value) => value],
-};
+  [PUSH_FRAME_FIELD.payload]: ['payload', bytes],
+} satisfies MessageShape;
 
 const BASE_MESSAGE = {
   1: ['method', asString],
-  2: ['payload', (value) => value],
+  2: ['payload', bytes],
   3: ['msgId', asId],
-  6: ['isHistory', (value) => Boolean(asCount(value))],
-};
+  6: ['isHistory', (value: WireValue) => Boolean(asCount(value))],
+} satisfies MessageShape;
 
 const FETCH_RESULT = {
-  1: ['messages[]', (value) => read(value, BASE_MESSAGE)],
+  1: ['messages[]', (value: WireValue) => read<BatchMessage>(bytes(value), BASE_MESSAGE)],
   2: ['cursor', asString],
   5: ['internalExt', asString],
   8: ['heartbeatDuration', asCount],
-  9: ['needAck', (value) => Boolean(asCount(value))],
+  9: ['needAck', (value: WireValue) => Boolean(asCount(value))],
   10: ['pushServer', asString],
-};
+} satisfies MessageShape;
 
 /// Read one WebSocket frame.
-export function decodePushFrame(bytes) {
-  const frame = read(bytes, PUSH_FRAME);
-  const headers = new Map((frame.headers ?? []).map((entry) => [entry.key, entry.value]));
+export function decodePushFrame(input: ArrayBuffer | ArrayBufferView): PushFrame {
+  const frame = read<DecodedPushFrame>(input, PUSH_FRAME);
+  const headers = new Map((frame.headers ?? []).map((entry) => [entry.key ?? '', entry.value ?? '']));
   return {
     seqId: frame.seqId ?? '0',
     logId: frame.logId ?? '0',
@@ -67,14 +107,14 @@ export function decodePushFrame(bytes) {
 /// An unrecognised `compress_type` is passed through rather than refused: the payload is still the
 /// envelope, and a new compression name should degrade to "cannot read this batch", not "the
 /// connection is broken".
-export function decompress(frame) {
+export function decompress(frame: PushFrame): Uint8Array {
   if (frame.compressType === 'gzip') return gunzipSync(frame.payload);
   return frame.payload;
 }
 
 /// Read the event batch inside a `msg` frame's payload.
-export function decodeBatch(payload) {
-  const batch = read(payload, FETCH_RESULT);
+export function decodeBatch(payload: ArrayBuffer | ArrayBufferView): EventBatch {
+  const batch = read<DecodedBatch>(payload, FETCH_RESULT);
   return {
     messages: batch.messages ?? [],
     cursor: batch.cursor ?? '',
@@ -90,12 +130,12 @@ export function decodeBatch(payload) {
 /// The payload is the batch's `internal_ext`, or `-` when it is empty — the server rejects an
 /// empty one. Unacknowledged frames stop the push after a few seconds, which looks exactly like a
 /// quiet room.
-export function ackFrame(frame, internalExt) {
+export function ackFrame(frame: PushFrame, internalExt: string): Buffer {
   return pushFrame(FRAME_TYPE.ack, internalExt || '-', { logId: frame.logId });
 }
 
 /// Whether a frame is one of the transport's own, for logging.
-export function isTransportFrame(frame) {
+export function isTransportFrame(frame: PushFrame): boolean {
   return !frame.carriesEvents;
 }
 

@@ -25,15 +25,15 @@ export const WINDOWS_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
   + 'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 /// Where the session file lives. `TTL_SESSION_FILE` overrides it, as the Rust side expects.
-export function sessionPath() {
+export function sessionPath(): string {
   if (process.env.TTL_SESSION_FILE) return process.env.TTL_SESSION_FILE;
   const base = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
   return path.join(base, 'ttl-signer', 'session');
 }
 
 /// Parse a `k=v; k=v` cookie header into a jar.
-export function parseCookies(raw) {
-  const jar = new Map();
+export function parseCookies(raw: string): Map<string, string> {
+  const jar = new Map<string, string>();
   for (const part of String(raw).split(';')) {
     const eq = part.indexOf('=');
     if (eq > 0) jar.set(part.slice(0, eq).trim(), part.slice(eq + 1).trim());
@@ -43,16 +43,19 @@ export function parseCookies(raw) {
 
 /// The stored session as a jar. Empty when there is no session file, which is a valid state:
 /// discovery works as a guest, and only the socket requires cookies.
-export function sessionJar() {
+export function sessionJar(): Map<string, string> {
   try {
     return parseCookies(fs.readFileSync(sessionPath(), 'utf8').trim());
   } catch {
-    return new Map();
+    return new Map<string, string>();
   }
 }
 
 /// A `Cookie` header from a jar, optionally with extra pairs appended.
-export function cookieHeader(jar, extra = {}) {
+export function cookieHeader(
+  jar: ReadonlyMap<string, string>,
+  extra: Readonly<Record<string, string>> = {},
+): string {
   return [
     ...[...jar].map(([name, value]) => `${name}=${value}`),
     ...Object.entries(extra).map(([name, value]) => `${name}=${value}`),
@@ -63,11 +66,20 @@ export function cookieHeader(jar, extra = {}) {
 ///
 /// Returns the cookie *names* it absorbed — never the values, which is what a probe wants to print
 /// when it reports what an endpoint handed back.
-export function absorbCookies(jar, response) {
+interface CookieHeaders {
+  getSetCookie?: () => string[];
+}
+
+interface CookieResponse {
+  headers?: CookieHeaders;
+}
+
+export function absorbCookies(jar: Map<string, string>, response: CookieResponse): string[] {
   const lines = response.headers?.getSetCookie ? response.headers.getSetCookie() : [];
   const names = [];
   for (const line of lines) {
-    const [pair] = line.split(';');
+    const pair = line.split(';', 1)[0];
+    if (pair === undefined) continue;
     const eq = pair.indexOf('=');
     if (eq > 0) {
       const name = pair.slice(0, eq).trim();

@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { EVENT, METHOD, decodeEvent, decodeUser, label } from '../src/events.mjs';
+import { EVENT, METHOD, decodeEvent, decodeUser, label } from '../dist/events.js';
 
 const USER_ID = 6810000000000000123n;
 
@@ -25,7 +25,7 @@ test('a gift reads its detail block when there is one', () => {
     METHOD.gift,
     concat(varint(2, 5655n), varint(5, 3n), sub(7, user('someone')), varint(9, 1n), sub(15, detail)),
   );
-  assert.equal(event.type, EVENT.gift);
+  if (event.type !== EVENT.gift) assert.fail(`expected gift, got ${event.type}`);
   assert.equal(event.giftId, '5655');
   assert.equal(event.giftName, 'Rose');
   assert.equal(event.diamondCount, 1);
@@ -37,6 +37,7 @@ test('a gift reads its detail block when there is one', () => {
 // the client fills it in from the room's gift table.
 test('a gift without a detail block still decodes', () => {
   const event = decodeEvent(METHOD.gift, concat(varint(2, 5655n), sub(7, user('someone'))));
+  if (event.type !== EVENT.gift) assert.fail(`expected gift, got ${event.type}`);
   assert.equal(event.giftId, '5655');
   assert.equal(event.giftName, '');
   assert.equal(event.diamondCount, 0);
@@ -68,6 +69,7 @@ test('a payload that cannot be read degrades instead of throwing', () => {
 
 test('a missing user is a blank user, not a crash', () => {
   const event = decodeEvent(METHOD.chat, str(3, 'orphan comment'));
+  if (event.type !== EVENT.chat) assert.fail(`expected chat, got ${event.type}`);
   assert.equal(event.user.uniqueId, '');
   assert.equal(label(event.user), 'unknown');
   assert.deepEqual(decodeUser(), { userId: '0', nickname: '', uniqueId: '', secUid: '' });
@@ -75,11 +77,11 @@ test('a missing user is a blank user, not a crash', () => {
 
 // --- encoders, so the fixtures above are readable rather than hex ------------------------------
 
-function user(uniqueId, nickname = '') {
+function user(uniqueId: string, nickname = ''): Uint8Array {
   return concat(varint(1, USER_ID), nickname ? str(3, nickname) : new Uint8Array(), str(38, uniqueId));
 }
 
-function varint(number, value) {
+function varint(number: number, value: bigint | number): Uint8Array {
   const out = [(number << 3) | 0];
   let remaining = BigInt(value);
   do {
@@ -91,15 +93,16 @@ function varint(number, value) {
   return Uint8Array.from(out);
 }
 
-function bytes(number, body) {
+function bytes(number: number, body: Uint8Array): Uint8Array {
   return concat(varintValue((number << 3) | 2), varintValue(body.length), body);
 }
 
-const str = (number, value) => bytes(number, new TextEncoder().encode(value));
-const sub = (number, body) => bytes(number, body);
+const str = (number: number, value: string): Uint8Array =>
+  bytes(number, new TextEncoder().encode(value));
+const sub = (number: number, body: Uint8Array): Uint8Array => bytes(number, body);
 
-function varintValue(value) {
-  const out = [];
+function varintValue(value: bigint | number): Uint8Array {
+  const out: number[] = [];
   let remaining = BigInt(value);
   do {
     let byte = Number(remaining & 0x7fn);
@@ -110,7 +113,7 @@ function varintValue(value) {
   return Uint8Array.from(out);
 }
 
-function concat(...parts) {
+function concat(...parts: Uint8Array[]): Uint8Array {
   const total = parts.reduce((sum, part) => sum + part.length, 0);
   const out = new Uint8Array(total);
   let at = 0;

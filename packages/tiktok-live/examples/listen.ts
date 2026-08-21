@@ -1,11 +1,11 @@
 // Listen to a live room and print what arrives.
 //
-//   node examples/listen.mjs @someone [seconds]
-//   node examples/listen.mjs                      # pick a room that is live now
+//   npm run listen -- @someone [seconds]
+//   npm run listen                                # pick a room that is live now
 //
 // AUTHORIZED USE ONLY: this opens a real connection to a real room.
 
-import { Discovery, TikTokLive, cookieHeader, label, sessionJar } from '../src/index.mjs';
+import { Discovery, TikTokLive, cookieHeader, label, sessionJar } from '../dist/index.js';
 
 const requested = process.argv[2];
 const seconds = Number(process.argv[3] || 20);
@@ -42,7 +42,8 @@ setTimeout(() => {
 async function pickALiveRoom() {
   // Search wants the session too — without one it answers "Please login your account first".
   const rooms = await new Discovery({ cookie: cookieHeader(sessionJar()) }).liveChannels('live');
-  if (!rooms.length) throw new Error('no live rooms found');
-  console.log(`picked @${rooms[0].uniqueId} (${rooms[0].viewers} viewers)`);
-  return rooms[0].uniqueId;
+  const room = rooms[0];
+  if (!room) throw new Error('no live rooms found');
+  console.log(`picked @${room.uniqueId} (${room.viewers} viewers)`);
+  return room.uniqueId;
 }

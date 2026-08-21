@@ -20,8 +20,8 @@ await live.connect();
 
 The only signed thing in the whole flow is the socket's query string, and the code that signs it is
 TikTok's own `webmssdk` bundle — which is JavaScript. Node already has a JavaScript engine, so
-there is nothing to embed and nothing to compile: the bundle runs in a bare `node:vm` context, and
-the sandbox it needs (`vendor/bootstrap.js`) is a plain script.
+there is no native engine or addon to compile: the TypeScript package builds to ESM, the bundle runs
+in a bare `node:vm` context, and the sandbox it needs (`vendor/bootstrap.js`) is a generated script.
 
 The Rust side of this repository does link QuickJS or V8, but only because Rust has no engine of
 its own. Shipping that through `napi` would put a JavaScript engine inside a JavaScript runtime and
@@ -69,7 +69,7 @@ new TikTokLive(uniqueId, {
   roomId,               // skip the lookup if you already know it
   fetchGifts: true,     // ~2.6 MB, once per connection
   reconnect: { attempts: 5, initialMs: 2000, maxMs: 60000 },
-  bundlePath,           // default: downloaded once and cached in the temp directory
+  bundlePath,           // default: hash-verified, downloaded once, and cached in the temp directory
   WebSocketImpl,        // default: global WebSocket (Node 22+); pass `ws` if yours lacks headers
 })
 ```
@@ -81,11 +81,12 @@ The pieces are exported too, for anything the client does not shape the way you 
 ## Tests
 
 ```sh
-node --test test/          # offline; signing tests skip without a bundle
-node examples/listen.mjs   # live, against a room that is broadcasting now
+npm install
+npm run check              # strict type-check, build, and offline tests
+npm run listen -- @someone # live, against a room that is broadcasting now
 ```
 
-`test/signer.test.mjs` also checks that `vendor/bootstrap.js` still matches the shim it is
+`test/signer.test.ts` also checks that `vendor/bootstrap.js` still matches the shim it is
 generated from — run `npm run sync-bootstrap` after editing `scripts/headless/shim.mjs`.
 
 ## Authorized use only

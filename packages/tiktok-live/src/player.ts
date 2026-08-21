@@ -15,7 +15,7 @@
 // query this module builds, and `direct_socket_query_matches_the_player` asserts the Rust builder
 // produces it byte for byte.
 
-import { USER_AGENT } from './session.mjs';
+import { USER_AGENT } from './session.js';
 
 /// Socket hosts, by cluster region. The player picks between exactly these three.
 export const SOCKET_HOST = Object.freeze({
@@ -51,9 +51,11 @@ export const HEARTBEAT_MS = '10000';
 
 /// Who the client claims to be in the room.
 export const IDENTITY = Object.freeze({ audience: 'audience', anchor: 'anchor' });
+export type Identity = (typeof IDENTITY)[keyof typeof IDENTITY];
 
 /// Frame compression the socket will negotiate.
 export const COMPRESSION = Object.freeze({ gzip: 'gzip', none: '' });
+export type Compression = (typeof COMPRESSION)[keyof typeof COMPRESSION];
 
 /// `payload_type` values on a `PushFrame`.
 export const FRAME_TYPE = Object.freeze({
@@ -83,6 +85,48 @@ export const HEARTBEAT_FIELD = Object.freeze({ roomId: 1, sendPacketSeqId: 2 });
 const WIRE_VARINT = 0;
 const WIRE_LENGTH_DELIMITED = 2;
 
+type QueryValue = string | number | boolean;
+type QueryRecord = Record<string, unknown>;
+
+export interface BrowserBlockOptions {
+  userAgent?: string;
+  screenWidth?: number;
+  screenHeight?: number;
+  browserLanguage?: string;
+  browserPlatform?: string;
+  tzName?: string;
+}
+
+export interface SocketConfigOptions {
+  roomId: string;
+  deviceId?: string;
+  identity?: Identity;
+  compress?: Compression;
+  socketHost?: string;
+  appLanguage?: string;
+}
+
+export interface SocketConfig extends QueryRecord {
+  aid: string;
+  appName: string;
+  liveId: string;
+  versionCode: string;
+  appLanguage: string;
+  socketHost: string;
+  wsDirect: string;
+  fetchBeforeWsSuccess: string;
+  clientEnter: string;
+  roomId: string;
+  identity: Identity;
+  deviceId: string;
+  compress: Compression;
+  lastRtt: string;
+  cursor: string;
+  internalExt: string;
+  historyCommentCursor: string;
+  heartbeatDuration: string;
+}
+
 // --- the query the signature covers ----------------------------------------------------------------
 
 /// The SDK's browser block, `k()`. Its `version_code` is the SDK default, which the config shadows.
@@ -93,7 +137,7 @@ export function browserBlock({
   browserLanguage = 'en-US',
   browserPlatform = 'Linux x86_64',
   tzName = 'America/New_York',
-} = {}) {
+}: BrowserBlockOptions = {}): Record<string, string> {
   return {
     version_code: SDK_VERSION_CODE,
     device_platform: 'web',
@@ -111,38 +155,42 @@ export function browserBlock({
 }
 
 /// `F()`: drop empties, objects, and the config keys that are not request parameters.
-export function strip(props) {
-  const out = { ...props };
-  for (const key of Object.keys(out)) {
-    if (out[key] === undefined || out[key] === '' || typeof out[key] === 'object') delete out[key];
-  }
-  for (const key of ['socketHost', 'host', 'fetchBeforeWsSuccess', 'debug', 'filterByRoomId']) {
-    delete out[key];
+export function strip(props: QueryRecord): Record<string, QueryValue> {
+  const excluded = new Set([
+    'socketHost', 'host', 'fetchBeforeWsSuccess', 'debug', 'filterByRoomId',
+  ]);
+  const out: Record<string, QueryValue> = {};
+  for (const [key, value] of Object.entries(props)) {
+    if (!excluded.has(key) && isQueryValue(value) && value !== '') out[key] = value;
   }
   return out;
 }
 
 /// `V()`: the browser block, then the config, then the fixed tail.
-export function withDefaults(props, block = browserBlock()) {
+export function withDefaults(
+  props: QueryRecord,
+  block: QueryRecord = browserBlock(),
+): Record<string, QueryValue> {
   const { didRule, deviceId, ...rest } = props;
-  const merged = {
+  const merged: QueryRecord = {
     ...block,
     ...strip(rest),
     supWsDsOpt: '1',
     respContentType: 'protobuf',
     // 3 only when there is no device id to rule on.
-    didRule: didRule ?? (deviceId ? 0 : 3),
-    deviceId,
-    webcastLanguage: rest.appLanguage,
+    didRule: isQueryValue(didRule) ? didRule : (deviceId ? 0 : 3),
+    deviceId: isQueryValue(deviceId) ? deviceId : '',
+    webcastLanguage: isQueryValue(rest.appLanguage) ? rest.appLanguage : '',
   };
-  for (const key of Object.keys(merged)) {
-    if (merged[key] === undefined || merged[key] === '') delete merged[key];
+  const out: Record<string, QueryValue> = {};
+  for (const [key, value] of Object.entries(merged)) {
+    if (isQueryValue(value) && value !== '') out[key] = value;
   }
-  return merged;
+  return out;
 }
 
 /// `H()`: camelCase to snake_case, and **no** percent-encoding. The signature covers these bytes.
-export function serialize(params) {
+export function serialize(params: Readonly<Record<string, QueryValue>>): string {
   return Object.keys(params).reduce((acc, key) => {
     const name = key
       .replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)
@@ -156,12 +204,12 @@ export function serialize(params) {
 /// The config the live room page hands its IM SDK, with the caller's room and device filled in.
 export function socketConfig({
   roomId,
-  deviceId,
+  deviceId = '',
   identity = IDENTITY.audience,
   compress = COMPRESSION.gzip,
   socketHost = SOCKET_HOST.global,
   appLanguage = 'en',
-} = {}) {
+}: SocketConfigOptions): SocketConfig {
   return {
     aid: AID,
     appName: APP_NAME,
@@ -186,7 +234,7 @@ export function socketConfig({
 }
 
 /// The query string the socket URL carries, exactly as the SDK builds it.
-export function socketQuery(config, block = browserBlock()) {
+export function socketQuery(config: SocketConfig, block: QueryRecord = browserBlock()): string {
   const { appName, didRule, routeParamsMap, pushServer, ...rest } = config;
   return serialize(withDefaults({
     appName,
@@ -202,15 +250,19 @@ export function socketQuery(config, block = browserBlock()) {
 }
 
 /// The unsigned socket URL. The signature is appended as `&X-Gnarly=<percent-encoded>`.
-export function socketUrl(config, block = browserBlock()) {
+export function socketUrl(config: SocketConfig, block: QueryRecord = browserBlock()): string {
   return `${config.socketHost}${PATH.wsReuseSupplement}?${socketQuery(config, block)}`;
 }
 
 // --- the frames ------------------------------------------------------------------------------------
 
-function varint(value) {
-  const out = [];
+function varint(value: string | number | bigint): number[] {
+  const out: number[] = [];
   let remaining = BigInt(value);
+  if (remaining < 0n) throw new RangeError('protobuf varints must be non-negative');
+  if (typeof value === 'number' && !Number.isSafeInteger(value)) {
+    throw new RangeError('integer protobuf values must be safe numbers or decimal strings');
+  }
   do {
     let byte = Number(remaining & 0x7fn);
     remaining >>= 7n;
@@ -220,10 +272,18 @@ function varint(value) {
   return out;
 }
 
-const tag = (field, wire) => varint((field << 3) | wire);
-const int64Field = (field, value) => [...tag(field, WIRE_VARINT), ...varint(value)];
-const bytesField = (field, value) => {
-  const body = typeof value === 'string' ? Buffer.from(value, 'utf8') : Buffer.from(value);
+const tag = (field: number, wire: number): number[] => varint((field << 3) | wire);
+const int64Field = (field: number, value: string | number | bigint): number[] =>
+  [...tag(field, WIRE_VARINT), ...varint(value)];
+const bytesField = (
+  field: number,
+  value: string | ArrayBuffer | ArrayBufferView,
+): number[] => {
+  const body = typeof value === 'string'
+    ? Buffer.from(value, 'utf8')
+    : value instanceof ArrayBuffer
+      ? Buffer.from(value)
+      : Buffer.from(value.buffer, value.byteOffset, value.byteLength);
   return [...tag(field, WIRE_LENGTH_DELIMITED), ...varint(body.length), ...body];
 };
 
@@ -231,7 +291,11 @@ const bytesField = (field, value) => {
 ///
 /// `logId` is echoed back on an acknowledgement so the server can match it to the frame it sent;
 /// frames the client originates leave it at zero, which is what the SDK does.
-export function pushFrame(payloadType, payload, { logId = 0 } = {}) {
+export function pushFrame(
+  payloadType: string,
+  payload: string | ArrayBuffer | ArrayBufferView,
+  { logId = 0 }: { logId?: string | number | bigint } = {},
+): Buffer {
   return Buffer.from([
     ...(logId ? int64Field(PUSH_FRAME_FIELD.logId, logId) : []),
     ...bytesField(PUSH_FRAME_FIELD.payloadEncoding, PAYLOAD_ENCODING_PB),
@@ -241,7 +305,11 @@ export function pushFrame(payloadType, payload, { logId = 0 } = {}) {
 }
 
 /// The frame that makes the server start pushing. Without it a healthy socket stays silent.
-export function enterRoomFrame({ roomId, identity = IDENTITY.audience, liveId = LIVE_ID }) {
+export function enterRoomFrame({
+  roomId,
+  identity = IDENTITY.audience,
+  liveId = LIVE_ID,
+}: { roomId: string; identity?: Identity; liveId?: string }): Buffer {
   const payload = Buffer.from([
     ...int64Field(ENTER_ROOM_FIELD.roomId, roomId),
     ...int64Field(ENTER_ROOM_FIELD.liveId, liveId),
@@ -254,6 +322,10 @@ export function enterRoomFrame({ roomId, identity = IDENTITY.audience, liveId = 
 }
 
 /// The application keepalive. The socket closes without it; protocol pings are not answered.
-export function heartbeatFrame(roomId) {
+export function heartbeatFrame(roomId: string): Buffer {
   return pushFrame(FRAME_TYPE.heartbeat, Buffer.from(int64Field(HEARTBEAT_FIELD.roomId, roomId)));
+}
+
+function isQueryValue(value: unknown): value is QueryValue {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
 }

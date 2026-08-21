@@ -12,19 +12,36 @@
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 
-import { Discovery } from './discovery.mjs';
-import { EVENT, decodeEvent } from './events.mjs';
-import { ackFrame, decodeBatch, decodePushFrame, decompress } from './frames.mjs';
+import { Discovery } from './discovery.js';
+import { EVENT, decodeEvent } from './events.js';
+import { ackFrame, decodeBatch, decodePushFrame, decompress } from './frames.js';
 import {
   IDENTITY, PATH, SOCKET_HOST, enterRoomFrame, heartbeatFrame, socketConfig, socketQuery,
-} from './player.mjs';
-import { PRODUCT, Signer } from './signer.mjs';
-import { USER_AGENT, cookieHeader, sessionJar } from './session.mjs';
+} from './player.js';
+import { PRODUCT, Signer } from './signer.js';
+import { USER_AGENT, cookieHeader, parseCookies, sessionJar } from './session.js';
+import type {
+  ClientState,
+  ChatEvent,
+  Gift,
+  GiftEvent,
+  LikeEvent,
+  LiveEvent,
+  MemberEvent,
+  ReconnectPolicy,
+  RoomInfo,
+  RoomUserEvent,
+  SocialEvent,
+  UnknownEvent,
+  WebSocketConstructor,
+  WebSocketLike,
+} from './types.js';
+import type { Identity } from './player.js';
 
 /// Reconnection, matching the Rust client's policy: five attempts, doubling from two seconds, and
 /// never past a minute. A signature ages and a room can move its push server, so a reconnect
 /// re-signs from scratch rather than reusing the URL that just failed.
-export const DEFAULT_RECONNECT = Object.freeze({
+export const DEFAULT_RECONNECT: Readonly<ReconnectPolicy> = Object.freeze({
   attempts: 5,
   initialMs: 2_000,
   maxMs: 60_000,
@@ -37,23 +54,83 @@ const FALLBACK_DEVICE_ID = '7300000000000000001';
 /// How long to wait for the handshake before calling it refused.
 const OPEN_TIMEOUT_MS = 15_000;
 
-export class TikTokLive extends EventEmitter {
-  #options;
-  #socket = null;
-  #heartbeat = null;
-  #signer = null;
+export interface TikTokLiveOptions {
+  sessionCookie?: string;
+  userAgent?: string;
+  roomId?: string;
+  deviceId?: string;
+  fetchGifts?: boolean;
+  fetchRoomInfo?: boolean;
+  identity?: Identity;
+  socketHost?: string;
+  reconnect?: Partial<ReconnectPolicy>;
+  signer?: SignerLike;
+  bundleSource?: string;
+  bundlePath?: string;
+  bundleUrl?: string;
+  WebSocketImpl?: WebSocketConstructor;
+  discovery?: Discovery;
+}
+
+export interface SignerLike {
+  sign(url: string, product?: (typeof PRODUCT)[keyof typeof PRODUCT]): string;
+}
+
+interface ResolvedOptions {
+  cookie: string;
+  userAgent: string;
+  deviceId: string;
+  fetchGifts: boolean;
+  fetchRoomInfo: boolean;
+  identity: Identity;
+  socketHost: string;
+  reconnect: ReconnectPolicy;
+  signer: SignerLike | null;
+  bundleSource?: string;
+  bundlePath?: string;
+  bundleUrl?: string;
+  WebSocketImpl?: WebSocketConstructor;
+  discovery: Discovery | null;
+}
+
+export interface TikTokLiveEvents {
+  connected: [ClientState];
+  disconnected: [{ code: number; reason: string }];
+  reconnecting: [{ attempt: number; delayMs: number }];
+  error: [Error];
+  event: [LiveEvent];
+  chat: [ChatEvent];
+  gift: [GiftEvent];
+  like: [LikeEvent];
+  member: [MemberEvent];
+  social: [SocialEvent];
+  roomUser: [RoomUserEvent];
+  unknown: [UnknownEvent];
+}
+
+export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
+  readonly uniqueId: string;
+  roomId: string;
+  nickname = '';
+  roomInfo: RoomInfo | null = null;
+  gifts = new Map<string, Gift>();
+  connected = false;
+  readonly discovery: Discovery;
+
+  readonly #options: ResolvedOptions;
+  #socket: WebSocketLike | null = null;
+  #heartbeat: NodeJS.Timeout | null = null;
+  #signer: SignerLike | null = null;
+  #connecting: Promise<ClientState> | null = null;
   #closing = false;
   #attempt = 0;
 
   /// `uniqueId` is the `@handle`. Everything else has a working default.
-  constructor(uniqueId, options = {}) {
+  constructor(uniqueId: string, options: TikTokLiveOptions = {}) {
     super();
     const cookie = options.sessionCookie ?? cookieHeader(sessionJar());
     this.uniqueId = String(uniqueId).replace(/^@/, '');
     this.roomId = options.roomId ?? '';
-    this.roomInfo = null;
-    this.gifts = new Map();
-    this.connected = false;
     this.#options = {
       cookie,
       userAgent: options.userAgent ?? USER_AGENT,
@@ -69,7 +146,8 @@ export class TikTokLive extends EventEmitter {
       bundleUrl: options.bundleUrl,
       // Injectable so a caller on an older Node, or one that prefers `ws`, can pass its own.
       // The global needs to accept a `headers` option, because the cookie travels there.
-      WebSocketImpl: options.WebSocketImpl ?? globalThis.WebSocket,
+      WebSocketImpl:
+        options.WebSocketImpl ?? (globalThis.WebSocket as unknown as WebSocketConstructor | undefined),
       discovery: options.discovery ?? null,
     };
     this.discovery = this.#options.discovery ?? new Discovery({
@@ -80,8 +158,18 @@ export class TikTokLive extends EventEmitter {
 
   /// Resolve the room, sign, and open the socket. Resolves once the socket is open and the room
   /// has been entered; events arrive on this emitter from then on.
-  async connect() {
-    if (this.connected) return this.state();
+  connect(): Promise<ClientState> {
+    if (this.connected) return Promise.resolve(this.state());
+    if (this.#connecting) return this.#connecting;
+    const connecting = this.#connect();
+    this.#connecting = connecting;
+    void connecting.finally(() => {
+      if (this.#connecting === connecting) this.#connecting = null;
+    }).catch(() => undefined);
+    return connecting;
+  }
+
+  async #connect(): Promise<ClientState> {
     this.#closing = false;
 
     if (!this.#options.cookie) {
@@ -95,9 +183,7 @@ export class TikTokLive extends EventEmitter {
     if (!this.roomId) {
       const lookup = await this.discovery.roomLookup(this.uniqueId);
       if (!lookup.isLive) {
-        const error = new Error(`@${this.uniqueId} is not live (status ${lookup.status})`);
-        error.code = 'NOT_LIVE';
-        throw error;
+        throw new NotLiveError(`@${this.uniqueId} is not live (status ${lookup.status})`);
       }
       this.roomId = lookup.roomId;
       this.nickname = lookup.nickname;
@@ -109,7 +195,7 @@ export class TikTokLive extends EventEmitter {
       this.roomInfo = await this.discovery.roomInfo(this.roomId).catch(() => null);
     }
     if (this.#options.fetchGifts) {
-      this.gifts = await this.discovery.giftList(this.roomId).catch(() => new Map());
+      this.gifts = await this.discovery.giftList(this.roomId).catch(() => new Map<string, Gift>());
     }
 
     this.#signer ??=
@@ -122,12 +208,13 @@ export class TikTokLive extends EventEmitter {
         cookie: this.#options.cookie,
       }));
 
+    if (this.#closing) throw new Error('connection cancelled');
     await this.#open();
     return this.state();
   }
 
   /// Room, viewers, and whether the socket is up.
-  state() {
+  state(): ClientState {
     return {
       uniqueId: this.uniqueId,
       roomId: this.roomId,
@@ -138,7 +225,7 @@ export class TikTokLive extends EventEmitter {
   }
 
   /// Close the socket and stop reconnecting.
-  disconnect() {
+  disconnect(): void {
     this.#closing = true;
     this.#stopHeartbeat();
     try {
@@ -152,8 +239,8 @@ export class TikTokLive extends EventEmitter {
 
   // --- the socket ------------------------------------------------------------------------------
 
-  async #open() {
-    const jar = sessionJar();
+  async #open(): Promise<void> {
+    const jar = parseCookies(this.#options.cookie);
     const config = socketConfig({
       roomId: this.roomId,
       deviceId:
@@ -164,7 +251,9 @@ export class TikTokLive extends EventEmitter {
     const query = socketQuery(config);
     // Signed as one string, then opened verbatim. The signature covers these exact bytes, so the
     // URL must not be rebuilt, re-encoded, or reordered between here and the handshake.
-    const url = this.#signer.sign(
+    const signer = this.#signer;
+    if (!signer) throw new Error('signer was not initialized');
+    const url = signer.sign(
       `${config.socketHost}${PATH.wsReuseSupplement}?${query}`,
       PRODUCT.ws,
     );
@@ -174,8 +263,9 @@ export class TikTokLive extends EventEmitter {
       throw new Error('no WebSocket implementation: use Node 22+, or pass `WebSocketImpl`');
     }
 
-    await new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       let settled = false;
+      let opened = false;
       const socket = new Impl(url, {
         headers: {
           cookie: this.#options.cookie,
@@ -198,6 +288,15 @@ export class TikTokLive extends EventEmitter {
       }, OPEN_TIMEOUT_MS);
 
       socket.addEventListener('open', () => {
+        if (settled) return;
+        if (this.#closing) {
+          settled = true;
+          clearTimeout(timer);
+          socket.close();
+          reject(new Error('connection cancelled'));
+          return;
+        }
+        opened = true;
         // The server pushes nothing until the client says which room it is in. A socket that
         // opened and stayed silent is almost always a missing enter-room frame.
         socket.send(enterRoomFrame({ roomId: this.roomId, identity: config.identity }));
@@ -215,7 +314,7 @@ export class TikTokLive extends EventEmitter {
       socket.addEventListener('message', (message) => this.#receive(message.data));
 
       socket.addEventListener('error', (event) => {
-        const error = new Error(event?.message ?? 'socket error');
+        const error = new Error(event.message ?? 'socket error');
         if (settled) this.emit('error', error);
       });
 
@@ -223,16 +322,18 @@ export class TikTokLive extends EventEmitter {
         this.connected = false;
         this.#stopHeartbeat();
         clearTimeout(timer);
-        if (!settled) {
-          settled = true;
-          // A refusal at the handshake is not a network blip. The usual cause is a session the
-          // socket will not accept, and retrying it just repeats the refusal.
-          reject(
-            new Error(
-              `the handshake was refused (code ${event.code}). The socket rejects a session it ` +
-                'does not accept before any frame is exchanged.',
-            ),
-          );
+        if (!opened) {
+          if (!settled) {
+            settled = true;
+            // A refusal at the handshake is not a network blip. The usual cause is a session the
+            // socket will not accept, and retrying it just repeats the refusal.
+            reject(
+              new Error(
+                `the handshake was refused (code ${event.code}). The socket rejects a session it ` +
+                  'does not accept before any frame is exchanged.',
+              ),
+            );
+          }
           return;
         }
         this.emit('disconnected', { code: event.code, reason: String(event.reason ?? '') });
@@ -241,12 +342,12 @@ export class TikTokLive extends EventEmitter {
     });
   }
 
-  #receive(data) {
+  #receive(data: ArrayBuffer | ArrayBufferView): void {
     let frame;
     try {
-      frame = decodePushFrame(new Uint8Array(data));
+      frame = decodePushFrame(data);
     } catch (error) {
-      this.emit('error', error);
+      this.emit('error', toError(error));
       return;
     }
     // `hb`, `ack` and `im_enter_room_resp` are the transport talking to itself.
@@ -256,7 +357,7 @@ export class TikTokLive extends EventEmitter {
     try {
       batch = decodeBatch(decompress(frame));
     } catch (error) {
-      this.emit('error', error);
+      this.emit('error', toError(error));
       return;
     }
 
@@ -266,7 +367,7 @@ export class TikTokLive extends EventEmitter {
       try {
         this.#socket?.send(ackFrame(frame, batch.internalExt));
       } catch (error) {
-        this.emit('error', error);
+        this.emit('error', toError(error));
       }
     }
 
@@ -275,13 +376,13 @@ export class TikTokLive extends EventEmitter {
       event.msgId = message.msgId;
       event.isHistory = Boolean(message.isHistory);
       this.emit('event', event);
-      this.emit(event.type, event);
+      this.#emitTypedEvent(event);
     }
   }
 
   /// Fill in what the message left out. A repeat gift carries no detail block, so its name and
   /// price come from the room's gift table.
-  #enrich(event) {
+  #enrich(event: LiveEvent): LiveEvent {
     if (event.type !== EVENT.gift) return event;
     const gift = this.gifts.get(String(event.giftId));
     if (!gift) return event;
@@ -295,7 +396,7 @@ export class TikTokLive extends EventEmitter {
     };
   }
 
-  #startHeartbeat(everyMs) {
+  #startHeartbeat(everyMs: number): void {
     this.#stopHeartbeat();
     // The application heartbeat, not a protocol ping: the socket closes without it, and protocol
     // pings are not answered.
@@ -309,12 +410,12 @@ export class TikTokLive extends EventEmitter {
     this.#heartbeat.unref?.();
   }
 
-  #stopHeartbeat() {
+  #stopHeartbeat(): void {
     if (this.#heartbeat) clearInterval(this.#heartbeat);
     this.#heartbeat = null;
   }
 
-  #scheduleReconnect() {
+  #scheduleReconnect(): void {
     const { attempts, initialMs, maxMs } = this.#options.reconnect;
     if (this.#attempt >= attempts) {
       this.emit('error', new Error(`gave up after ${attempts} reconnection attempts`));
@@ -327,15 +428,35 @@ export class TikTokLive extends EventEmitter {
       if (this.#closing) return;
       // Re-signed from scratch: the previous signature is what the server just stopped accepting.
       this.#open().catch((error) => {
-        this.emit('error', error);
+        this.emit('error', toError(error));
         if (!this.#closing) this.#scheduleReconnect();
       });
     }, delayMs);
     timer.unref?.();
   }
+
+  #emitTypedEvent(event: LiveEvent): void {
+    switch (event.type) {
+      case EVENT.chat: this.emit('chat', event); break;
+      case EVENT.gift: this.emit('gift', event); break;
+      case EVENT.like: this.emit('like', event); break;
+      case EVENT.member: this.emit('member', event); break;
+      case EVENT.social: this.emit('social', event); break;
+      case EVENT.roomUser: this.emit('roomUser', event); break;
+      case EVENT.unknown: this.emit('unknown', event); break;
+    }
+  }
 }
 
 /// Read a cookie header from a file, for callers keeping the session somewhere of their own.
-export function cookieFromFile(path) {
+export function cookieFromFile(path: string): string {
   return fs.readFileSync(path, 'utf8').trim();
+}
+
+export class NotLiveError extends Error {
+  readonly code = 'NOT_LIVE';
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }

@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { gzipSync } from 'node:zlib';
 
-import { ackFrame, decodeBatch, decodePushFrame, decompress } from '../src/frames.mjs';
-import { enterRoomFrame, heartbeatFrame, pushFrame } from '../src/player.mjs';
+import { ackFrame, decodeBatch, decodePushFrame, decompress } from '../dist/frames.js';
+import { enterRoomFrame, heartbeatFrame, pushFrame } from '../dist/player.js';
 
 test('a frame this package builds is one it can read', () => {
   const frame = decodePushFrame(pushFrame('msg', Buffer.from([1, 2, 3])));
@@ -59,7 +59,9 @@ test('a batch envelope yields its messages and its ack state', () => {
     ]),
   );
   assert.equal(batch.messages.length, 1);
-  assert.equal(batch.messages[0].method, 'WebcastChatMessage');
+  const message = batch.messages[0];
+  assert.ok(message);
+  assert.equal(message.method, 'WebcastChatMessage');
   assert.equal(batch.cursor, 'cursor-1');
   assert.equal(batch.internalExt, 'ext-1');
   assert.equal(batch.needAck, true);
@@ -76,11 +78,16 @@ test('the enter-room and heartbeat frames keep their shape', () => {
   assert.equal(heartbeat.payloadType, 'hb');
 });
 
-function lengthDelimited(number, body) {
+test('frame encoders reject negative and unsafe integer values', () => {
+  assert.throws(() => pushFrame('ack', '-', { logId: -1 }), /non-negative/);
+  assert.throws(() => pushFrame('ack', '-', { logId: Number.MAX_SAFE_INTEGER + 1 }), /safe/);
+});
+
+function lengthDelimited(number: number, body: Uint8Array): Buffer {
   return Buffer.concat([Buffer.from([(number << 3) | 2, body.length]), Buffer.from(body)]);
 }
 
-function encodeMessage(method, payload) {
+function encodeMessage(method: string, payload: Uint8Array): Buffer {
   return Buffer.concat([
     lengthDelimited(1, Buffer.from(method)),
     lengthDelimited(2, payload),
