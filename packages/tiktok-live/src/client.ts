@@ -440,7 +440,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   }
 
   /// Fill in what the message left out. A repeat gift carries no detail block, so its name and
-  /// price come from the room's gift table.
+  /// price come from the room's gift table. Also attach icon URL for renderer.
   #enrich(event: LiveEvent): LiveEvent {
     if (event.type !== EVENT.gift) return event;
     const gift = this.gifts.get(String(event.giftId));
@@ -449,6 +449,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       ...event,
       giftName: event.giftName || gift.name,
       diamondCount: event.diamondCount || gift.diamondCount,
+      giftIconUrl: gift.iconUrl || undefined,
       /// Streakable gifts arrive as a burst; only `repeatEnd` is the real total. Anything that
       /// sums diamonds must ignore the rest, and this is what says which is which.
       streakable: gift.combo,

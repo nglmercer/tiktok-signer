@@ -5,6 +5,8 @@ export interface EventUser {
   /** The `@handle`. */
   uniqueId: string;
   secUid: string;
+  /** Avatar thumbnail URL extracted from field 9 if present. */
+  avatarUrl?: string;
 }
 
 export interface BaseEvent {
@@ -31,6 +33,7 @@ export interface GiftEvent extends BaseEvent {
   groupId: string;
   repeatEnd: boolean;
   streakable?: boolean;
+  giftIconUrl?: string;
 }
 
 export interface LikeEvent extends BaseEvent {

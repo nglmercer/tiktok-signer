@@ -47,11 +47,29 @@ export const EVENT = Object.freeze({
 
 // --- user ------------------------------------------------------------------------------------
 
+const IMAGE_MODEL = {
+  1: ['url_list[]', asString],
+} satisfies MessageShape;
+
+interface DecodedImage { url_list: string[] }
+
+function asImageUrl(value: WireValue): string {
+  if (!(value instanceof Uint8Array)) return '';
+  try {
+    const img = read<DecodedImage>(value, IMAGE_MODEL);
+    return img.url_list?.[0] ?? '';
+  } catch { return ''; }
+}
+
 const USER = {
   1: ['id', asId],
   3: ['nickname', asString],
+  9: ['avatarThumbUrl', asImageUrl],
+  10: ['avatarMediumUrl', asImageUrl],
+  11: ['avatarLargeUrl', asImageUrl],
   38: ['displayId', asString],
   46: ['secUid', asString],
+  1012: ['avatarJpgUrl', asImageUrl],
 } satisfies MessageShape;
 
 interface DecodedUser {
@@ -59,6 +77,10 @@ interface DecodedUser {
   nickname: string;
   displayId: string;
   secUid: string;
+  avatarThumbUrl: string;
+  avatarMediumUrl: string;
+  avatarLargeUrl: string;
+  avatarJpgUrl: string;
 }
 
 /// The stable slice of a user: who they are, under the names the Node ecosystem already uses.
@@ -67,12 +89,19 @@ interface DecodedUser {
 /// consumer keeps working when the surrounding `User` message shifts.
 export function decodeUser(payload?: Uint8Array): EventUser {
   const user = payload ? read<DecodedUser>(payload, USER) : {};
+  const avatarUrl =
+    user.avatarThumbUrl ||
+    user.avatarMediumUrl ||
+    user.avatarLargeUrl ||
+    user.avatarJpgUrl ||
+    '';
   return {
     userId: user.id ?? '0',
     nickname: user.nickname ?? '',
     /// The `@handle`. `display_id` in the schema, `uniqueId` in the Node connector.
     uniqueId: user.displayId ?? '',
     secUid: user.secUid ?? '',
+    avatarUrl: avatarUrl || undefined,
   };
 }
 
