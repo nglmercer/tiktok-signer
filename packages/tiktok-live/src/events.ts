@@ -150,7 +150,8 @@ interface DecodedGift {
 interface DecodedLike { count: number; total: number; user: EventUser }
 interface DecodedMember { user: EventUser; memberCount: number; action: number }
 interface DecodedSocial { user: EventUser; action: number; followCount: number; shareCount: number }
-interface DecodedRoomUser { total: number; popularity: number; totalUser: number; anonymous: number }
+interface DecodedContributor { score: number; user: EventUser; rank: number; delta: number }
+interface DecodedRoomUser { total: number; popularity: number; totalUser: number; anonymous: number; ranks: DecodedContributor[]; seats: DecodedContributor[] }
 
 const LIKE = {
   2: ['count', asCount], 3: ['total', asCount], 5: ['user', decodeUserField],
@@ -167,8 +168,19 @@ const SOCIAL = {
   8: ['shareCount', asCount],
 } satisfies MessageShape;
 
+const CONTRIBUTOR = {
+  1: ['score', asCount],
+  2: ['user', decodeUserField],
+  3: ['rank', asCount],
+  4: ['delta', asCount],
+} satisfies MessageShape;
+
 const ROOM_USER = {
+  2: ['ranks[]', (value: WireValue) =>
+    value instanceof Uint8Array ? read<DecodedContributor>(value, CONTRIBUTOR) as unknown as DecodedContributor : {} as DecodedContributor],
   3: ['total', asCount],
+  5: ['seats[]', (value: WireValue) =>
+    value instanceof Uint8Array ? read<DecodedContributor>(value, CONTRIBUTOR) as unknown as DecodedContributor : {} as DecodedContributor],
   6: ['popularity', asCount],
   7: ['totalUser', asCount],
   8: ['anonymous', asCount],
@@ -231,12 +243,20 @@ const NORMALIZE = {
   },
   [METHOD.roomUser]: (payload: Uint8Array): Omit<RoomUserEvent, 'method'> => {
     const message = read<DecodedRoomUser>(payload, ROOM_USER);
+    const mapContributor = (c: DecodedContributor): import('./types.ts').TopViewer => ({
+      rank: c.rank ?? 0,
+      score: c.score ?? 0,
+      delta: c.delta ?? 0,
+      user: c.user ?? decodeUser(),
+    });
     return {
       type: EVENT.roomUser,
       viewers: message.total ?? 0,
       popularity: message.popularity ?? 0,
       totalUser: message.totalUser ?? 0,
       anonymous: message.anonymous ?? 0,
+      topViewers: (message.ranks ?? []).map(mapContributor),
+      rankedViewers: (message.ranks ?? []).map(mapContributor),
     };
   },
 };

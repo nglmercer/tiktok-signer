@@ -58,12 +58,21 @@ export interface SocialEvent extends BaseEvent {
   shareCount: number;
 }
 
+export interface TopViewer {
+  rank: number;
+  score: number;
+  delta: number;
+  user: EventUser;
+}
+
 export interface RoomUserEvent extends BaseEvent {
   type: 'roomUser';
   viewers: number;
   popularity: number;
   totalUser: number;
   anonymous: number;
+  topViewers: TopViewer[];
+  rankedViewers: TopViewer[];
 }
 
 export interface UnknownEvent extends BaseEvent {
