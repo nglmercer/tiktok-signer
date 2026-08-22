@@ -23,7 +23,8 @@
 // frames all come from `lib/player.mjs`, which is the one place they are written down.
 //
 // AUTHORIZED USE ONLY: this opens a real connection to a real room. Frame counts and byte sizes are
-// printed; no cookie, token, or signed URL is.
+// printed; no cookie, token, or signed URL is. This is the empty/stored-jar control; use
+// `ws-guest-probe.mjs` to bootstrap TikTok's anonymous identity first.
 
 import fs from 'node:fs';
 import { createSandbox } from './shim.mjs';
@@ -154,8 +155,8 @@ function report() {
   } else {
     console.log('The handshake was refused before the socket opened.');
     if (!jar.size) {
-      console.log('No session was loaded, and this endpoint refuses a jar-less handshake outright');
-      console.log('(measured: immediate 1006). Store cookies and re-run.');
+      console.log('No cookies were supplied: this is the empty-jar control (measured: immediate 1006).');
+      console.log('Run ws-guest-probe.mjs to test a fresh anonymous TikTok identity.');
     }
   }
 }

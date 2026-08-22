@@ -1,4 +1,3 @@
-// Moved. The player's transport now lives in the Node package, which is the thing that ships it:
-// `packages/tiktok-live/src/player.mjs`. This re-export keeps the research scripts importing one
-// statement of those constants rather than a second copy that drifts from it.
-export * from '../../../packages/tiktok-live/src/player.mjs';
+// The shared implementation is TypeScript; build `packages/tiktok-live` before running the
+// headless probes. Keeping this as a re-export prevents a second player serializer from drifting.
+export * from '../../../packages/tiktok-live/dist/player.js';

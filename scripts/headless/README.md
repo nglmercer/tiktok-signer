@@ -114,7 +114,7 @@ or token.
 Measured on 2026-08-18 against a live room:
 
 - `unique_id` → `room_id`: **200**, no signature needed.
-- `GET /@user/live`: issues the guest identity cookies. No browser required.
+- `GET /live`: issues the guest identity cookies. No browser required.
 - `/webcast/room/info/`: **200, `status_code=0`**, real viewer counts.
 - `/webcast/gift/list/`: **200, 673 gifts** — identical to the WebView run.
 - `/webcast/im/fetch/`: **403**, even holding the full guest identity and a service-issued token.
@@ -208,8 +208,8 @@ as one-line re-exports, so there is still one statement of the player's transpor
 
 | Module | What it owns |
 |---|---|
-| `lib/session.mjs` | re-export of `packages/tiktok-live/src/session.mjs` — the user agent, the session file path, the jar, the cookie header, `Set-Cookie` absorption |
-| `lib/player.mjs` | re-export of `packages/tiktok-live/src/player.mjs` — the player's transport constants, its query serializer, and the socket frames |
+| `lib/session.mjs` | re-export of `packages/tiktok-live/dist/session.js` — the user agent, the session file path, the jar, the cookie header, `Set-Cookie` absorption |
+| `lib/player.mjs` | re-export of `packages/tiktok-live/dist/player.js` — the player's transport constants, its query serializer, and the socket frames |
 | `lib/sign.mjs` | signing one URL under a described, reproducible environment |
 | `lib/xhr.mjs` | the real `XMLHttpRequest` the SDK's hooks operate on |
 | `lib/canvas.mjs` | **generated** — the canvas fingerprint as data, from `tools/gen-canvas.mjs` |
@@ -218,6 +218,28 @@ The first two exist because the same twenty lines had been copy-pasted into ten 
 two of them ended up reading a different session path than the rest. Protobuf field numbers and query
 constants live in `lib/player.mjs` under names — a bare `6` in a frame encoder is unreviewable, and
 `player-audit.mjs` checks those numbers against the descriptors the player ships.
+
+Build the Node package before running probes that import these shared modules:
+
+```sh
+npm --prefix packages/tiktok-live run build
+```
+
+## Anonymous direct-socket probe
+
+`ws-guest-probe.mjs` keeps the empty-jar control separate from TikTok's anonymous identity. It starts
+with a new in-memory jar, GETs `/live`, absorbs `Set-Cookie`, and gives the same cookie header to the
+signer and the WebSocket. It prints cookie names, not values:
+
+```sh
+node scripts/headless/ws-guest-probe.mjs /tmp/webmssdk.js <room_id> 20 --mode empty
+node scripts/headless/ws-guest-probe.mjs /tmp/webmssdk.js <room_id> 20 --mode guest
+node scripts/headless/ws-guest-probe.mjs /tmp/webmssdk.js <room_id> 20 --mode guest --remove ttwid
+```
+
+The current direct path needs the anonymous `ttwid` identity but not an account `sessionid`. A
+bootstrap response with no usable cookies is reported as `BOOTSTRAP_NO_COOKIES`; it is not collapsed
+into a WebSocket close code.
 
 ## Keeping up with the player (run this first when something breaks)
 

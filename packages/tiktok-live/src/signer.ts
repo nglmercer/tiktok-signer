@@ -120,8 +120,8 @@ export class Signer {
 
   /// Load a bundle into a fresh context and prepare it.
   ///
-  /// `cookie` matters: the sandbox reports it to the bundle as `document.cookie`, and the socket
-  /// refuses a handshake whose signature was produced without the session it presents.
+  /// `cookie` is exposed to the bundle as `document.cookie` so the signing environment matches the
+  /// network identity. Signature validity and WebSocket identity acceptance remain separate checks.
   static async create({
     bundleSource,
     bundlePath,

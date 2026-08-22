@@ -24,6 +24,46 @@ export const USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (K
 export const WINDOWS_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
   + 'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
+/// A normal anonymous web visit establishes this identity; it is not an account session.
+export const GUEST_BOOTSTRAP_URL = 'https://www.tiktok.com/live';
+
+export type GuestSessionErrorCode =
+  | 'BOOTSTRAP_NO_COOKIES'
+  | 'RATE_LIMIT_OR_VERIFICATION'
+  | 'WS_HANDSHAKE_REJECTED'
+  | 'UNKNOWN';
+
+export class GuestSessionError extends Error {
+  readonly code: GuestSessionErrorCode;
+  readonly status?: number;
+  readonly closeCode?: number;
+
+  constructor(
+    code: GuestSessionErrorCode,
+    message: string,
+    status?: number,
+    closeCode?: number,
+  ) {
+    super(message);
+    this.name = 'GuestSessionError';
+    this.code = code;
+    this.status = status;
+    this.closeCode = closeCode;
+  }
+}
+
+export interface SessionIdentity {
+  cookie: string;
+  authenticated: boolean;
+  deviceId?: string;
+}
+
+export interface GuestSessionOptions {
+  userAgent?: string;
+  url?: string;
+  timeoutMs?: number;
+}
+
 /// Where the session file lives. `TTL_SESSION_FILE` overrides it, as the Rust side expects.
 export function sessionPath(): string {
   if (process.env.TTL_SESSION_FILE) return process.env.TTL_SESSION_FILE;
@@ -42,13 +82,76 @@ export function parseCookies(raw: string): Map<string, string> {
 }
 
 /// The stored session as a jar. Empty when there is no session file, which is a valid state:
-/// discovery works as a guest, and only the socket requires cookies.
+/// the client will bootstrap a memory-only anonymous jar before opening the socket.
 export function sessionJar(): Map<string, string> {
   try {
     return parseCookies(fs.readFileSync(sessionPath(), 'utf8').trim());
   } catch {
     return new Map<string, string>();
   }
+}
+
+/// Create the anonymous TikTok identity used by the direct message socket.
+///
+/// The endpoint is an ordinary public web navigation. TikTok currently issues `ttwid` (plus
+/// short-lived companion cookies) there; the direct socket accepts that identity without an
+/// account `sessionid`. Keep the jar in memory and return only the serialized header needed by
+/// discovery, signing, and the socket.
+export async function bootstrapGuestSession({
+  userAgent = USER_AGENT,
+  url = GUEST_BOOTSTRAP_URL,
+  timeoutMs = 15_000,
+}: GuestSessionOptions = {}): Promise<SessionIdentity> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        'user-agent': userAgent,
+        'accept-language': 'en-US,en;q=0.9',
+      },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch {
+    throw new GuestSessionError(
+      'UNKNOWN',
+      'anonymous TikTok guest bootstrap did not complete',
+    );
+  }
+
+  const jar = new Map<string, string>();
+  absorbCookies(jar, response);
+  // Drain the navigation before using the identity. This also makes the helper work with fetch
+  // implementations that defer connection cleanup until the response body is consumed.
+  await response.arrayBuffer();
+
+  if (response.status === 403 || response.status === 429) {
+    throw new GuestSessionError(
+      'RATE_LIMIT_OR_VERIFICATION',
+      `TikTok refused anonymous guest bootstrap (HTTP ${response.status})`,
+      response.status,
+    );
+  }
+  if (!response.ok) {
+    throw new GuestSessionError(
+      'UNKNOWN',
+      `TikTok anonymous guest bootstrap returned HTTP ${response.status}`,
+      response.status,
+    );
+  }
+  if (!jar.has('ttwid')) {
+    throw new GuestSessionError(
+      'BOOTSTRAP_NO_COOKIES',
+      'TikTok anonymous guest bootstrap returned no usable guest identity',
+      response.status,
+    );
+  }
+
+  const deviceId = jar.get('tt_webid_v2') || jar.get('tt_webid');
+  return {
+    cookie: cookieHeader(jar),
+    authenticated: false,
+    ...(deviceId ? { deviceId } : {}),
+  };
 }
 
 /// A `Cookie` header from a jar, optionally with extra pairs appended.

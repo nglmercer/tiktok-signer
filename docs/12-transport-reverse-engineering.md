@@ -63,6 +63,35 @@ serializer fails a test rather than a connection. `scripts/headless/room-page-sc
 the trail: the room page's rehydration data carries the `live_im_sdk_socket_link` experiment and the
 `imFrontier` host.
 
+### Anonymous identity follow-up, 2026-08-22
+
+The earlier jar-less result was a valid empty-jar control, not proof that an account `sessionid` is
+required. `scripts/headless/ws-guest-probe.mjs` starts from a new in-memory jar, GETs
+`https://www.tiktok.com/live`, absorbs `Set-Cookie`, and gives the exact same cookie header to the
+local signer and the WebSocket. Against one live public room:
+
+| Variant | Cookie names present | Account session? | Handshake / frames | Close / classification |
+|---|---|---:|---|---|
+| Empty control | none | no | rejected / 0 | 1006 / `WS_HANDSHAKE_REJECTED` |
+| Full `/live` guest | `tt_chain_token`, `tt_csrf_token`, `ttwid` | no | accepted / 27 frames, 116 decoded messages in 20 s | remained open / `SUCCESS` |
+| Guest minus `tt_chain_token` | `tt_csrf_token`, `ttwid` | no | accepted / 11 frames, 47 decoded messages in 8 s | remained open / `SUCCESS` |
+| Guest minus `tt_csrf_token` | `tt_chain_token`, `ttwid` | no | accepted / 14 frames, 51 decoded messages in 8 s | remained open / `SUCCESS` |
+| Guest minus `ttwid` | `tt_chain_token`, `tt_csrf_token` | no | rejected / 0 | 1006 / `WS_HANDSHAKE_REJECTED` |
+| Only `ttwid` | `ttwid` | no | accepted / 10–12 frames in 6–8 s | remained open / `SUCCESS` |
+| Only `tt-target-idc=useast1a` | `tt-target-idc` | no | rejected / 0 | 1006 / `WS_HANDSHAKE_REJECTED` |
+
+`/live` did not issue `tt_webid_v2` or `tt_webid`; the successful guest runs therefore used the
+existing fallback device id. A pinned signer comparison produced equal signed output lengths and
+equal bytes for empty versus full guest `document.cookie`, so signature validity and WebSocket
+identity acceptance remain separate layers. A five-process repetition also exposed intermittent
+HTTP 200 bootstrap responses with no `Set-Cookie`; those are classified as `BOOTSTRAP_NO_COOKIES`,
+not misreported as WebSocket failures.
+
+The production Node client now bootstraps this guest identity automatically when neither an explicit
+cookie nor a stored cookie jar is present. The jar is memory-only, reused by discovery, the signer,
+and the socket, and is never printed or persisted. Authenticated `sessionCookie` behavior remains
+unchanged. The Rust live server still has its separate authenticated-session boundary.
+
 ### Keeping it from silently rotting
 
 None of the above is documented or versioned by TikTok, and each fact fails differently when it

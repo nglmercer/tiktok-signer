@@ -61,7 +61,7 @@ export class WebcastRefusal extends Error {
 
 /// Reads the unsigned endpoints.
 export class Discovery {
-  readonly cookie: string;
+  cookie: string;
   readonly userAgent: string;
   readonly timeoutMs: number;
 
@@ -69,6 +69,12 @@ export class Discovery {
     this.cookie = cookie;
     this.userAgent = userAgent;
     this.timeoutMs = timeoutMs;
+  }
+
+  /// Update the jar after an anonymous bootstrap. The discovery object is created in the client
+  /// constructor, before the first asynchronous connection has a chance to visit `/live`.
+  setCookie(cookie: string): void {
+    this.cookie = cookie;
   }
 
   async #json<T>(url: string): Promise<T> {

@@ -17,7 +17,21 @@ export type { SignerLike, TikTokLiveEvents, TikTokLiveOptions } from './client.j
 export { Discovery, WebcastRefusal, ROOM_STATUS_LIVE } from './discovery.js';
 export { EVENT, METHOD, SOCIAL_ACTION, decodeEvent, decodeUser, label } from './events.js';
 export { Signer, PRODUCT, BUNDLE_SHA256, BUNDLE_URL, loadBundle } from './signer.js';
-export { USER_AGENT, cookieHeader, parseCookies, sessionJar, sessionPath } from './session.js';
+export {
+  GUEST_BOOTSTRAP_URL,
+  GuestSessionError,
+  USER_AGENT,
+  bootstrapGuestSession,
+  cookieHeader,
+  parseCookies,
+  sessionJar,
+  sessionPath,
+} from './session.js';
+export type {
+  GuestSessionErrorCode,
+  GuestSessionOptions,
+  SessionIdentity,
+} from './session.js';
 export { ackFrame, decodeBatch, decodePushFrame, decompress } from './frames.js';
 export { IDENTITY, SOCKET_HOST, PATH, socketConfig, socketQuery } from './player.js';
 export type { BrowserBlockOptions, Compression, Identity, SocketConfig, SocketConfigOptions } from './player.js';

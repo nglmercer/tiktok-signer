@@ -56,8 +56,9 @@ Default tests are offline and deterministic. Run the offline server with:
 cargo run -p ttl-sign-server --bin ttl-sign-replay-server --features replay
 ```
 
-The live server is explicit, and needs the signing bundle plus an account session — the message
-socket refuses a jar-less handshake:
+The Rust live server is explicit and still needs the signing bundle plus an account session. The
+Node package has a separate anonymous path: it bootstraps TikTok's guest `ttwid` cookie in memory
+before opening the same direct socket.
 
 ```sh
 curl -s -o /tmp/webmssdk.js \
@@ -185,7 +186,7 @@ Every row measured with no browser, no display, and no captured artefact.
 | `unique_id` → `room_id` | Unsigned. |
 | Room info and gift table | Unsigned — neither endpoint verifies a signature (`verify-probe.mjs`). |
 | Build the socket URL | From first principles: the player's own query, signed with `registerWsSigner`. |
-| Open the socket | 101, then `im_enter_room`; a jar-less handshake is refused with 1006. |
+| Open the socket | Empty jar: refused with 1006. Fresh `/live` guest jar: 101, `im_enter_room`, and public events without `sessionid`. |
 | Receive and decode frames | 203 frames and 555 events in a 150-second soak. |
 | Reconnect after a close | Re-signs and reopens; a refusal is reported rather than retried. |
 
@@ -313,6 +314,7 @@ cargo run -p ttl-live-discovery --example live-check            # full flow, no 
 cargo run -p ttl-live-discovery --example discover -- <user>    # room info + gift list
 node scripts/headless/find-live.mjs /tmp/webmssdk.js            # who is live now
 node scripts/headless/ws-direct.mjs /tmp/webmssdk.js <room_id>  # the transport, on its own
+node scripts/headless/ws-guest-probe.mjs /tmp/webmssdk.js <room_id>  # empty vs /live guest identity
 node scripts/headless/room-page-scan.mjs @<user>                # what the room page seeds
 node scripts/headless/player-audit.mjs                          # has the player changed?
 node scripts/headless/transport.mjs /tmp/webmssdk.js <user>     # the old im/fetch bootstrap
@@ -321,7 +323,8 @@ node scripts/headless/transport.mjs /tmp/webmssdk.js <user>     # the old im/fet
 The browser probes (`endpoint-probe`, `ws-probe`, `page-probe`, `limit-probe`) were removed with
 the WebView: they drove a page and have no headless equivalent. What a refusal looks like is now
 observable directly — `room/ping/audience` reports `status_code=20003, "User doesn't login"`, and a
-jar-less socket handshake is refused with an immediate 1006.
+jar-less socket handshake is refused with an immediate 1006; the anonymous `/live` guest probe is
+separate and supplies TikTok-issued identity cookies.
 
 ### tiktok-live-connector (Node) compatibility
 
@@ -357,18 +360,20 @@ What the server hands back now is assembled locally. `push_server` carries the s
 reordered, re-encoded, with the duplicated `version_code` collapsed. The socket accepts that, which
 is what makes the shape safe to hand to a client that was written for Euler Stream.
 
-### Discovery is guest-only-friendly; the socket is not
+### Discovery and the Node socket support anonymous guest identity
 
 Discovery needs no account: live search, `unique_id` → `room_id`, `room/info` and `gift/list` all
 answer with no cookies at all, and none of them verifies a signature.
 
-**The message socket does need a session.** A jar-less handshake to
-`/webcast/im/ws_proxy/ws_reuse_supplement/` is refused before the socket opens — an immediate 1006,
-measured 2026-08-18. The older claim here, that listening works as a guest, was about the page
-WebSocket the removed WebView captured, and does not hold on this path.
+**The message socket needs a TikTok-issued client identity, but not necessarily an account.** A
+jar-less handshake to `/webcast/im/ws_proxy/ws_reuse_supplement/` is refused before the socket opens
+(an immediate 1006). A fresh `GET /live` supplies `ttwid` plus short-lived companion cookies; the
+same direct socket then opens and delivers public events without `sessionid`. The Node package does
+this bootstrap automatically and keeps the jar in memory.
 
-`sessionid` *is* the account, so everything this sends is attributed to it, and an account is not a
-fix for rate limiting — pace the connections instead.
+`sessionid` *is* the account. When it is supplied, the client preserves that authenticated/custom
+cookie mode; when it is absent, the guest connection is anonymous. An account is not a fix for rate
+limiting — pace the connections instead.
 
 ### Providing a session
 
@@ -382,8 +387,9 @@ printf 'sessionid=...; sessionid_ss=...; sid_tt=...; ttwid=...' \
   > "$XDG_CONFIG_HOME/ttl-signer/session"
 ```
 
-`TTL_SESSION_FILE` changes the path. `sessionid` is the one that matters: without it the message
-socket refuses the handshake outright, and the headless server refuses to start.
+`TTL_SESSION_FILE` changes the path. `sessionid` remains necessary for authenticated Rust/server
+transport today. The Node package can listen anonymously using its automatic guest bootstrap; the
+headless Rust server has not yet been given that HTTP cookie-jar flow.
 
 ## Usage
 
