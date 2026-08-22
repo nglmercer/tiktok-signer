@@ -9,6 +9,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/tiktok-live/package-lock.json
+      - name: Install Node LIVE package dependencies
+        working-directory: packages/tiktok-live
+        run: npm ci
+      - name: Check Node LIVE package
+        working-directory: packages/tiktok-live
+        run: npm run check
       - name: Install workspace Rust toolchain
         run: |
           rustup toolchain install 1.86 --profile minimal --component rustfmt --component clippy

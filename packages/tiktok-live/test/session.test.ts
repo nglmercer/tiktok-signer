@@ -24,12 +24,37 @@ test('guest bootstrap absorbs cookie names without requiring sessionid', async (
 test('guest bootstrap reports an unusable anonymous response', async () => {
   await withFetch(fakeResponse(200, []), async () => {
     await assert.rejects(
-      () => bootstrapGuestSession(),
+      () => bootstrapGuestSession({ retries: 0 }),
       (error: unknown) => error instanceof GuestSessionError
         && error.code === 'BOOTSTRAP_NO_COOKIES'
         && !error.message.includes('guest-value'),
     );
   });
+});
+
+test('guest bootstrap rejects an empty ttwid value', async () => {
+  await withFetch(fakeResponse(200, ['ttwid=; Path=/; Domain=.tiktok.com']), async () => {
+    await assert.rejects(
+      () => bootstrapGuestSession({ retries: 0 }),
+      (error: unknown) => error instanceof GuestSessionError
+        && error.code === 'BOOTSTRAP_NO_COOKIES',
+    );
+  });
+});
+
+test('guest bootstrap retries a no-cookie response within a bounded budget', async () => {
+  let calls = 0;
+  await withFetch(() => {
+    calls += 1;
+    return fakeResponse(
+      200,
+      calls === 3 ? ['ttwid=guest-value; Path=/; Domain=.tiktok.com'] : [],
+    );
+  }, async () => {
+    const identity = await bootstrapGuestSession({ retries: 2, retryDelayMs: 0 });
+    assert.equal(identity.cookie, 'ttwid=guest-value');
+  });
+  assert.equal(calls, 3);
 });
 
 test('guest bootstrap classifies TikTok rate limiting separately', async () => {
@@ -42,9 +67,12 @@ test('guest bootstrap classifies TikTok rate limiting separately', async () => {
   });
 });
 
-async function withFetch(response: Response, callback: () => Promise<void>): Promise<void> {
+async function withFetch(
+  response: Response | (() => Response),
+  callback: () => Promise<void>,
+): Promise<void> {
   const previous = globalThis.fetch;
-  globalThis.fetch = async () => response;
+  globalThis.fetch = async () => typeof response === 'function' ? response() : response;
   try {
     await callback();
   } finally {

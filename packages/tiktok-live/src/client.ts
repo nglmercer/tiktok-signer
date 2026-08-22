@@ -56,6 +56,17 @@ const FALLBACK_DEVICE_ID = '7300000000000000001';
 /// How long to wait for the handshake before calling it refused.
 const OPEN_TIMEOUT_MS = 15_000;
 
+class HandshakeRejectedError extends Error {
+  readonly code = 'WS_HANDSHAKE_REJECTED' as const;
+  readonly closeCode: number;
+
+  constructor(message: string, closeCode: number) {
+    super(message);
+    this.name = 'HandshakeRejectedError';
+    this.closeCode = closeCode;
+  }
+}
+
 export interface TikTokLiveOptions {
   sessionCookie?: string;
   userAgent?: string;
@@ -124,6 +135,8 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   #heartbeat: NodeJS.Timeout | null = null;
   #signer: SignerLike | null = null;
   #guestSession: Promise<void> | null = null;
+  #guestMode = false;
+  #guestRefreshAttempted = false;
   #connecting: Promise<ClientState> | null = null;
   #closing = false;
   #attempt = 0;
@@ -195,15 +208,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       this.gifts = await this.discovery.giftList(this.roomId).catch(() => new Map<string, Gift>());
     }
 
-    this.#signer ??=
-      this.#options.signer ??
-      (await Signer.create({
-        bundleSource: this.#options.bundleSource,
-        bundlePath: this.#options.bundlePath,
-        bundleUrl: this.#options.bundleUrl,
-        userAgent: this.#options.userAgent,
-        cookie: this.#options.cookie,
-      }));
+    await this.#ensureSigner();
 
     if (this.#closing) throw new Error('connection cancelled');
     await this.#open();
@@ -219,6 +224,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
       return;
     }
     if (!this.#guestSession) {
+      this.#guestMode = true;
       this.#guestSession = bootstrapGuestSession({ userAgent: this.#options.userAgent })
         .then((identity) => {
           this.#options.cookie = identity.cookie;
@@ -230,6 +236,29 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
         });
     }
     await this.#guestSession;
+  }
+
+  async #ensureSigner(): Promise<void> {
+    if (this.#signer) return;
+    this.#signer =
+      this.#options.signer ??
+      (await Signer.create({
+        bundleSource: this.#options.bundleSource,
+        bundlePath: this.#options.bundlePath,
+        bundleUrl: this.#options.bundleUrl,
+        userAgent: this.#options.userAgent,
+        cookie: this.#options.cookie,
+      }));
+  }
+
+  /// A guest identity can expire while a long-lived socket is down. Replace the whole identity,
+  /// including the signer context, once; a deterministic refusal after that is terminal.
+  async #refreshGuestSession(): Promise<void> {
+    this.#guestSession = null;
+    this.#options.cookie = '';
+    this.#signer = null;
+    await this.#ensureSession();
+    await this.#ensureSigner();
   }
 
   /// Room, viewers, and whether the socket is up.
@@ -322,6 +351,7 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
         this.#startHeartbeat(Number(config.heartbeatDuration));
         this.connected = true;
         this.#attempt = 0;
+        this.#guestRefreshAttempted = false;
         clearTimeout(timer);
         if (!settled) {
           settled = true;
@@ -349,9 +379,10 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
             const authenticated = parseCookies(this.#options.cookie).has('sessionid');
             reject(
               authenticated
-                ? new Error(
+                ? new HandshakeRejectedError(
                     `the handshake was refused (code ${event.code}). The socket rejected the ` +
                       'provided authenticated session before any frame was exchanged.',
+                    event.code,
                   )
                 : new GuestSessionError(
                     'WS_HANDSHAKE_REJECTED',
@@ -455,12 +486,38 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
     const timer = setTimeout(() => {
       if (this.#closing) return;
       // Re-signed from scratch: the previous signature is what the server just stopped accepting.
-      this.#open().catch((error) => {
-        this.emit('error', toError(error));
-        if (!this.#closing) this.#scheduleReconnect();
-      });
+      void this.#reconnect();
     }, delayMs);
     timer.unref?.();
+  }
+
+  async #reconnect(): Promise<void> {
+    try {
+      await this.#open();
+      return;
+    } catch (error) {
+      const refusal = isHandshakeRejected(error);
+      if (!refusal) {
+        this.emit('error', toError(error));
+        if (!this.#closing) this.#scheduleReconnect();
+        return;
+      }
+
+      // Never cycle a rejected identity. Automatic guest mode gets one fresh bootstrap and one
+      // fresh signer context; supplied/stored identities stop immediately on refusal.
+      if (this.#guestMode && !this.#guestRefreshAttempted && !this.#closing) {
+        this.#guestRefreshAttempted = true;
+        try {
+          await this.#refreshGuestSession();
+          if (!this.#closing) await this.#open();
+        } catch (refreshError) {
+          if (!this.#closing) this.emit('error', toError(refreshError));
+        }
+        return;
+      }
+
+      if (!this.#closing) this.emit('error', toError(error));
+    }
   }
 
   #emitTypedEvent(event: LiveEvent): void {
@@ -487,4 +544,9 @@ export class NotLiveError extends Error {
 
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function isHandshakeRejected(error: unknown): boolean {
+  return (error instanceof GuestSessionError && error.code === 'WS_HANDSHAKE_REJECTED')
+    || error instanceof HandshakeRejectedError;
 }

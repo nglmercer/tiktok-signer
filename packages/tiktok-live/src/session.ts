@@ -62,7 +62,16 @@ export interface GuestSessionOptions {
   userAgent?: string;
   url?: string;
   timeoutMs?: number;
+  /** Number of additional attempts after a successful response without a usable `ttwid`. */
+  retries?: number;
+  /** Base delay between no-cookie retries. The implementation caps both count and delay. */
+  retryDelayMs?: number;
 }
+
+const DEFAULT_GUEST_RETRIES = 2;
+const MAX_GUEST_RETRIES = 2;
+const DEFAULT_GUEST_RETRY_DELAY_MS = 250;
+const MAX_GUEST_RETRY_DELAY_MS = 2_000;
 
 /// Where the session file lives. `TTL_SESSION_FILE` overrides it, as the Rust side expects.
 export function sessionPath(): string {
@@ -101,57 +110,91 @@ export async function bootstrapGuestSession({
   userAgent = USER_AGENT,
   url = GUEST_BOOTSTRAP_URL,
   timeoutMs = 15_000,
+  retries: requestedRetries = DEFAULT_GUEST_RETRIES,
+  retryDelayMs: requestedRetryDelayMs = DEFAULT_GUEST_RETRY_DELAY_MS,
 }: GuestSessionOptions = {}): Promise<SessionIdentity> {
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      headers: {
-        'user-agent': userAgent,
-        'accept-language': 'en-US,en;q=0.9',
-      },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch {
-    throw new GuestSessionError(
-      'UNKNOWN',
-      'anonymous TikTok guest bootstrap did not complete',
-    );
-  }
+  const retries = boundedRetries(requestedRetries);
+  const retryDelayMs = boundedRetryDelay(requestedRetryDelayMs);
+  let lastNoCookies: GuestSessionError | null = null;
 
-  const jar = new Map<string, string>();
-  absorbCookies(jar, response);
-  // Drain the navigation before using the identity. This also makes the helper work with fetch
-  // implementations that defer connection cleanup until the response body is consumed.
-  await response.arrayBuffer();
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers: {
+          'user-agent': userAgent,
+          'accept-language': 'en-US,en;q=0.9',
+        },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch {
+      throw new GuestSessionError(
+        'UNKNOWN',
+        'anonymous TikTok guest bootstrap did not complete',
+      );
+    }
 
-  if (response.status === 403 || response.status === 429) {
-    throw new GuestSessionError(
-      'RATE_LIMIT_OR_VERIFICATION',
-      `TikTok refused anonymous guest bootstrap (HTTP ${response.status})`,
-      response.status,
-    );
-  }
-  if (!response.ok) {
-    throw new GuestSessionError(
-      'UNKNOWN',
-      `TikTok anonymous guest bootstrap returned HTTP ${response.status}`,
-      response.status,
-    );
-  }
-  if (!jar.has('ttwid')) {
-    throw new GuestSessionError(
+    const jar = new Map<string, string>();
+    absorbCookies(jar, response);
+    // Drain the navigation before using the identity. This also makes the helper work with fetch
+    // implementations that defer connection cleanup until the response body is consumed.
+    await response.arrayBuffer();
+
+    if (response.status === 403 || response.status === 429) {
+      throw new GuestSessionError(
+        'RATE_LIMIT_OR_VERIFICATION',
+        `TikTok refused anonymous guest bootstrap (HTTP ${response.status})`,
+        response.status,
+      );
+    }
+    if (!response.ok) {
+      throw new GuestSessionError(
+        'UNKNOWN',
+        `TikTok anonymous guest bootstrap returned HTTP ${response.status}`,
+        response.status,
+      );
+    }
+
+    // Some ordinary `/live` responses are HTTP 200 but carry no Set-Cookie headers. Treat an
+    // empty value as unusable too, then make only a small, bounded number of fresh attempts.
+    const ttwid = jar.get('ttwid')?.trim();
+    if (ttwid) {
+      const deviceId = jar.get('tt_webid_v2') || jar.get('tt_webid');
+      return {
+        cookie: cookieHeader(jar),
+        authenticated: false,
+        ...(deviceId ? { deviceId } : {}),
+      };
+    }
+
+    lastNoCookies = new GuestSessionError(
       'BOOTSTRAP_NO_COOKIES',
       'TikTok anonymous guest bootstrap returned no usable guest identity',
       response.status,
     );
+    if (attempt < retries) {
+      await delay(Math.min(MAX_GUEST_RETRY_DELAY_MS, retryDelayMs * 2 ** attempt));
+    }
   }
 
-  const deviceId = jar.get('tt_webid_v2') || jar.get('tt_webid');
-  return {
-    cookie: cookieHeader(jar),
-    authenticated: false,
-    ...(deviceId ? { deviceId } : {}),
-  };
+  throw lastNoCookies ?? new GuestSessionError(
+    'BOOTSTRAP_NO_COOKIES',
+    'TikTok anonymous guest bootstrap returned no usable guest identity',
+  );
+}
+
+function boundedRetries(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_GUEST_RETRIES;
+  return Math.min(MAX_GUEST_RETRIES, Math.max(0, Math.floor(value)));
+}
+
+function boundedRetryDelay(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_GUEST_RETRY_DELAY_MS;
+  return Math.min(MAX_GUEST_RETRY_DELAY_MS, Math.max(0, Math.floor(value)));
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /// A `Cookie` header from a jar, optionally with extra pairs appended.

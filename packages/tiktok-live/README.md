@@ -43,15 +43,18 @@ here. **This package has no runtime dependencies.**
 ## Anonymous guest mode
 
 An account session is optional for public rooms. When `sessionCookie` is absent and the configured
-session file is empty, the client performs one ordinary `GET https://www.tiktok.com/live`, absorbs
+session file is empty, the client performs an ordinary `GET https://www.tiktok.com/live`, absorbs
 TikTok's `Set-Cookie` headers in memory, and uses that anonymous `ttwid` identity for discovery,
-signing, and the WebSocket. No browser, login, or persisted guest cookie is needed.
+signing, and the WebSocket. A response with no usable cookie gets at most two additional attempts
+with bounded backoff. No browser, login, or persisted guest cookie is needed.
 
 The empty jar is still refused by the socket (typically as close code 1006); that is different from
 the guest jar. If TikTok returns no usable guest cookie, `GuestSessionError` reports
-`BOOTSTRAP_NO_COOKIES` (or a classified HTTP/network bootstrap failure); a rejected guest socket is
-reported as `WS_HANDSHAKE_REJECTED` rather than retried forever. A supplied `sessionCookie` or a
-non-empty session file continues to be used unchanged for authenticated/custom transport.
+`BOOTSTRAP_NO_COOKIES` (or a classified HTTP/network bootstrap failure). A guest handshake refusal
+during reconnect triggers at most one fresh guest bootstrap and signer rebuild; if that also fails,
+the client stops instead of cycling the same identity. A supplied `sessionCookie` or a non-empty
+session file continues to be used unchanged, and a deterministic handshake refusal stops its
+reconnect loop as well.
 
 ## Events
 

@@ -201,3 +201,159 @@ test('a rejected anonymous handshake is typed and is not retried', async () => {
     else process.env.TTL_SESSION_FILE = previousSessionFile;
   }
 });
+
+test('a rejected guest reconnect refreshes identity once instead of cycling the old jar', async () => {
+  let fetchCalls = 0;
+  const previousFetch = globalThis.fetch;
+  const previousSessionFile = process.env.TTL_SESSION_FILE;
+  process.env.TTL_SESSION_FILE = `/tmp/ttl-live-missing-session-${process.pid}-${Date.now()}`;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    const suffix = fetchCalls === 1 ? 'one' : 'two';
+    const webId = fetchCalls === 1 ? '7999000000000000001' : '7999000000000000002';
+    return {
+      ok: true,
+      status: 200,
+      headers: {
+        getSetCookie: () => [
+          `ttwid=guest-${suffix}; Path=/; Domain=.tiktok.com`,
+          `tt_webid_v2=${webId}; Path=/; Domain=.tiktok.com`,
+        ],
+      },
+      arrayBuffer: async () => new ArrayBuffer(0),
+    } as unknown as Response;
+  };
+
+  const cookies: string[] = [];
+  const signedInputs: string[] = [];
+  const socketUrls: string[] = [];
+  const sockets: GuestReconnectWebSocket[] = [];
+
+  class GuestReconnectWebSocket {
+    binaryType = '';
+    readonly #listeners = new Map<string, Function[]>();
+
+    constructor(url: string, options: WebSocketOptions) {
+      sockets.push(this);
+      cookies.push(options.headers.cookie ?? '');
+      socketUrls.push(url);
+      const index = sockets.length;
+      queueMicrotask(() => {
+        if (index === 2) this.#dispatch('close', { code: 1006 });
+        else this.#dispatch('open');
+      });
+    }
+
+    send(_data: string | ArrayBuffer | ArrayBufferView): void {}
+    close(): void { this.#dispatch('close', { code: 1000, reason: 'done' }); }
+    closeWith(code: number): void { this.#dispatch('close', { code }); }
+
+    addEventListener(type: string, listener: Function): void {
+      const listeners = this.#listeners.get(type) ?? [];
+      listeners.push(listener);
+      this.#listeners.set(type, listeners);
+    }
+
+    #dispatch(type: string, event?: unknown): void {
+      for (const listener of this.#listeners.get(type) ?? []) listener(event);
+    }
+  }
+
+  try {
+    const live = new TikTokLive('@someone', {
+      roomId: '7300000000000000001',
+      fetchGifts: false,
+      fetchRoomInfo: false,
+      reconnect: { attempts: 4, initialMs: 0, maxMs: 0 },
+      signer: {
+        sign(url) {
+          signedInputs.push(url);
+          return `${url}&X-Gnarly=test`;
+        },
+      },
+      WebSocketImpl: GuestReconnectWebSocket as unknown as WebSocketConstructor,
+    });
+
+    await live.connect();
+    const reconnected = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('guest refresh did not reconnect')), 1_000);
+      live.once('connected', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      live.once('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+    sockets[0]?.closeWith(1000);
+    await reconnected;
+
+    assert.equal(fetchCalls, 2, 'refresh should bootstrap exactly one new guest jar');
+    assert.deepEqual(cookies, [
+      'ttwid=guest-one; tt_webid_v2=7999000000000000001',
+      'ttwid=guest-one; tt_webid_v2=7999000000000000001',
+      'ttwid=guest-two; tt_webid_v2=7999000000000000002',
+    ]);
+    assert.match(signedInputs[0] ?? '', /device_id=7999000000000000001/);
+    assert.match(signedInputs[2] ?? '', /device_id=7999000000000000002/);
+    live.disconnect();
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousSessionFile === undefined) delete process.env.TTL_SESSION_FILE;
+    else process.env.TTL_SESSION_FILE = previousSessionFile;
+  }
+});
+
+test('an authenticated handshake refusal stops reconnecting with the same session', async () => {
+  let socketCount = 0;
+  const sockets: AuthReconnectWebSocket[] = [];
+
+  class AuthReconnectWebSocket {
+    binaryType = '';
+    readonly #listeners = new Map<string, Function[]>();
+
+    constructor(_url: string, _options: WebSocketOptions) {
+      sockets.push(this);
+      socketCount += 1;
+      const index = sockets.length;
+      queueMicrotask(() => {
+        if (index === 1) this.#dispatch('open');
+        else this.#dispatch('close', { code: 1006 });
+      });
+    }
+
+    send(_data: string | ArrayBuffer | ArrayBufferView): void {}
+    close(): void { this.#dispatch('close', { code: 1000, reason: 'done' }); }
+    closeWith(code: number): void { this.#dispatch('close', { code }); }
+
+    addEventListener(type: string, listener: Function): void {
+      const listeners = this.#listeners.get(type) ?? [];
+      listeners.push(listener);
+      this.#listeners.set(type, listeners);
+    }
+
+    #dispatch(type: string, event?: unknown): void {
+      for (const listener of this.#listeners.get(type) ?? []) listener(event);
+    }
+  }
+
+  const live = new TikTokLive('@someone', {
+    roomId: '7300000000000000001',
+    sessionCookie: 'sessionid=test; tt_webid_v2=7999000000000000001',
+    fetchGifts: false,
+    fetchRoomInfo: false,
+    reconnect: { attempts: 4, initialMs: 0, maxMs: 0 },
+    signer: { sign: (url) => `${url}&X-Gnarly=test` },
+    WebSocketImpl: AuthReconnectWebSocket as unknown as WebSocketConstructor,
+  });
+  const refusal = new Promise<Error>((resolve) => live.once('error', resolve));
+
+  await live.connect();
+  sockets[0]?.closeWith(1000);
+  const error = await refusal;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.match(error.message, /provided authenticated session/);
+  assert.equal(socketCount, 2);
+  live.disconnect();
+});
