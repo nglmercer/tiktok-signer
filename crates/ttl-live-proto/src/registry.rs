@@ -9,6 +9,10 @@
 //! `ttl-live-events`.
 
 /// Protobuf wire representation expected for a schema field.
+///
+/// This is what the dynamic decoder switches on: several logical types share
+/// one wire category (every integer and bool is a varint on the wire), so a
+/// consumer that needs the declared type reads [`FieldSchema::value_kind`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldKind {
     Varint,
@@ -20,12 +24,52 @@ pub enum FieldKind {
     Message(&'static str),
 }
 
+/// Logical protobuf type of a schema field, as declared in the `.proto` source.
+///
+/// Unlike [`FieldKind`], nothing is collapsed to a wire category: `int64` and
+/// `uint64` stay distinct, and message and enum references keep the fully
+/// qualified name of the type they point at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldValueKind {
+    Double,
+    Float,
+    Int64,
+    Uint64,
+    Int32,
+    Fixed64,
+    Fixed32,
+    Bool,
+    String,
+    /// Fully qualified name of the nested message type.
+    Message(&'static str),
+    Bytes,
+    Uint32,
+    /// Fully qualified name of the enum type.
+    Enum(&'static str),
+    Sfixed32,
+    Sfixed64,
+    Sint32,
+    Sint64,
+}
+
+/// How many values a schema field holds, from the descriptor label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldCardinality {
+    Optional,
+    Required,
+    Repeated,
+}
+
 /// Descriptor for one field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FieldSchema {
     pub number: u32,
     pub name: &'static str,
+    /// JSON name from the descriptor (`display_id` -> `displayId`).
+    pub json_name: &'static str,
     pub kind: FieldKind,
+    pub value_kind: FieldValueKind,
+    pub cardinality: FieldCardinality,
 }
 
 /// Descriptor for one protobuf message.
@@ -112,6 +156,72 @@ mod tests {
             chat.field(2).map(|field| field.kind),
             Some(FieldKind::Message("webcast.model.base.user.User"))
         );
+    }
+
+    #[test]
+    fn chat_content_has_logical_string_kind_and_json_name() {
+        let chat = schema_for_method("WebcastChatMessage").expect("chat descriptor");
+        let content = chat.field(3).expect("content field");
+        assert_eq!(content.name, "content");
+        assert_eq!(content.json_name, "content");
+        assert_eq!(content.kind, FieldKind::String);
+        assert_eq!(content.value_kind, FieldValueKind::String);
+        assert_eq!(content.cardinality, FieldCardinality::Optional);
+    }
+
+    #[test]
+    fn chat_user_references_the_nested_user_message() {
+        let chat = schema_for_method("WebcastChatMessage").expect("chat descriptor");
+        let user = chat.field(2).expect("user field");
+        assert_eq!(user.name, "user");
+        assert_eq!(user.json_name, "user");
+        assert_eq!(
+            user.value_kind,
+            FieldValueKind::Message("webcast.model.base.user.User")
+        );
+        assert_eq!(user.cardinality, FieldCardinality::Optional);
+    }
+
+    #[test]
+    fn room_user_ranks_is_a_repeated_contributor_message() {
+        let room_user =
+            schema_for_method("WebcastRoomUserSeqMessage").expect("room-user descriptor");
+        let ranks = room_user.field(2).expect("ranks field");
+        assert_eq!(ranks.name, "ranks");
+        assert_eq!(ranks.json_name, "ranks");
+        assert_eq!(
+            ranks.kind,
+            FieldKind::Message("webcast.model.message.Contributor")
+        );
+        assert_eq!(
+            ranks.value_kind,
+            FieldValueKind::Message("webcast.model.message.Contributor")
+        );
+        assert_eq!(ranks.cardinality, FieldCardinality::Repeated);
+
+        // The scalar beside it keeps its declared type instead of collapsing
+        // to the shared varint wire category.
+        let total = room_user.field(3).expect("total field");
+        assert_eq!(total.kind, FieldKind::Varint);
+        assert_eq!(total.value_kind, FieldValueKind::Int64);
+        assert_eq!(total.cardinality, FieldCardinality::Optional);
+    }
+
+    #[test]
+    fn enums_keep_their_type_and_json_names_are_camel_case() {
+        let member = schema_for_method("WebcastMemberMessage").expect("member descriptor");
+        let action = member.field(10).expect("action field");
+        assert_eq!(action.kind, FieldKind::Varint);
+        assert_eq!(
+            action.value_kind,
+            FieldValueKind::Enum("webcast.im.MemberMessageAction")
+        );
+
+        // `json_name` comes from the descriptor, not from echoing `name`.
+        let effect_config = member.field(13).expect("effect_config field");
+        assert_eq!(effect_config.name, "effect_config");
+        assert_eq!(effect_config.json_name, "effectConfig");
+        assert_eq!(effect_config.value_kind, FieldValueKind::Bytes);
     }
 
     /// Guards against a schema update silently gutting the registry. The bounds

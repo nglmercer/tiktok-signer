@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::{env, fs};
 
 use prost::Message;
-use prost_types::field_descriptor_proto::Type as ProtoFieldType;
+use prost_types::field_descriptor_proto::{Label as ProtoFieldLabel, Type as ProtoFieldType};
 use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet};
 
 const PROTO_ROOT: &str = "proto/v3";
@@ -93,7 +93,10 @@ struct MessageInfo {
 struct FieldInfo {
     number: i32,
     name: String,
+    json_name: String,
     kind: FieldKindInfo,
+    value_kind: FieldValueKindInfo,
+    cardinality: FieldCardinalityInfo,
 }
 
 #[derive(Clone)]
@@ -104,6 +107,34 @@ enum FieldKindInfo {
     String,
     Bytes,
     Message(String),
+}
+
+#[derive(Clone)]
+enum FieldValueKindInfo {
+    Double,
+    Float,
+    Int64,
+    Uint64,
+    Int32,
+    Fixed64,
+    Fixed32,
+    Bool,
+    String,
+    Message(String),
+    Bytes,
+    Uint32,
+    Enum(String),
+    Sfixed32,
+    Sfixed64,
+    Sint32,
+    Sint64,
+}
+
+#[derive(Clone, Copy)]
+enum FieldCardinalityInfo {
+    Optional,
+    Required,
+    Repeated,
 }
 
 /// Flattens every message in every file into `package.Name` descriptors.
@@ -170,7 +201,8 @@ fn field_info(field: &FieldDescriptorProto) -> Option<FieldInfo> {
         return None;
     }
     let name = field.name.clone()?;
-    let kind = match ProtoFieldType::try_from(field.r#type?).ok()? {
+    let proto_type = ProtoFieldType::try_from(field.r#type?).ok()?;
+    let kind = match proto_type {
         ProtoFieldType::Double | ProtoFieldType::Fixed64 | ProtoFieldType::Sfixed64 => {
             FieldKindInfo::Fixed64
         }
@@ -179,14 +211,9 @@ fn field_info(field: &FieldDescriptorProto) -> Option<FieldInfo> {
         }
         ProtoFieldType::String => FieldKindInfo::String,
         ProtoFieldType::Bytes => FieldKindInfo::Bytes,
-        ProtoFieldType::Message | ProtoFieldType::Group => FieldKindInfo::Message(
-            field
-                .type_name
-                .as_deref()
-                .unwrap_or_default()
-                .trim_start_matches('.')
-                .to_owned(),
-        ),
+        ProtoFieldType::Message | ProtoFieldType::Group => {
+            FieldKindInfo::Message(qualified_type_name(field))
+        }
         ProtoFieldType::Int64
         | ProtoFieldType::Uint64
         | ProtoFieldType::Int32
@@ -196,7 +223,56 @@ fn field_info(field: &FieldDescriptorProto) -> Option<FieldInfo> {
         | ProtoFieldType::Sint32
         | ProtoFieldType::Sint64 => FieldKindInfo::Varint,
     };
-    Some(FieldInfo { number, name, kind })
+    let value_kind = match proto_type {
+        ProtoFieldType::Double => FieldValueKindInfo::Double,
+        ProtoFieldType::Float => FieldValueKindInfo::Float,
+        ProtoFieldType::Int64 => FieldValueKindInfo::Int64,
+        ProtoFieldType::Uint64 => FieldValueKindInfo::Uint64,
+        ProtoFieldType::Int32 => FieldValueKindInfo::Int32,
+        ProtoFieldType::Fixed64 => FieldValueKindInfo::Fixed64,
+        ProtoFieldType::Fixed32 => FieldValueKindInfo::Fixed32,
+        ProtoFieldType::Bool => FieldValueKindInfo::Bool,
+        ProtoFieldType::String => FieldValueKindInfo::String,
+        // Groups are deprecated and absent from proto3 schemas; if one ever
+        // appears it still names a message type, so it decodes as one.
+        ProtoFieldType::Message | ProtoFieldType::Group => {
+            FieldValueKindInfo::Message(qualified_type_name(field))
+        }
+        ProtoFieldType::Bytes => FieldValueKindInfo::Bytes,
+        ProtoFieldType::Uint32 => FieldValueKindInfo::Uint32,
+        ProtoFieldType::Enum => FieldValueKindInfo::Enum(qualified_type_name(field)),
+        ProtoFieldType::Sfixed32 => FieldValueKindInfo::Sfixed32,
+        ProtoFieldType::Sfixed64 => FieldValueKindInfo::Sfixed64,
+        ProtoFieldType::Sint32 => FieldValueKindInfo::Sint32,
+        ProtoFieldType::Sint64 => FieldValueKindInfo::Sint64,
+    };
+    let cardinality = match ProtoFieldLabel::try_from(field.label?).ok()? {
+        ProtoFieldLabel::Optional => FieldCardinalityInfo::Optional,
+        ProtoFieldLabel::Required => FieldCardinalityInfo::Required,
+        ProtoFieldLabel::Repeated => FieldCardinalityInfo::Repeated,
+    };
+    // `protoc` always fills `json_name`; falling back to `name` keeps a field
+    // usable if a future toolchain ever leaves it empty.
+    let json_name = field.json_name.clone().unwrap_or_else(|| name.clone());
+    Some(FieldInfo {
+        number,
+        name,
+        json_name,
+        kind,
+        value_kind,
+        cardinality,
+    })
+}
+
+/// Fully qualified message or enum name from a descriptor, without the leading
+/// dot `protoc` prefixes (`".webcast.im.Foo"` -> `"webcast.im.Foo"`).
+fn qualified_type_name(field: &FieldDescriptorProto) -> String {
+    field
+        .type_name
+        .as_deref()
+        .unwrap_or_default()
+        .trim_start_matches('.')
+        .to_owned()
 }
 
 fn render_registry(messages: &[MessageInfo], method_count: usize) -> String {
@@ -218,10 +294,13 @@ fn render_registry(messages: &[MessageInfo], method_count: usize) -> String {
         let _ = writeln!(source, "static FIELDS_{index}: &[FieldSchema] = &[");
         for field in &message.fields {
             let kind = render_field_kind(&field.kind);
+            let value_kind = render_field_value_kind(&field.value_kind);
+            let cardinality = render_field_cardinality(&field.cardinality);
             let _ = writeln!(
                 source,
-                "    FieldSchema {{ number: {}, name: {:?}, kind: {kind} }},",
-                field.number, field.name
+                "    FieldSchema {{ number: {}, name: {:?}, json_name: {:?}, \
+                 kind: {kind}, value_kind: {value_kind}, cardinality: {cardinality} }},",
+                field.number, field.name, field.json_name
             );
         }
         source.push_str("];\n\n");
@@ -280,6 +359,36 @@ fn render_field_kind(kind: &FieldKindInfo) -> String {
         FieldKindInfo::String => "FieldKind::String".into(),
         FieldKindInfo::Bytes => "FieldKind::Bytes".into(),
         FieldKindInfo::Message(name) => format!("FieldKind::Message({name:?})"),
+    }
+}
+
+fn render_field_value_kind(kind: &FieldValueKindInfo) -> String {
+    match kind {
+        FieldValueKindInfo::Double => "FieldValueKind::Double".into(),
+        FieldValueKindInfo::Float => "FieldValueKind::Float".into(),
+        FieldValueKindInfo::Int64 => "FieldValueKind::Int64".into(),
+        FieldValueKindInfo::Uint64 => "FieldValueKind::Uint64".into(),
+        FieldValueKindInfo::Int32 => "FieldValueKind::Int32".into(),
+        FieldValueKindInfo::Fixed64 => "FieldValueKind::Fixed64".into(),
+        FieldValueKindInfo::Fixed32 => "FieldValueKind::Fixed32".into(),
+        FieldValueKindInfo::Bool => "FieldValueKind::Bool".into(),
+        FieldValueKindInfo::String => "FieldValueKind::String".into(),
+        FieldValueKindInfo::Message(name) => format!("FieldValueKind::Message({name:?})"),
+        FieldValueKindInfo::Bytes => "FieldValueKind::Bytes".into(),
+        FieldValueKindInfo::Uint32 => "FieldValueKind::Uint32".into(),
+        FieldValueKindInfo::Enum(name) => format!("FieldValueKind::Enum({name:?})"),
+        FieldValueKindInfo::Sfixed32 => "FieldValueKind::Sfixed32".into(),
+        FieldValueKindInfo::Sfixed64 => "FieldValueKind::Sfixed64".into(),
+        FieldValueKindInfo::Sint32 => "FieldValueKind::Sint32".into(),
+        FieldValueKindInfo::Sint64 => "FieldValueKind::Sint64".into(),
+    }
+}
+
+fn render_field_cardinality(cardinality: &FieldCardinalityInfo) -> String {
+    match cardinality {
+        FieldCardinalityInfo::Optional => "FieldCardinality::Optional".into(),
+        FieldCardinalityInfo::Required => "FieldCardinality::Required".into(),
+        FieldCardinalityInfo::Repeated => "FieldCardinality::Repeated".into(),
     }
 }
 

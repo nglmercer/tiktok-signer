@@ -32,8 +32,8 @@ pub mod v3 {
 pub mod registry;
 
 pub use registry::{
-    schema_by_name, schema_for_method, schemas, FieldKind, FieldSchema, MessageSchema,
-    GENERATED_SCHEMA_MESSAGE_COUNT, GENERATED_WEBCAST_METHOD_COUNT,
+    schema_by_name, schema_for_method, schemas, FieldCardinality, FieldKind, FieldSchema,
+    FieldValueKind, MessageSchema, GENERATED_SCHEMA_MESSAGE_COUNT, GENERATED_WEBCAST_METHOD_COUNT,
 };
 
 pub use v3::webcast;
