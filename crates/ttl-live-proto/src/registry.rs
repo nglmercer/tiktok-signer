@@ -224,6 +224,90 @@ mod tests {
         assert_eq!(effect_config.value_kind, FieldValueKind::Bytes);
     }
 
+    #[test]
+    fn gift_scalars_stay_distinct_while_sharing_the_varint_wire() {
+        let gift = schema_for_method("WebcastGiftMessage").expect("gift descriptor");
+
+        // The migration's core case: one wire category, three logical types.
+        // (`gift_id` is `int64` in the pinned schema, not `uint64`.)
+        let gift_id = gift.field(2).expect("gift_id field");
+        assert_eq!(gift_id.name, "gift_id");
+        assert_eq!(gift_id.json_name, "giftId");
+        assert_eq!(gift_id.kind, FieldKind::Varint);
+        assert_eq!(gift_id.value_kind, FieldValueKind::Int64);
+        assert_eq!(gift_id.cardinality, FieldCardinality::Optional);
+
+        let repeat_count = gift.field(5).expect("repeat_count field");
+        assert_eq!(repeat_count.value_kind, FieldValueKind::Int32);
+        assert_eq!(repeat_count.kind, FieldKind::Varint);
+
+        let is_first_sent = gift.field(25).expect("is_first_sent field");
+        assert_eq!(is_first_sent.value_kind, FieldValueKind::Bool);
+        assert_eq!(is_first_sent.kind, FieldKind::Varint);
+        assert_eq!(is_first_sent.json_name, "isFirstSent");
+
+        // Nested detail resolution depends on this exact reference.
+        let gift_detail = gift.field(15).expect("gift field");
+        assert_eq!(gift_detail.kind, FieldKind::Message("webcast.model.Gift"));
+        assert_eq!(
+            gift_detail.value_kind,
+            FieldValueKind::Message("webcast.model.Gift")
+        );
+    }
+
+    #[test]
+    fn chat_booleans_keep_their_logical_type() {
+        let chat = schema_for_method("WebcastChatMessage").expect("chat descriptor");
+        let visible = chat.field(4).expect("visible_to_sender field");
+        assert_eq!(visible.name, "visible_to_sender");
+        assert_eq!(visible.json_name, "visibleToSender");
+        assert_eq!(visible.kind, FieldKind::Varint);
+        assert_eq!(visible.value_kind, FieldValueKind::Bool);
+        assert_eq!(visible.cardinality, FieldCardinality::Optional);
+    }
+
+    /// Every `json_name` in the registry must equal the protobuf JSON-name rule
+    /// applied to `name`. The pinned descriptors come from `protoc` with no
+    /// explicit `json_name` overrides, so any deviation is either a generator
+    /// bug or an upstream override that downstream provenance must account for
+    /// deliberately. The oracle below reimplements the rule independently of
+    /// the build script.
+    #[test]
+    fn every_json_name_matches_the_protobuf_rule() {
+        fn oracle(name: &str) -> String {
+            let mut json_name = String::with_capacity(name.len());
+            let mut capitalize_next = false;
+            for byte in name.bytes() {
+                if byte == b'_' {
+                    capitalize_next = true;
+                } else {
+                    json_name.push(if capitalize_next {
+                        byte.to_ascii_uppercase() as char
+                    } else {
+                        byte as char
+                    });
+                    capitalize_next = false;
+                }
+            }
+            json_name
+        }
+
+        let mut checked = 0;
+        for schema in schemas() {
+            for field in schema.fields {
+                assert_eq!(
+                    field.json_name,
+                    oracle(field.name),
+                    "{}.{} has an unexpected json_name",
+                    schema.name,
+                    field.name
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 1_000, "only {checked} fields checked");
+    }
+
     /// Guards against a schema update silently gutting the registry. The bounds
     /// are deliberately loose — they catch "the descriptor set came back empty",
     /// not ordinary upstream churn.

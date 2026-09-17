@@ -180,11 +180,10 @@ fn collect_messages(
     } else {
         format!("{parent_name}.{short_name}")
     };
-    let fields = message
-        .field
-        .iter()
-        .filter_map(field_info)
-        .collect::<Vec<_>>();
+    let mut fields = Vec::with_capacity(message.field.len());
+    for field in &message.field {
+        fields.push(field_info(&name, field)?);
+    }
     messages.push(MessageInfo {
         name: name.clone(),
         fields,
@@ -195,13 +194,31 @@ fn collect_messages(
     Ok(())
 }
 
-fn field_info(field: &FieldDescriptorProto) -> Option<FieldInfo> {
-    let number = field.number?;
+/// Extracts one field's wire kind, logical type, JSON name, and cardinality.
+///
+/// A malformed descriptor (missing number, name, type, or label) fails
+/// generation loudly: silently dropping a field would let downstream
+/// provenance drift without anyone noticing.
+fn field_info(message_name: &str, field: &FieldDescriptorProto) -> Result<FieldInfo, String> {
+    let name = field
+        .name
+        .clone()
+        .ok_or_else(|| format!("malformed descriptor: a field of {message_name} has no name"))?;
+    let context = format!("{message_name}.{name}");
+    let number = field
+        .number
+        .ok_or_else(|| format!("malformed descriptor: {context} has no field number"))?;
     if number <= 0 {
-        return None;
+        return Err(format!(
+            "malformed descriptor: {context} has field number {number}"
+        ));
     }
-    let name = field.name.clone()?;
-    let proto_type = ProtoFieldType::try_from(field.r#type?).ok()?;
+    let raw_type = field
+        .r#type
+        .ok_or_else(|| format!("malformed descriptor: {context} has no field type"))?;
+    let proto_type = ProtoFieldType::try_from(raw_type).map_err(|_| {
+        format!("malformed descriptor: {context} has unknown field type {raw_type}")
+    })?;
     let kind = match proto_type {
         ProtoFieldType::Double | ProtoFieldType::Fixed64 | ProtoFieldType::Sfixed64 => {
             FieldKindInfo::Fixed64
@@ -233,8 +250,10 @@ fn field_info(field: &FieldDescriptorProto) -> Option<FieldInfo> {
         ProtoFieldType::Fixed32 => FieldValueKindInfo::Fixed32,
         ProtoFieldType::Bool => FieldValueKindInfo::Bool,
         ProtoFieldType::String => FieldValueKindInfo::String,
-        // Groups are deprecated and absent from proto3 schemas; if one ever
-        // appears it still names a message type, so it decodes as one.
+        // Groups predate proto3 and cannot appear here — every vendored file
+        // declares `syntax = "proto3"` — but the descriptor enum still has the
+        // variant, so the match must say something deliberate: a group names a
+        // message type and would decode as one.
         ProtoFieldType::Message | ProtoFieldType::Group => {
             FieldValueKindInfo::Message(qualified_type_name(field))
         }
@@ -246,15 +265,23 @@ fn field_info(field: &FieldDescriptorProto) -> Option<FieldInfo> {
         ProtoFieldType::Sint32 => FieldValueKindInfo::Sint32,
         ProtoFieldType::Sint64 => FieldValueKindInfo::Sint64,
     };
-    let cardinality = match ProtoFieldLabel::try_from(field.label?).ok()? {
+    let raw_label = field
+        .label
+        .ok_or_else(|| format!("malformed descriptor: {context} has no label"))?;
+    let label = ProtoFieldLabel::try_from(raw_label)
+        .map_err(|_| format!("malformed descriptor: {context} has unknown label {raw_label}"))?;
+    let cardinality = match label {
         ProtoFieldLabel::Optional => FieldCardinalityInfo::Optional,
         ProtoFieldLabel::Required => FieldCardinalityInfo::Required,
         ProtoFieldLabel::Repeated => FieldCardinalityInfo::Repeated,
     };
-    // `protoc` always fills `json_name`; falling back to `name` keeps a field
-    // usable if a future toolchain ever leaves it empty.
-    let json_name = field.json_name.clone().unwrap_or_else(|| name.clone());
-    Some(FieldInfo {
+    // `protoc` fills `json_name` for every field; the fallback keeps generation
+    // correct (not merely running) if a future toolchain ever leaves it empty.
+    let json_name = match field.json_name.clone() {
+        Some(json_name) if !json_name.is_empty() => json_name,
+        _ => fallback_json_name(&name),
+    };
+    Ok(FieldInfo {
         number,
         name,
         json_name,
@@ -262,6 +289,30 @@ fn field_info(field: &FieldDescriptorProto) -> Option<FieldInfo> {
         value_kind,
         cardinality,
     })
+}
+
+/// Protobuf JSON-name rule (`protoc`'s `ToJsonName`): drop every underscore,
+/// capitalizing the letter that follows each one (`gift_id` -> `giftId`).
+///
+/// Only a fallback — real descriptors already carry `json_name` — but it must
+/// implement the actual rule rather than echoing the snake_case name, or the
+/// registry would silently disagree with protobuf JSON.
+fn fallback_json_name(name: &str) -> String {
+    let mut json_name = String::with_capacity(name.len());
+    let mut capitalize_next = false;
+    for byte in name.bytes() {
+        if byte == b'_' {
+            capitalize_next = true;
+        } else {
+            json_name.push(if capitalize_next {
+                byte.to_ascii_uppercase() as char
+            } else {
+                byte as char
+            });
+            capitalize_next = false;
+        }
+    }
+    json_name
 }
 
 /// Fully qualified message or enum name from a descriptor, without the leading
@@ -442,4 +493,32 @@ fn collect_proto_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Box<dyn
         }
     }
     Ok(())
+}
+
+// Cargo never executes build-script unit tests; these document the fallback
+// rule next to its implementation. The executed coverage is the registry-wide
+// `every_json_name_matches_the_protobuf_rule` test, which checks the generated
+// output against an independent implementation of the same rule.
+#[cfg(test)]
+mod tests {
+    use super::fallback_json_name;
+
+    #[test]
+    fn snake_case_becomes_lower_camel_case() {
+        assert_eq!(fallback_json_name("gift_id"), "giftId");
+        assert_eq!(fallback_json_name("diamond_count"), "diamondCount");
+        assert_eq!(fallback_json_name("total_user"), "totalUser");
+        assert_eq!(fallback_json_name("content"), "content");
+        assert_eq!(fallback_json_name("effect_config"), "effectConfig");
+        assert_eq!(fallback_json_name("is_first_sent"), "isFirstSent");
+    }
+
+    #[test]
+    fn stray_underscores_follow_the_protoc_rule() {
+        // `protoc` drops every underscore and capitalizes what follows it; a
+        // trailing underscore simply vanishes.
+        assert_eq!(fallback_json_name("trailing_"), "trailing");
+        assert_eq!(fallback_json_name("_leading"), "Leading");
+        assert_eq!(fallback_json_name("double__gap"), "doubleGap");
+    }
 }
