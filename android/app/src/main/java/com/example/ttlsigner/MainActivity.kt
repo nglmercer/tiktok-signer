@@ -5,6 +5,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ProgressBar
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import kotlinx.coroutines.CoroutineScope
@@ -31,6 +32,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var handleInput: EditText
     private lateinit var output: TextView
+    private lateinit var outputScroll: ScrollView
     private lateinit var progress: ProgressBar
     private lateinit var buttons: List<Button>
 
@@ -43,6 +45,7 @@ class MainActivity : AppCompatActivity() {
 
         handleInput = findViewById(R.id.handleInput)
         output = findViewById(R.id.output)
+        outputScroll = findViewById(R.id.outputScroll)
         progress = findViewById(R.id.progress)
         val resolveButton: Button = findViewById(R.id.resolveButton)
         val signButton: Button = findViewById(R.id.signButton)
@@ -81,6 +84,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun append(line: String) {
         output.append(line + "\n")
+        // New output lands below the fold; follow it so the latest line is visible.
+        outputScroll.post { outputScroll.fullScroll(View.FOCUS_DOWN) }
     }
 
     /** A numeric input is a room id for offline testing; anything else resolves over HTTPS. */
