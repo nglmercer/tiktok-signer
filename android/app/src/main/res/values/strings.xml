@@ -7,6 +7,10 @@
     <string name="feed">3. Feed</string>
     <string name="random">4. Random</string>
     <string name="feed_label">LIVE FEED</string>
-    <string name="output_label">OUTPUT</string>
-    <string name="output_placeholder">Resolve a handle, then sign. Output and latencies appear here.</string>
+    <string name="output_label">DEBUG LOG</string>
+    <string name="copy">Copy</string>
+    <string name="clear">Clear</string>
+    <string name="expanded">▼</string>
+    <string name="collapsed">▶</string>
+    <string name="output_placeholder">Resolve a handle, then sign. Steps and latencies appear here.</string>
 </resources>
