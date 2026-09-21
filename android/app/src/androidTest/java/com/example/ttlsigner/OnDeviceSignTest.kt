@@ -38,6 +38,17 @@ class OnDeviceSignTest {
     }
 
     @Test
+    fun feedLoadsLiveRoomsOnDevice(): Unit = runBlocking {
+        val rooms = Feed.fetchFeed("live", RustSigner.userAgent(), Feed.GuestSession())
+        // Every room must be selectable: a handle and a usable room id. The feed may
+        // legitimately be empty, so only the shape is asserted, never the count.
+        for (room in rooms) {
+            assertTrue("room without handle: $room", room.uniqueId.isNotEmpty())
+            assertTrue("unusable room id: $room", room.roomId.isNotEmpty() && room.roomId != "0")
+        }
+    }
+
+    @Test
     fun rustSignsWsOnDevice(): Unit = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val signer = RustSigner.open(context, "{}")

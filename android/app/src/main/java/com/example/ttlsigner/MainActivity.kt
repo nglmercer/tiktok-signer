@@ -8,12 +8,15 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.random.Random
 import kotlin.system.measureTimeMillis
 
 /**
@@ -22,6 +25,8 @@ import kotlin.system.measureTimeMillis
  *
  * 1. Resolve a handle (or type a numeric room id to skip the network).
  * 2. Sign the socket URL through Rust and show the latency and the result.
+ * 3. Feed: list rooms broadcasting now, tap one to select and connect it.
+ * 4. Random: pick a random room from the feed and connect it.
  *
  * The signed URL is shown on screen (that is the point of the demo) but never
  * written to logcat — a signed URL is a replayable capability.
@@ -34,10 +39,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var output: TextView
     private lateinit var outputScroll: ScrollView
     private lateinit var progress: ProgressBar
+    private lateinit var feedAdapter: FeedAdapter
     private lateinit var buttons: List<Button>
 
     private var roomId: String? = null
     private var rustSigner: RustSigner? = null
+    private var feedRooms: List<Feed.LiveRoom> = emptyList()
+    private val guestSession = Feed.GuestSession()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -49,12 +57,21 @@ class MainActivity : AppCompatActivity() {
         progress = findViewById(R.id.progress)
         val resolveButton: Button = findViewById(R.id.resolveButton)
         val signButton: Button = findViewById(R.id.signButton)
-        buttons = listOf(resolveButton, signButton)
+        val feedButton: Button = findViewById(R.id.feedButton)
+        val randomButton: Button = findViewById(R.id.randomButton)
+        buttons = listOf(resolveButton, signButton, feedButton, randomButton)
+
+        val feedList: RecyclerView = findViewById(R.id.feedList)
+        feedList.layoutManager = LinearLayoutManager(this)
+        feedAdapter = FeedAdapter { room -> run { select(room) } }
+        feedList.adapter = feedAdapter
 
         append("native: ${runCatching { RustSigner.version() }.getOrElse { "UNAVAILABLE: $it" }}")
 
         resolveButton.setOnClickListener { run { resolve() } }
         signButton.setOnClickListener { run { sign() } }
+        feedButton.setOnClickListener { run { loadFeed() } }
+        randomButton.setOnClickListener { run { connectRandom() } }
     }
 
     override fun onDestroy() {
@@ -137,6 +154,33 @@ class MainActivity : AppCompatActivity() {
         val ms = measureTimeMillis { signed = signer.sign(url) }
         append("sign ${ms}ms:")
         append(describe(signed))
+    }
+
+    /** Fetch the live feed and render it for selection. */
+    private suspend fun loadFeed() {
+        val userAgent = withContext(Dispatchers.IO) { RustSigner.userAgent() }
+        val ms = measureTimeMillis { feedRooms = Feed.fetchFeed("live", userAgent, guestSession) }
+        feedAdapter.submitList(feedRooms)
+        append("feed ${ms}ms: ${feedRooms.size} rooms live (tap one to connect)")
+    }
+
+    /** Connect a feed room selected by tap: resolve it, then sign. */
+    private suspend fun select(room: Feed.LiveRoom) {
+        append("selected @${room.uniqueId} (${room.viewers} watching): ${room.title}")
+        handleInput.setText("@${room.uniqueId}")
+        roomId = null
+        resolve()
+        sign()
+    }
+
+    /** Connect a random room from the feed, fetching it first when empty. */
+    private suspend fun connectRandom() {
+        if (feedRooms.isEmpty()) loadFeed()
+        require(feedRooms.isNotEmpty()) { "the feed is empty, nothing to pick from" }
+        val at = Random.nextInt(feedRooms.size)
+        val room = feedRooms[at]
+        append("random pick ${at + 1}/${feedRooms.size}: @${room.uniqueId}")
+        select(room)
     }
 
     private fun describe(signed: String): String {
