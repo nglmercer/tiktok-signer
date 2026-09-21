@@ -74,13 +74,16 @@ Verified on this machine, then on a connected POCO X3 Pro (Android 16, arm64):
   Host debug timings: open 323 ms (bundle parse, once), sign 88 ms.
 - `./gradlew assembleDebug`: APK builds with all four natives (6.4 MB arm64 `.so`
   with the live stack: tokio, tungstenite, ring, prost).
-- `./gradlew testDebugUnitTest`: 23 JVM unit tests green (discovery + feed parsing
-  + log redaction + event rendering).
-- `connectedDebugAndroidTest`: 5/5 pass on the POCO — native version, URL shape,
-  real feed fetch, real JNI sign, and a live stream delivering typed events.
-- Tap-through on the POCO: feed renders 16 live rooms, tap selects, Connect opens
-  the socket and the EVENTS section fills with chat/gifts/likes; Disconnect lands
-  in ~1 s; collapsible sections verified via UI dumps; logcat carries signature
+- `./gradlew testDebugUnitTest`: 27 JVM unit tests green (discovery + feed parsing
+  + log redaction + event rendering + the shared log buffer).
+- `connectedDebugAndroidTest`: 11/11 pass on the POCO — 5 layout-inflation checks
+  (shell + three tabs + rows), 5 device checks (native version, URL shape, real
+  feed fetch, real JNI sign, a live stream delivering typed events), and the full
+  UI flow: feed → tap a room → connect → events render → disconnect.
+- Tap-through on the POCO: Material3 tabs (Live/Sign/Settings) share one
+  `SessionViewModel`; the feed renders live rooms, a tap selects, Connect opens
+  the socket and the events card fills with chat/gifts/likes; Disconnect lands
+  in ~1 s; collapsible cards verified via UI dumps; logcat carries signature
   summaries only (leak-checked).
 
 ## Recommendation

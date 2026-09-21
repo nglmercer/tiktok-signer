@@ -14,12 +14,51 @@ import java.util.Locale
 object Logger {
     const val TAG = "TtlSigner"
 
+    /** The console keeps the newest lines; a busy room cannot grow memory without bound. */
+    const val MAX_BUFFER_LINES = 500
+
+    interface Listener {
+        fun onLine(line: String)
+        fun onCleared()
+    }
+
     private val clock = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+    private val lock = Any()
+    private val buffer = ArrayDeque<String>()
+    private val listeners = mutableSetOf<Listener>()
 
     fun stamp(): String = clock.format(Date())
 
     /** `[12:00:01.234] TAG message`. */
     fun line(tag: String, msg: String): String = "[${stamp()}] $tag $msg"
+
+    /**
+     * Build a line, keep it in the shared buffer, and notify listeners on the
+     * caller's thread — views must post to themselves. Returns the line.
+     */
+    fun append(tag: String, msg: String): String = synchronized(lock) {
+        val line = line(tag, msg)
+        buffer.addLast(line)
+        while (buffer.size > MAX_BUFFER_LINES) buffer.removeFirst()
+        listeners.forEach { it.onLine(line) }
+        line
+    }
+
+    /** The whole buffer, oldest first. */
+    fun snapshot(): String = synchronized(lock) { buffer.joinToString("\n") }
+
+    fun clear() = synchronized(lock) {
+        buffer.clear()
+        listeners.forEach { it.onCleared() }
+    }
+
+    fun addListener(listener: Listener) {
+        synchronized(lock) { listeners.add(listener) }
+    }
+
+    fun removeListener(listener: Listener) {
+        synchronized(lock) { listeners.remove(listener) }
+    }
 
     /**
      * Summarize a signed URL without its signature value: host, room, and byte

@@ -42,4 +42,11 @@ class EventAdapter : RecyclerView.Adapter<EventAdapter.ViewHolder>() {
         lines.clear()
         notifyDataSetChanged()
     }
+
+    /** Replace the whole tail; the view model owns the cap. */
+    fun submitList(rendered: List<String>) {
+        lines.clear()
+        lines.addAll(rendered.takeLast(MAX_LINES))
+        notifyDataSetChanged()
+    }
 }

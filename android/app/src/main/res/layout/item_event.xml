@@ -5,5 +5,5 @@
     android:ellipsize="end"
     android:fontFamily="monospace"
     android:maxLines="2"
-    android:padding="6dp"
-    android:textSize="12sp" />
+    android:padding="8dp"
+    android:textAppearance="@style/TextAppearance.Material3.BodySmall" />

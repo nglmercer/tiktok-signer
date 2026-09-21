@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <declare-styleable name="CollapsibleCard">
+        <attr name="cardTitle" format="string" />
+        <attr name="startExpanded" format="boolean" />
+    </declare-styleable>
+</resources>

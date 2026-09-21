@@ -1,19 +1,52 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">TTL Signer</string>
-    <string name="handle_hint">@someone</string>
-    <string name="resolve">1. Resolve</string>
-    <string name="sign">2. Sign</string>
-    <string name="feed">3. Feed</string>
-    <string name="random">4. Random</string>
-    <string name="connect">5. Connect</string>
-    <string name="disconnect">6. Disconnect</string>
+
+    <!-- Tabs. -->
+    <string name="tab_live">Live</string>
+    <string name="tab_sign">Sign</string>
+    <string name="tab_settings">Settings</string>
+
+    <!-- Live tab. -->
+    <string name="room_hint">room id (or leave empty to use the resolved room)</string>
+    <string name="connect">Connect</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="feed">Refresh feed</string>
+    <string name="random">Surprise me</string>
     <string name="feed_label">LIVE FEED</string>
     <string name="events_label">EVENTS</string>
+    <string name="events_empty">No events yet — connect to a room.</string>
+    <string name="expanded">▼</string>
+    <string name="collapsed">▶</string>
+
+    <!-- Sign tab. -->
+    <string name="handle_hint">@someone</string>
+    <string name="resolve">Resolve</string>
+    <string name="sign">Sign</string>
+    <string name="result_title">RESULT</string>
+    <string name="result_placeholder">Resolve a handle, then sign. The outcome lands here.</string>
     <string name="output_label">DEBUG LOG</string>
     <string name="copy">Copy</string>
     <string name="clear">Clear</string>
-    <string name="expanded">▼</string>
-    <string name="collapsed">▶</string>
-    <string name="output_placeholder">Resolve a handle, then sign. Steps and latencies appear here.</string>
+    <string name="output_placeholder">Steps and latencies appear here.</string>
+
+    <!-- Settings tab. -->
+    <string name="settings_signer">Signer</string>
+    <string name="settings_native_version">Native core</string>
+    <string name="settings_user_agent">User-Agent</string>
+    <string name="settings_bundle">Signing bundle</string>
+    <string name="settings_bundle_version">Pinned version</string>
+    <string name="settings_bundle_cache">Cache</string>
+    <string name="settings_bundle_none">not downloaded yet</string>
+    <string name="redownload">Redownload</string>
+    <string name="clear_cache">Clear cache</string>
+    <string name="settings_session">Guest session</string>
+    <string name="settings_cookies">Cookies</string>
+    <string name="settings_no_cookies">none yet — load the feed or connect first</string>
+    <string name="reset_session">Reset session</string>
+    <string name="settings_log">Log</string>
+    <string name="copy_log">Copy full log</string>
+    <string name="clear_log">Clear log</string>
+    <string name="settings_about">About</string>
+    <string name="settings_about_text">Example app for on-device signing through the reused Rust core (libttl_sign_mobile.so over JNI). Feed, resolve, sign, and the live event stream all run on this device.</string>
 </resources>

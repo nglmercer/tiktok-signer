@@ -91,6 +91,13 @@ object Feed {
 
         fun isEmpty(): Boolean = jar.isEmpty()
 
+        /** Cookie names only — values stay out of the settings screen. */
+        fun cookieNames(): List<String> = jar.keys.toList()
+
+        fun clear() {
+            jar.clear()
+        }
+
         /** Absorb `Set-Cookie` pairs from a page GET. Currencies, not secrets. */
         suspend fun bootstrap(userAgent: String) = withContext(Dispatchers.IO) {
             val connection = URL(LIVE_PAGE).openConnection() as HttpURLConnection

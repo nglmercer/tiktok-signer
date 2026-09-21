@@ -14,7 +14,7 @@
         android:layout_height="wrap_content"
         android:ellipsize="end"
         android:maxLines="1"
-        android:textSize="14sp"
+        android:textAppearance="@style/TextAppearance.Material3.BodyLarge"
         android:textStyle="bold" />
 
     <TextView
@@ -23,6 +23,6 @@
         android:layout_height="wrap_content"
         android:ellipsize="end"
         android:maxLines="1"
-        android:textSize="12sp" />
+        android:textAppearance="@style/TextAppearance.Material3.BodyMedium" />
 
 </LinearLayout>

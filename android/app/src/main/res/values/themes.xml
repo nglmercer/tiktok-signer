@@ -1,10 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- No system action bar: on edge-to-edge devices it overlays the top of the
-         body. The layout draws its own title instead. -->
-    <style name="Theme.TtlSigner" parent="Theme.AppCompat.Light.NoActionBar">
-        <item name="colorPrimary">#6200EE</item>
-        <item name="colorPrimaryDark">#3700B3</item>
-        <item name="colorAccent">#03DAC5</item>
-    </style>
+    <!-- Material3 day/night, no system action bar: the layout draws its own
+         MaterialToolbar. Dynamic color re-seeds this on Android 12+. -->
+    <style name="Theme.TtlSigner" parent="Theme.Material3.DayNight.NoActionBar" />
 </resources>

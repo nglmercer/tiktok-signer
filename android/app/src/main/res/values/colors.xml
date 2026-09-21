@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Semantic connection colors; Material3 has no success/warning slot. -->
+    <color name="status_idle">#9AA0A6</color>
+    <color name="status_connecting">#F9AB00</color>
+    <color name="status_live">#34A853</color>
+</resources>

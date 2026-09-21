@@ -40,4 +40,78 @@ class LoggerTest {
     fun unsignedInputIsReportedNotParsed() {
         assertEquals("NOT SIGNED (11 chars)", Logger.summarizeSignedUrl("wss://x.inv"))
     }
+
+    @org.junit.After
+    fun resetBuffer() {
+        Logger.clear()
+    }
+
+    @Test
+    fun bufferKeepsAppendedLinesInOrder() {
+        Logger.clear()
+        Logger.append("SIGN", "first")
+        Logger.append("LIVE", "second")
+        val lines = Logger.snapshot().split("\n")
+        assertEquals(2, lines.size)
+        assertTrue(lines[0], lines[0].endsWith("SIGN first"))
+        assertTrue(lines[1], lines[1].endsWith("LIVE second"))
+    }
+
+    @Test
+    fun bufferCapsAtMaxLines() {
+        Logger.clear()
+        for (i in 0 until Logger.MAX_BUFFER_LINES + 10) {
+            Logger.append("T", "line-$i")
+        }
+        val lines = Logger.snapshot().split("\n")
+        assertEquals(Logger.MAX_BUFFER_LINES, lines.size)
+        assertTrue(lines.first(), lines.first().endsWith("line-10"))
+        assertTrue(lines.last(), lines.last().endsWith("line-509"))
+    }
+
+    @Test
+    fun listenerSeesEveryLineAndTheClear() {
+        Logger.clear()
+        val seen = mutableListOf<String>()
+        var clears = 0
+        val listener = object : Logger.Listener {
+            override fun onLine(line: String) {
+                seen.add(line)
+            }
+
+            override fun onCleared() {
+                clears++
+            }
+        }
+        Logger.addListener(listener)
+        try {
+            Logger.append("A", "one")
+            Logger.append("B", "two")
+            assertEquals(2, seen.size)
+            assertTrue(seen[0], seen[0].endsWith("A one"))
+            Logger.clear()
+            assertEquals(1, clears)
+            assertEquals("", Logger.snapshot())
+        } finally {
+            Logger.removeListener(listener)
+        }
+    }
+
+    @Test
+    fun removedListenerSeesNothing() {
+        Logger.clear()
+        var seen = 0
+        val listener = object : Logger.Listener {
+            override fun onLine(line: String) {
+                seen++
+            }
+
+            override fun onCleared() {
+            }
+        }
+        Logger.addListener(listener)
+        Logger.removeListener(listener)
+        Logger.append("A", "one")
+        assertEquals(0, seen)
+    }
 }
