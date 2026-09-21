@@ -33,4 +33,22 @@ object TtlNative {
     /** `ttl-sign-mobile <version> (<engine>)`. */
     @JvmStatic
     external fun nVersion(): String?
+
+    /**
+     * Open a live event stream for [roomId]. [bundle]/[optionsJson] feed the signer,
+     * [cookies] is the guest session (`k=v; k=v`), [callback] receives states and
+     * event JSON from the worker thread. Returns the handle, or 0 with an exception.
+     */
+    @JvmStatic
+    external fun nConnect(
+        bundle: String,
+        optionsJson: String,
+        roomId: String,
+        cookies: String,
+        callback: TtlEvents,
+    ): Long
+
+    /** Stop the stream opened by [nConnect] and wait for its worker. Blocks. */
+    @JvmStatic
+    external fun nDisconnect(handle: Long)
 }

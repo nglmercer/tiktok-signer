@@ -39,9 +39,9 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - name: Check the Android JNI boundary
-        # The `jni` feature is off by default, so the lines above never compile it.
+        # The `jni`/`live` features are off by default, so the lines above never compile them.
         run: |
-          cargo clippy -p ttl-sign-mobile --all-targets --features jni -- -D warnings
-          cargo test -p ttl-sign-mobile --features jni
+          cargo clippy -p ttl-sign-mobile --all-targets --features jni,live -- -D warnings
+          cargo test -p ttl-sign-mobile --features jni,live
       - name: Validate the committed controlled research plan
         run: cargo run -p ttl-sign-lab --bin ttl-sign-plan -- fixtures/research/plan.example.json

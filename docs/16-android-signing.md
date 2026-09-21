@@ -20,7 +20,7 @@ That sentence is the whole document; what follows is the evidence. The work behi
 | QuickJS engine (`rquickjs`) | **Yes, with one workaround** | `bindgen` feature on Android targets (below) |
 | `ttl-live-discovery` (`reqwest` + `tokio`) | **No** | Rewritten in ~120 lines of Kotlin (`Discovery.kt`, `BundleFetch.kt`) over `HttpURLConnection` |
 | `ttl-sign-embedded` (async signer, V8 engine) | **No** | Replaced by a blocking signer: JNI calls block, so `tokio` buys nothing; V8/`deno_core` does not cross-compile sanely |
-| WebSocket + events (`ttl-live-ws`, `ttl-live-events`, `ttl-live-proto`) | **No** | Not ported — which is why the app signs but receives no chat/gifts yet (see below). On Android this is OkHttp's WebSocket plus generated protobuf — standard app work, blocked on nothing |
+| WebSocket + events (`ttl-live-ws`, `ttl-live-events`, `ttl-live-proto`) | **Yes, behind `live`** | `LiveClient` worker: sign per attempt, `LiveConnection` (handshake/entry/heartbeat/ack), `decode_batch`, JSON over JNI callbacks. Own reconnect loop (shutdown-checked) instead of `ReconnectingConnection`'s, borrowing its backoff timing |
 | Live feed (unsigned search + guest cookies) | **No — ported** | `Feed.kt`: same endpoint, same item shape, most watched first; renders the selectable room list |
 
 The boundary is principled: **pure logic travels, runtimes stay home.** Anything that
@@ -30,6 +30,15 @@ everything else compiles unchanged.
 A pure-Kotlin signing alternative (same sandbox evaluated in a WebView, i.e. the
 device's own V8) was considered and dropped: it would be a second engine to keep in
 parity for no capability the reused core lacks.
+
+## Another Rust workaround: the TLS crypto provider
+
+`rustls` 0.23 panics on first use without exactly one crypto provider, and
+`tungstenite` brings none (`default-features = false`). The server never notices
+because `reqwest` installs one as a side effect — but the mobile crate has no
+`reqwest`. So the `live` feature adds `ring` (already in the workspace lock;
+`aws-lc-rs` stays absent so the choice is unambiguous) and the worker calls
+`CryptoProvider::install_default` at startup, ignoring already-installed.
 
 ## The one Rust workaround: QuickJS bindings
 
@@ -63,20 +72,16 @@ Verified on this machine, then on a connected POCO X3 Pro (Android 16, arm64):
   Android): version, URL building, open/sign/close, pinned determinism across two
   JNI signers, and both error paths throwing `RuntimeException` with the Rust message.
   Host debug timings: open 323 ms (bundle parse, once), sign 88 ms.
-- `./gradlew assembleDebug`: APK builds with all four natives.
-- `./gradlew testDebugUnitTest`: 16 JVM unit tests green (discovery + feed parsing
-  + log redaction).
-- `connectedDebugAndroidTest`: 4/4 pass on the POCO — native version, URL shape,
-  real feed fetch (3.8 s), real JNI sign (0.6 s).
-- Tap-through on the POCO: feed renders 16 live rooms, tap selects and connects
-  (resolve 0.8 s, signer open 0.2 s, sign 40 ms on-device); collapsible sections
-  verified via UI dumps; logcat carries signature summaries only (leak-checked).
-
-Still open — the app signs but never opens the socket, so it receives no chat,
-gifts, or likes:
-
-- First live connection from a phone (the signed URL against `webcast-ws`).
-- Event stream: WebSocket + heartbeat/ack + protobuf decode + event UI.
+- `./gradlew assembleDebug`: APK builds with all four natives (6.4 MB arm64 `.so`
+  with the live stack: tokio, tungstenite, ring, prost).
+- `./gradlew testDebugUnitTest`: 23 JVM unit tests green (discovery + feed parsing
+  + log redaction + event rendering).
+- `connectedDebugAndroidTest`: 5/5 pass on the POCO — native version, URL shape,
+  real feed fetch, real JNI sign, and a live stream delivering typed events.
+- Tap-through on the POCO: feed renders 16 live rooms, tap selects, Connect opens
+  the socket and the EVENTS section fills with chat/gifts/likes; Disconnect lands
+  in ~1 s; collapsible sections verified via UI dumps; logcat carries signature
+  summaries only (leak-checked).
 
 ## Recommendation
 

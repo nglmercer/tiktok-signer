@@ -49,6 +49,48 @@ class OnDeviceSignTest {
     }
 
     @Test
+    fun liveStreamDeliversEventsOnDevice(): Unit = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val session = Feed.GuestSession()
+        val rooms = Feed.fetchFeed("live", RustSigner.userAgent(), session)
+        assertTrue("feed is empty, nothing to connect to", rooms.isNotEmpty())
+        val room = rooms.first()
+
+        val events = java.util.concurrent.LinkedBlockingQueue<String>()
+        val states = java.util.concurrent.LinkedBlockingQueue<Pair<String, String>>()
+        val listener = object : LiveClient.Listener {
+            override fun onEvent(json: String) {
+                events.offer(json)
+            }
+
+            override fun onState(kind: String, detail: String) {
+                states.offer(kind to detail)
+            }
+        }
+        val client = LiveClient.connect(context, room.roomId, session.cookieHeader(), listener = listener)
+        try {
+            // The stream must open (guest jar is enough for public rooms).
+            var opened = false
+            var failure: String? = null
+            val openBy = System.currentTimeMillis() + 30_000
+            while (System.currentTimeMillis() < openBy && !opened && failure == null) {
+                val state = states.poll(1, java.util.concurrent.TimeUnit.SECONDS) ?: continue
+                if (state.first == "open") opened = true
+                if (state.first == "error" || state.first == "closed") failure = state.second
+            }
+            assertTrue("stream never opened: $failure", opened)
+
+            // …and at least one event must arrive within 30 s of opening.
+            val first = events.poll(30, java.util.concurrent.TimeUnit.SECONDS)
+            assertTrue("no events in 30 s", first != null)
+            val type = org.json.JSONObject(first).optString("type", "")
+            assertTrue("event without a type: $first", type.isNotEmpty())
+        } finally {
+            client.disconnect()
+        }
+    }
+
+    @Test
     fun rustSignsWsOnDevice(): Unit = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val signer = RustSigner.open(context, "{}")

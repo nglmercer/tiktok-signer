@@ -6,7 +6,10 @@
     <string name="sign">2. Sign</string>
     <string name="feed">3. Feed</string>
     <string name="random">4. Random</string>
+    <string name="connect">5. Connect</string>
+    <string name="disconnect">6. Disconnect</string>
     <string name="feed_label">LIVE FEED</string>
+    <string name="events_label">EVENTS</string>
     <string name="output_label">DEBUG LOG</string>
     <string name="copy">Copy</string>
     <string name="clear">Clear</string>

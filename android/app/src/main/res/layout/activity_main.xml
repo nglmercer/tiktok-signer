@@ -85,6 +85,34 @@
                 android:text="@string/random" />
         </LinearLayout>
 
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/connectButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="8dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textAllCaps="false"
+                android:text="@string/connect" />
+
+            <Button
+                android:id="@+id/disconnectButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:enabled="false"
+                android:maxLines="1"
+                android:textAllCaps="false"
+                android:text="@string/disconnect" />
+        </LinearLayout>
+
         <ProgressBar
             android:id="@+id/progress"
             android:layout_width="wrap_content"
@@ -123,6 +151,41 @@
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/feedList"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <!-- Collapsible section: live events. -->
+        <LinearLayout
+            android:id="@+id/eventsHeader"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="?attr/selectableItemBackground"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/eventsTitle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/events_label"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/eventsChevron"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/expanded"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/eventList"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1" />

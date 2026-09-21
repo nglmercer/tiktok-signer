@@ -2992,9 +2992,14 @@ version = "0.1.0"
 dependencies = [
  "jni",
  "rand 0.8.7",
+ "ring",
  "rquickjs",
+ "rustls",
  "serde_json",
  "thiserror 2.0.20",
+ "tokio",
+ "ttl-live-events",
+ "ttl-live-ws",
  "ttl-sign-core",
 ]
 

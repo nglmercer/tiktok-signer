@@ -61,6 +61,10 @@ cd android && ./gradlew connectedDebugAndroidTest
 | `app/src/main/java/.../Feed.kt` | Live feed: unsigned search + guest cookies, parse/sort |
 | `app/src/main/java/.../FeedAdapter.kt` | Feed rows; tap selects a room for connecting |
 | `app/src/main/java/.../Logger.kt` | Timestamped log lines; logcat gets signature summaries only |
-| `app/src/main/java/.../MainActivity.kt` | Resolve / sign / feed / random UI, collapsible sections |
+| `app/src/main/java/.../LiveClient.kt` | Live event stream: worker callbacks posted to main |
+| `app/src/main/java/.../TtlEvents.kt` | Stream callback interface (must match `jni_live.rs`) |
+| `app/src/main/java/.../EventFormat.kt` | One event JSON object → one display line |
+| `app/src/main/java/.../EventAdapter.kt` | Scrolling capped event tail |
+| `app/src/main/java/.../MainActivity.kt` | Resolve / sign / feed / random / connect UI, collapsible sections |
 | `app/src/test/...` | JVM unit tests |
 | `app/src/androidTest/...` | On-device tests: the reused core signs `ws` on a phone |

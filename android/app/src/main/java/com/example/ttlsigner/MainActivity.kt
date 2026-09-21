@@ -48,10 +48,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var progress: ProgressBar
     private lateinit var feedAdapter: FeedAdapter
     private lateinit var feedTitle: TextView
+    private lateinit var eventAdapter: EventAdapter
+    private lateinit var eventList: RecyclerView
+    private lateinit var eventsTitle: TextView
+    private lateinit var connectButton: Button
+    private lateinit var disconnectButton: Button
     private lateinit var buttons: List<Button>
 
     private var roomId: String? = null
     private var rustSigner: RustSigner? = null
+    private var liveClient: LiveClient? = null
+    private var eventCount: Int = 0
     private var feedRooms: List<Feed.LiveRoom> = emptyList()
     private val guestSession = Feed.GuestSession()
 
@@ -68,6 +75,8 @@ class MainActivity : AppCompatActivity() {
         val signButton: Button = findViewById(R.id.signButton)
         val feedButton: Button = findViewById(R.id.feedButton)
         val randomButton: Button = findViewById(R.id.randomButton)
+        connectButton = findViewById(R.id.connectButton)
+        disconnectButton = findViewById(R.id.disconnectButton)
         buttons = listOf(resolveButton, signButton, feedButton, randomButton)
 
         val feedList: RecyclerView = findViewById(R.id.feedList)
@@ -75,7 +84,14 @@ class MainActivity : AppCompatActivity() {
         feedAdapter = FeedAdapter { room -> run { select(room) } }
         feedList.adapter = feedAdapter
 
+        eventList = findViewById(R.id.eventList)
+        eventList.layoutManager = LinearLayoutManager(this)
+        eventAdapter = EventAdapter()
+        eventList.adapter = eventAdapter
+        eventsTitle = findViewById(R.id.eventsTitle)
+
         collapse(findViewById(R.id.feedHeader), feedList, findViewById(R.id.feedChevron))
+        collapse(findViewById(R.id.eventsHeader), eventList, findViewById(R.id.eventsChevron))
         collapse(findViewById(R.id.logHeader), outputScroll, findViewById(R.id.logChevron))
 
         findViewById<Button>(R.id.copyButton).setOnClickListener { copyLog() }
@@ -87,12 +103,27 @@ class MainActivity : AppCompatActivity() {
         signButton.setOnClickListener { run { sign() } }
         feedButton.setOnClickListener { run { loadFeed() } }
         randomButton.setOnClickListener { run { connectRandom() } }
+        connectButton.setOnClickListener { run { connect() } }
+        disconnectButton.setOnClickListener { run { disconnect("user request") } }
     }
 
     override fun onDestroy() {
         scope.cancel()
         rustSigner?.close()
         rustSigner = null
+        // The worker is joined off the UI thread: onDestroy is not the place for a
+        // coroutine that might outlive the activity. nDisconnect lands in ~1 s.
+        val live = liveClient
+        liveClient = null
+        if (live != null) {
+            Thread {
+                try {
+                    kotlinx.coroutines.runBlocking { live.disconnect() }
+                } catch (e: Exception) {
+                    Log.w(Logger.TAG, "disconnect on destroy failed: ${e.message}")
+                }
+            }.start()
+        }
         super.onDestroy()
     }
 
@@ -224,6 +255,75 @@ class MainActivity : AppCompatActivity() {
         val room = feedRooms[at]
         log("RANDOM", "pick ${at + 1}/${feedRooms.size}: @${room.uniqueId}")
         select(room)
+    }
+
+    /** Open the room's live event stream. */
+    private suspend fun connect() {
+        if (liveClient != null) {
+            log("LIVE", "already connected; disconnect first")
+            return
+        }
+        val room = currentRoomId()
+        val userAgent = withContext(Dispatchers.IO) { RustSigner.userAgent() }
+        if (guestSession.isEmpty()) {
+            log("LIVE", "bootstrapping guest session …")
+            guestSession.bootstrap(userAgent)
+        }
+        log("LIVE", "connecting to room $room …")
+        setConnected(true)
+        eventAdapter.clear()
+        eventCount = 0
+        updateEventsTitle()
+        try {
+            liveClient = LiveClient.connect(this, room, guestSession.cookieHeader(), listener = liveListener)
+        } catch (e: Exception) {
+            setConnected(false)
+            throw e
+        }
+    }
+
+    /** Stop the live event stream. Safe to call when not connected. */
+    private suspend fun disconnect(reason: String) {
+        val live = liveClient
+        liveClient = null
+        setConnected(false)
+        if (live == null) {
+            log("LIVE", "not connected ($reason)")
+            return
+        }
+        log("LIVE", "disconnecting ($reason) …")
+        val ms = measureTimeMillis { live.disconnect() }
+        log("LIVE", "disconnected in ${ms}ms")
+    }
+
+    private fun setConnected(connected: Boolean) {
+        connectButton.isEnabled = !connected
+        disconnectButton.isEnabled = connected
+    }
+
+    private val liveListener = object : LiveClient.Listener {
+        override fun onEvent(json: String) {
+            eventAdapter.append(EventFormat.line(json))
+            eventCount++
+            updateEventsTitle()
+            eventList.scrollToPosition(eventAdapter.itemCount - 1)
+        }
+
+        override fun onState(kind: String, detail: String) {
+            log("LIVE", "$kind: $detail")
+            // Terminal states release the client: the worker already exited, so this
+            // join only frees the handle. Runs off the UI thread by construction.
+            if (kind == "closed" || kind == "error") {
+                val live = liveClient
+                liveClient = null
+                setConnected(false)
+                if (live != null) scope.launch(Dispatchers.IO) { live.disconnect() }
+            }
+        }
+    }
+
+    private fun updateEventsTitle() {
+        eventsTitle.text = "${getString(R.string.events_label)} ($eventCount)"
     }
 
     private fun describe(signed: String): String {

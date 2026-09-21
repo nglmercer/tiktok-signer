@@ -34,6 +34,10 @@ pub mod ffi;
 
 #[cfg(feature = "jni")]
 pub mod jni;
+#[cfg(all(feature = "jni", feature = "live"))]
+pub mod jni_live;
+#[cfg(feature = "live")]
+pub mod live;
 
 /// The sandbox, flattened into one script. Not a copy: this is
 /// `crates/ttl-sign-embedded/bootstrap.js` itself, which is generated from

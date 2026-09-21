@@ -62,7 +62,7 @@ for abi in $abis; do
   echo "=== $abi ($triple) ==="
   export BINDGEN_EXTRA_CLANG_ARGS="--target=$triple$API --sysroot=$SYSROOT"
   (cd "$ROOT" && cargo ndk -t "$abi" -o "$OUT" build --release \
-    -p ttl-sign-mobile --features jni)
+    -p ttl-sign-mobile --features jni,live)
 done
 
 echo "=== installed ==="
