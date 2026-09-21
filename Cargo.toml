@@ -15,6 +15,7 @@ members = [
     "crates/ttl-live-proto",
     "crates/ttl-live-events",
     "crates/ttl-live-api",
+    "crates/ttl-sign-mobile",
 ]
 default-members = [
     "crates/ttl-sign-core",
@@ -30,6 +31,7 @@ default-members = [
     "crates/ttl-live-proto",
     "crates/ttl-live-events",
     "crates/ttl-live-api",
+    "crates/ttl-sign-mobile",
 ]
 
 [workspace.package]
@@ -51,6 +53,7 @@ ttl-live-ws = { path = "crates/ttl-live-ws" }
 ttl-live-proto = { path = "crates/ttl-live-proto" }
 ttl-live-events = { path = "crates/ttl-live-events" }
 ttl-live-api = { path = "crates/ttl-live-api" }
+ttl-sign-mobile = { path = "crates/ttl-sign-mobile" }
 
 anyhow = "1"
 base64 = "0.22"

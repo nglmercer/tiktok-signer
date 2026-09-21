@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">TTL Signer</string>
+    <string name="handle_hint">@someone</string>
+    <string name="resolve">1. Resolve room</string>
+    <string name="sign">2. Sign</string>
+    <string name="output_placeholder">Resolve a handle, then sign. Output and latencies appear here.</string>
+</resources>

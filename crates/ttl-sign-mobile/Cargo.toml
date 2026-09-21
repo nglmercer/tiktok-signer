@@ -1,0 +1,32 @@
+[package]
+name = "ttl-sign-mobile"
+description = "On-device TikTok LIVE signing for Android: QuickJS engine plus a JNI boundary. No tokio, no HTTP client."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# JNI entry points for `com.example.ttlsigner.TtlNative`. Off by default so the
+# core (engine + URL builders) builds and tests as plain Rust anywhere.
+jni = ["dep:jni"]
+
+[dependencies]
+ttl-sign-core = { workspace = true }
+rand = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+rquickjs = { version = "0.12" }
+jni = { version = "0.22", optional = true }
+
+# rquickjs ships pre-generated C bindings per host platform, and Android is not
+# among them — without this the aarch64-linux-android build fails in
+# rquickjs-sys with "No such file or directory" on its bindings include.
+# `bindgen` generates them at build time from the NDK headers instead. Host
+# builds keep the fast prebuilt path; see docs/14-android-signing.md.
+[target.'cfg(target_os = "android")'.dependencies]
+rquickjs = { version = "0.12", features = ["bindgen"] }

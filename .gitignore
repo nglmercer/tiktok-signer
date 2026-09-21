@@ -30,3 +30,11 @@
 # Downloaded TikTok signing bundle (see docs/15-direct-live-api.md). Fetch it with:
 # curl -fsS -o webmssdk.js https://sf16-website-login.neutral.ttwstatic.com/obj/tiktok_web_login_static/webmssdk/1.0.0.388/webmssdk.js
 /webmssdk.js
+
+# Android demo app (see android/README.md): build outputs, the local SDK path, and the
+# natively built libraries (rebuilt by scripts/android/build-native.sh).
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/src/main/jniLibs/
