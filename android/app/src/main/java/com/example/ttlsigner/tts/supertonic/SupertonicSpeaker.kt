@@ -42,6 +42,22 @@ class SupertonicSpeaker(context: Context) : Speaker {
     private val app = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val busy = AtomicBoolean(false)
+    private val stopRequested = AtomicBoolean(false)
+    @Volatile private var currentTrack: AudioTrack? = null
+
+    /**
+     * Skip the current utterance: the playback poll below notices and releases
+     * the track early. Synthesis itself is not cancellable, but its result is
+     * dropped when a stop landed mid-flight.
+     */
+    override fun stop() {
+        stopRequested.set(true)
+        try {
+            currentTrack?.stop()
+        } catch (e: Exception) {
+            // The track may already be released; the poll exits on its own.
+        }
+    }
 
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state.asStateFlow()
@@ -53,6 +69,7 @@ class SupertonicSpeaker(context: Context) : Speaker {
     override fun speak(text: String) {
         if (text.isBlank()) return
         if (!busy.compareAndSet(false, true)) return
+        stopRequested.set(false)
         _state.value = State.Speaking(text.take(80))
         scope.launch {
             try {
@@ -130,17 +147,26 @@ class SupertonicSpeaker(context: Context) : Speaker {
             .setBufferSizeInBytes(pcm.size)
             .setTransferMode(AudioTrack.MODE_STATIC)
             .build()
+        if (stopRequested.get()) return
+        currentTrack = track
         try {
             track.write(pcm, 0, pcm.size)
             track.play()
             // Static mode has no completion callback; poll the head position.
+            // A skip breaks the poll early and releases the track below.
             val frames = wav.size
             var guard = 0
-            while (track.playbackHeadPosition < frames && guard < 600) {
+            while (!stopRequested.get() && track.playbackHeadPosition < frames && guard < 600) {
                 Thread.sleep(100)
                 guard++
             }
         } finally {
+            currentTrack = null
+            try {
+                track.stop()
+            } catch (e: Exception) {
+                // Already stopped or released; release is still safe.
+            }
             track.release()
         }
     }

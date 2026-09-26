@@ -14,6 +14,7 @@ import com.example.ttlsigner.tts.AndroidSpeaker
 import com.example.ttlsigner.tts.NoopSpeaker
 import com.example.ttlsigner.tts.Speaker
 import com.example.ttlsigner.tts.SpeechText
+import com.example.ttlsigner.tts.TtsController
 import com.example.ttlsigner.tts.TtsEngine
 import com.example.ttlsigner.tts.supertonic.SupertonicModels
 import com.example.ttlsigner.tts.supertonic.SupertonicSpeaker
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -74,6 +76,17 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private var ttsWatchJob: Job? = null
     private val _ttsEngine = MutableStateFlow(AndroidSpeaker.engine(app))
     val ttsEngine: StateFlow<TtsEngine> = _ttsEngine.asStateFlow()
+
+    /**
+     * Repeat / skip controls show only while a speech engine is selected —
+     * both the in-app buttons and the background notification actions.
+     */
+    val ttsControlsVisible: StateFlow<Boolean> = _ttsEngine
+        .map(TtsController::controlsVisible)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, _ttsEngine.value != TtsEngine.OFF)
+
+    /** The last spoken line; the repeat control enables once one exists. */
+    val lastSpoken: StateFlow<String?> = TtsController.lastSpoken
 
     data class SupertonicModelsUi(
         val ready: Boolean = false,
@@ -135,11 +148,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         log("APP", "native: ${runCatching { RustSigner.version() }.getOrElse { "UNAVAILABLE: $it" }}")
         rebuildSpeaker()
         refreshSupertonicModels()
+        viewModelScope.launch {
+            LiveService.disconnectRequests.collect { disconnect("notification") }
+        }
     }
 
     override fun onCleared() {
         speaker.shutdown()
         speaker = NoopSpeaker()
+        TtsController.attach(NoopSpeaker(), TtsEngine.OFF)
+        LiveService.stop(getApplication())
         // The worker is joined on its own thread: onCleared must return promptly,
         // and viewModelScope is already cancelled here. nDisconnect lands in ~1 s.
         val live = liveClient
@@ -205,6 +223,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _ttsEngine.value = engine
         rebuildSpeaker()
         log("TTS", "engine: ${engine.name.lowercase()}")
+        refreshLiveService()
     }
 
     private fun rebuildSpeaker() {
@@ -221,6 +240,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+        // The background notification acts on this same speaker.
+        TtsController.attach(speaker, _ttsEngine.value)
     }
 
     fun refreshSupertonicModels() {
@@ -261,7 +282,22 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         log("TTS", "test: speaking one line")
-        current.speak("TikTools studio ready.")
+        TtsController.speak("TikTools studio ready.")
+    }
+
+    /** Replay the last spoken line; a no-op with a log line when none yet. */
+    fun repeatSpeech() {
+        if (TtsController.repeatLast()) {
+            log("TTS", "repeat: replaying last line")
+        } else {
+            log("TTS", "repeat: nothing to replay yet")
+        }
+    }
+
+    /** Stop the current utterance, if any. */
+    fun skipSpeech() {
+        TtsController.skip()
+        log("TTS", "skip: current utterance stopped")
     }
 
     fun speakJoins(): Boolean = AndroidSpeaker.speakJoins(getApplication())
@@ -390,10 +426,25 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             val app = getApplication<Application>()
             liveClient = LiveClient.connect(app, room, guestSession.cookieHeader(), listener = liveListener)
             _live.value = LiveStatus.Live(room)
+            // Hold the process while live: backgrounding no longer kills the
+            // socket or the speech.
+            LiveService.start(app, room, ttsOn())
         } catch (e: Exception) {
             _live.value = LiveStatus.Idle
             throw e
         }
+    }
+
+    private fun ttsOn(): Boolean = _ttsEngine.value != TtsEngine.OFF
+
+    /** Republish the background notification after a room/TTS change. */
+    private fun refreshLiveService() {
+        val room = when (val status = _live.value) {
+            is LiveStatus.Live -> status.room
+            is LiveStatus.Connecting -> status.room
+            is LiveStatus.Idle -> return
+        }
+        LiveService.refresh(getApplication(), room, ttsOn())
     }
 
     /** Stop the live event stream. Safe to call when not connected. */
@@ -401,6 +452,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         val live = liveClient
         liveClient = null
         _live.value = LiveStatus.Idle
+        LiveService.stop(getApplication())
         if (live == null) {
             log("LIVE", "not connected ($reason)")
             return@run
@@ -429,7 +481,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             actions.onEvent(event)
             if (speaker.enabled) {
                 val text = SpeechText.forEvent(event, speakJoins())
-                if (text.isNotEmpty()) speaker.speak(text)
+                if (text.isNotEmpty()) TtsController.speak(text)
             }
         }
 
@@ -441,6 +493,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 val live = liveClient
                 liveClient = null
                 _live.value = LiveStatus.Idle
+                LiveService.stop(getApplication())
                 if (live != null) viewModelScope.launch(Dispatchers.IO) { live.disconnect() }
             }
         }

@@ -59,6 +59,10 @@ class SetupFragment : Fragment() {
         val supertonicProgress: LinearProgressIndicator = view.findViewById(R.id.supertonicProgress)
         val downloadSupertonicButton: Button = view.findViewById(R.id.downloadSupertonicButton)
         val testSpeechButton: Button = view.findViewById(R.id.testSpeechButton)
+        val ttsControlsHint: TextView = view.findViewById(R.id.ttsControlsHint)
+        val ttsControlsRow: View = view.findViewById(R.id.ttsControlsRow)
+        val repeatSpeechButton: Button = view.findViewById(R.id.repeatSpeechButton)
+        val skipSpeechButton: Button = view.findViewById(R.id.skipSpeechButton)
         val nativeVersionValue: TextView = view.findViewById(R.id.nativeVersionValue)
         val bundleCacheValue: TextView = view.findViewById(R.id.bundleCacheValue)
         val redownloadButton: Button = view.findViewById(R.id.redownloadButton)
@@ -100,6 +104,8 @@ class SetupFragment : Fragment() {
         ttsJoinsSwitch.setOnCheckedChangeListener { _, checked -> vm.setSpeakJoins(checked) }
         downloadSupertonicButton.setOnClickListener { vm.downloadSupertonicModels() }
         testSpeechButton.setOnClickListener { vm.testSpeech() }
+        repeatSpeechButton.setOnClickListener { vm.repeatSpeech() }
+        skipSpeechButton.setOnClickListener { vm.skipSpeech() }
 
         fun refreshGuest() {
             val names = vm.guestCookieNames()
@@ -202,6 +208,20 @@ class SetupFragment : Fragment() {
                 }
                 launch {
                     vm.ttsEngine.collect { checkEngine(it) }
+                }
+                launch {
+                    // Repeat / skip show only while speech is on.
+                    vm.ttsControlsVisible.collect { visible ->
+                        val gone = if (visible) View.VISIBLE else View.GONE
+                        ttsControlsHint.visibility = gone
+                        ttsControlsRow.visibility = gone
+                    }
+                }
+                launch {
+                    // Repeat enables once a line exists to replay.
+                    vm.lastSpoken.collect { last ->
+                        repeatSpeechButton.isEnabled = !last.isNullOrEmpty()
+                    }
                 }
                 launch {
                     vm.supertonicModels.collect { models ->

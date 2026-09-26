@@ -3,6 +3,10 @@
 
     <!-- The bundle download and the unsigned room lookup. Signing itself is offline. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Foreground keep-alive: the live socket + speech survive backgrounding. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="false"
@@ -18,6 +22,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <service
+            android:name=".LiveService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
     </application>
 
 </manifest>

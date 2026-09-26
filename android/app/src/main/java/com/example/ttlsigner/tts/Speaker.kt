@@ -39,6 +39,8 @@ object SpeechText {
 interface Speaker {
     val enabled: Boolean
     fun speak(text: String)
+    /** Stop the current utterance, if any. The default is a no-op. */
+    fun stop() = Unit
     fun shutdown()
 }
 
@@ -73,6 +75,10 @@ class AndroidSpeaker(context: Context) : Speaker {
     override fun speak(text: String) {
         if (text.isBlank()) return
         tts?.speak(text, TextToSpeech.QUEUE_ADD, null, "tiktools-${System.currentTimeMillis()}")
+    }
+
+    override fun stop() {
+        tts?.stop()
     }
 
     override fun shutdown() {

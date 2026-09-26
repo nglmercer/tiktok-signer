@@ -1,7 +1,12 @@
 package com.example.ttlsigner
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentActivity
 import androidx.viewpager2.adapter.FragmentStateAdapter
@@ -27,11 +32,22 @@ import com.google.android.material.tabs.TabLayoutMediator
  */
 class MainActivity : AppCompatActivity() {
 
+    // Android 13+ gates the keep-alive notification behind a runtime grant; the
+    // stream still connects without it, but the background hold needs the tap.
+    private val notificationGrant =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Material You recolor on Android 12+; a no-op below.
         DynamicColors.applyToActivityIfAvailable(this)
         setContentView(R.layout.activity_main)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationGrant.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
 
         val pager: ViewPager2 = findViewById(R.id.viewPager)
         pager.adapter = TabsAdapter(this)

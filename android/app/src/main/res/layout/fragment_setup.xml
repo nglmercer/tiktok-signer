@@ -249,6 +249,47 @@
 
                 </LinearLayout>
 
+                <TextView
+                    android:id="@+id/ttsControlsHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_sm"
+                    android:text="@string/tts_controls_hint"
+                    android:textAppearance="@style/TextAppearance.TikTools.Muted"
+                    android:visibility="gone" />
+
+                <LinearLayout
+                    android:id="@+id/ttsControlsRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_sm"
+                    android:orientation="horizontal"
+                    android:visibility="gone">
+
+                    <Button
+                        android:id="@+id/repeatSpeechButton"
+                        style="@style/Widget.Material3.Button.OutlinedButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="@dimen/space_sm"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:enabled="false"
+                        android:maxLines="1"
+                        android:text="@string/repeat_speech" />
+
+                    <Button
+                        android:id="@+id/skipSpeechButton"
+                        style="@style/Widget.Material3.Button.OutlinedButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="@string/skip_speech" />
+
+                </LinearLayout>
+
             </LinearLayout>
 
         </com.google.android.material.card.MaterialCardView>

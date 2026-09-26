@@ -82,6 +82,15 @@
     <string name="tts_note">Chat, gifts, follows and shares are spoken. SuperTonic 3 downloads its model once, then synthesizes fully on-device.</string>
     <string name="supertonic_download">Download model</string>
     <string name="test_speech">Test speech</string>
+    <string name="repeat_speech">Repeat</string>
+    <string name="skip_speech">Skip</string>
+    <string name="tts_controls_hint">Repeat replays the last line; Skip stops the current one.</string>
+    <string name="live_channel_name">Live session</string>
+    <string name="live_channel_desc">Keeps the live stream and speech running while the app is in the background.</string>
+    <string name="live_notification_connecting">Connecting…</string>
+    <string name="live_notification_live">Live · room %1$s</string>
+    <string name="live_notification_tts_on">TTS on</string>
+    <string name="live_notification_tts_off">TTS off</string>
     <string name="settings_signer">Signer</string>
     <string name="settings_native_version">Native core</string>
     <string name="settings_user_agent">User-Agent</string>

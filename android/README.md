@@ -68,6 +68,33 @@ fetches them once into `files/supertonic3/` with progress, then synthesis and
 an utterance is playing, so it can't lag the stream. The ONNX dependency adds
 native libraries per ABI, so the debug APK is ~100 MB.
 
+Both engines support the speech controls: Repeat replays the last spoken line
+(stopping the current utterance first so a busy engine replays instead of
+dropping), Skip stops the current utterance. Every utterance routes through
+`tts/TtsController`, the app-scoped front desk that remembers the last line and
+hands the live speaker to the background notification. The controls — the Setup
+buttons and the notification actions — render only while a speech engine is
+selected (`ttsControlsVisible`); Repeat enables once a line exists to replay.
+
+## Background
+
+Connecting starts `LiveService`, a foreground service holding an ongoing
+notification (`Live session` channel, `mediaPlayback` type) so the system ranks
+the process as user-visible: home, screen-off, and other apps no longer kill
+the live socket or the speech. The session still owns the connection — the
+service only holds the process and mirrors state: room, TTS on/off, Repeat /
+Skip actions while speech is enabled, and Disconnect, which asks the session to
+hang up. Disconnecting (in-app, from the notification, or on a terminal stream
+`closed`/`error`) stops the service and releases the hold. Swiping the app away
+finishes the session and disconnects by design; the service never keeps a dead
+session alive (a system restart with no live session stops itself).
+
+Android 13+ gates the notification behind the `POST_NOTIFICATIONS` runtime
+grant, requested once on launch; without it the stream still connects, but the
+background hold has no notification to show. Manifest additions:
+`FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK`,
+`POST_NOTIFICATIONS`, and the `.LiveService` declaration.
+
 ## Prerequisites
 
 - JDK 17+ (`/usr/lib/jvm/java-21-openjdk` works; the wrapper was generated with Gradle 9.7.1)
@@ -127,8 +154,10 @@ cd android && ./gradlew connectedDebugAndroidTest
 | `.../points/PointsRepository.kt` | Balances over SQLite, leaderboard flow |
 | `.../actions/EventAction.kt` | Fetch-action model + `{{template}}` + matcher |
 | `.../actions/ActionRunner.kt` | Cooldowns, fetch execution, run log |
-| `.../tts/Speaker.kt` | `Speaker` seam, noop + Android TTS, `SpeechText` |
-| `.../SessionViewModel.kt` | Connection + one event pipeline fanning out to reader/points/actions/speaker |
+| `.../tts/Speaker.kt` | `Speaker` seam (`speak`/`stop`), noop + Android TTS, `SpeechText` |
+| `.../tts/TtsController.kt` | App-scoped TTS front desk: live speaker, last line, repeat/skip |
+| `.../LiveService.kt` | Foreground keep-alive: ongoing notification + TTS/disconnect actions |
+| `.../SessionViewModel.kt` | Connection + one event pipeline fanning out to reader/points/actions/speaker; starts/stops the keep-alive |
 | `.../EventsFragment.kt` | Reader: chips, search, pause, counts |
 | `.../PointsFragment.kt` | Leaderboard, rates editor, adjust, reset |
 | `.../ActionsFragment.kt` | Action list, editor sheet, run log |
