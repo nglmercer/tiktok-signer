@@ -42,6 +42,10 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    // SuperTonic 3 on-device TTS (ported example from mewmix/nabu): ONNX
+    // Runtime sessions + Gson for the model JSON sidecars.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
+    implementation("com.google.code.gson:gson:2.10.1")
 
     testImplementation("junit:junit:4.13.2")
     // Unit tests run against android.jar stubs whose methods throw; the real org.json

@@ -29,10 +29,8 @@ class UiFlowTest {
             assertTrue("feed never rendered", waitFor(30_000) { activityFeedRows() > 0 })
 
             tapFirstFeedRow()
-            // Tap selects, resolves, and signs (~10 s with the one-time bundle parse).
+            // Tap resolves and connects directly (~10 s with the one-time bundle parse).
             assertTrue("room never resolved", waitFor(45_000) { outputText().contains("room=") })
-
-            onView(withId(R.id.connectButton)).perform(scrollTo(), click())
             assertTrue("stream never opened", waitFor(30_000) { outputText().contains("LIVE open:") })
 
             onView(withText(R.string.tab_events)).perform(click())

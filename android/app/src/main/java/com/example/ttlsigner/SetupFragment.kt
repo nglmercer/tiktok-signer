@@ -5,6 +5,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 import androidx.fragment.app.Fragment
@@ -14,6 +15,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.example.ttlsigner.tts.TtsEngine
+import com.example.ttlsigner.tts.supertonic.SupertonicSpeaker
 import com.example.ttlsigner.ui.CollapsibleCard
 import com.example.ttlsigner.ui.StatusPillView
 import com.google.android.material.progressindicator.LinearProgressIndicator
@@ -22,10 +25,11 @@ import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.launch
 
 /**
- * Setup tab: everything needed to get live and stay live — connection, the
- * live feed, resolve + sign, the TTS toggles, signer/session maintenance, the
- * debug console, and about. The studio tabs (Events, Points, Actions) only
- * render; this tab connects.
+ * Setup tab: direct login and nothing else in the way — a username input plus
+ * the live feed. Typing a handle (or numeric room id) and tapping Connect
+ * resolves, signs, and opens the stream in one step; tapping a feed room does
+ * the same. Below the login: TTS toggles, signer/session maintenance, the
+ * debug console, and about.
  */
 class SetupFragment : Fragment() {
 
@@ -39,7 +43,7 @@ class SetupFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         val statusPill: StatusPillView = view.findViewById(R.id.statusPill)
-        val roomInput: TextInputEditText = view.findViewById(R.id.roomInput)
+        val usernameInput: TextInputEditText = view.findViewById(R.id.usernameInput)
         val connectButton: Button = view.findViewById(R.id.connectButton)
         val disconnectButton: Button = view.findViewById(R.id.disconnectButton)
         val setupProgress: LinearProgressIndicator = view.findViewById(R.id.setupProgress)
@@ -48,18 +52,12 @@ class SetupFragment : Fragment() {
         val randomButton: Button = view.findViewById(R.id.randomButton)
         val feedError: TextView = view.findViewById(R.id.feedError)
         val feedList: RecyclerView = view.findViewById(R.id.feedList)
-        val handleInput: TextInputEditText = view.findViewById(R.id.handleInput)
-        val resolveButton: Button = view.findViewById(R.id.resolveButton)
-        val signButton: Button = view.findViewById(R.id.signButton)
-        val resultPlaceholder: TextView = view.findViewById(R.id.resultPlaceholder)
-        val resultRoom: TextView = view.findViewById(R.id.resultRoom)
-        val resultUser: TextView = view.findViewById(R.id.resultUser)
-        val resultSummary: TextView = view.findViewById(R.id.resultSummary)
-        val resultLatency: TextView = view.findViewById(R.id.resultLatency)
-        val resultError: TextView = view.findViewById(R.id.resultError)
-        val resultFields = listOf(resultRoom, resultUser, resultSummary, resultLatency)
-        val ttsSwitch: SwitchMaterial = view.findViewById(R.id.ttsSwitch)
+        val ttsEngineGroup: RadioGroup = view.findViewById(R.id.ttsEngineGroup)
         val ttsJoinsSwitch: SwitchMaterial = view.findViewById(R.id.ttsJoinsSwitch)
+        val supertonicStatus: TextView = view.findViewById(R.id.supertonicStatus)
+        val supertonicProgress: LinearProgressIndicator = view.findViewById(R.id.supertonicProgress)
+        val downloadSupertonicButton: Button = view.findViewById(R.id.downloadSupertonicButton)
+        val testSpeechButton: Button = view.findViewById(R.id.testSpeechButton)
         val nativeVersionValue: TextView = view.findViewById(R.id.nativeVersionValue)
         val bundleCacheValue: TextView = view.findViewById(R.id.bundleCacheValue)
         val redownloadButton: Button = view.findViewById(R.id.redownloadButton)
@@ -73,17 +71,33 @@ class SetupFragment : Fragment() {
         val feedAdapter = FeedAdapter { room -> vm.selectRoom(room) }
         feedList.adapter = feedAdapter
 
-        connectButton.setOnClickListener { vm.connect(roomInput.text.toString()) }
+        connectButton.setOnClickListener { vm.connect(usernameInput.text.toString()) }
         disconnectButton.setOnClickListener { vm.disconnect("user request") }
         feedButton.setOnClickListener { vm.refreshFeed() }
         randomButton.setOnClickListener { vm.connectRandom() }
-        resolveButton.setOnClickListener { vm.resolve(handleInput.text.toString()) }
-        signButton.setOnClickListener { vm.sign(handleInput.text.toString()) }
 
-        ttsSwitch.isChecked = vm.ttsEnabled.value
-        ttsSwitch.setOnCheckedChangeListener { _, checked -> vm.setTtsEnabled(checked) }
+        fun checkEngine(engine: TtsEngine) {
+            val id = when (engine) {
+                TtsEngine.OFF -> R.id.ttsEngineOff
+                TtsEngine.DEVICE -> R.id.ttsEngineDevice
+                TtsEngine.SUPERTONIC -> R.id.ttsEngineSuper
+            }
+            if (ttsEngineGroup.checkedRadioButtonId != id) ttsEngineGroup.check(id)
+        }
+        checkEngine(vm.ttsEngine.value)
+        ttsEngineGroup.setOnCheckedChangeListener { _, id ->
+            vm.setTtsEngine(
+                when (id) {
+                    R.id.ttsEngineDevice -> TtsEngine.DEVICE
+                    R.id.ttsEngineSuper -> TtsEngine.SUPERTONIC
+                    else -> TtsEngine.OFF
+                },
+            )
+        }
         ttsJoinsSwitch.isChecked = vm.speakJoins()
         ttsJoinsSwitch.setOnCheckedChangeListener { _, checked -> vm.setSpeakJoins(checked) }
+        downloadSupertonicButton.setOnClickListener { vm.downloadSupertonicModels() }
+        testSpeechButton.setOnClickListener { vm.testSpeech() }
 
         fun refreshGuest() {
             val names = vm.guestCookieNames()
@@ -160,10 +174,10 @@ class SetupFragment : Fragment() {
                 launch {
                     vm.busy.collect { busy ->
                         setupProgress.visibility = if (busy) View.VISIBLE else View.GONE
+                        connectButton.isEnabled = !busy &&
+                            vm.live.value is SessionViewModel.LiveStatus.Idle
                         feedButton.isEnabled = !busy
                         randomButton.isEnabled = !busy
-                        resolveButton.isEnabled = !busy
-                        signButton.isEnabled = !busy
                     }
                 }
                 launch {
@@ -177,57 +191,44 @@ class SetupFragment : Fragment() {
                 launch {
                     // A feed tap suggests its handle — unless the user is typing.
                     vm.lastHandle.collect { handle ->
-                        if (handle.isNotEmpty() && !handleInput.hasFocus() &&
-                            handleInput.text.toString() != handle
+                        if (handle.isNotEmpty() && !usernameInput.hasFocus() &&
+                            usernameInput.text.toString() != handle
                         ) {
-                            handleInput.setText(handle)
+                            usernameInput.setText(handle)
                         }
                     }
                 }
                 launch {
-                    vm.resolveInfo.collect { info ->
-                        if (info == null) return@collect
-                        resultPlaceholder.visibility = View.GONE
-                        resultError.visibility = View.GONE
-                        resultRoom.visibility = View.VISIBLE
-                        resultUser.visibility = View.VISIBLE
-                        resultRoom.text = "room ${info.roomId} · ${if (info.live) "LIVE" else "not live"}"
-                        resultUser.text = "@${info.handle} (${info.nickname}) · ${info.title}"
-                        resultLatency.visibility = View.VISIBLE
-                        resultLatency.text = "resolve ${info.ms}ms"
-                    }
+                    vm.ttsEngine.collect { checkEngine(it) }
                 }
                 launch {
-                    vm.signResult.collect { result ->
-                        if (result == null) return@collect
-                        resultPlaceholder.visibility = View.GONE
-                        resultError.visibility = View.GONE
-                        resultRoom.visibility = View.VISIBLE
-                        resultRoom.text = "room ${result.room}"
-                        // A numeric sign has no user line; a resolve+sign keeps it.
-                        val resolved = vm.resolveInfo.value
-                        val showUser = resolved != null && resolved.roomId == result.room
-                        resultUser.visibility = if (showUser) View.VISIBLE else View.GONE
-                        resultSummary.visibility = View.VISIBLE
-                        resultSummary.text = result.summary
-                        resultLatency.visibility = View.VISIBLE
-                        resultLatency.text = "sign ${result.ms}ms"
-                    }
-                }
-                launch {
-                    vm.taskError.collect { error ->
-                        resultError.visibility = if (error == null) View.GONE else View.VISIBLE
-                        resultError.text = error.orEmpty()
-                        if (error != null) {
-                            resultPlaceholder.visibility = View.GONE
-                            resultFields.forEach { it.visibility = View.GONE }
+                    vm.supertonicModels.collect { models ->
+                        supertonicProgress.visibility =
+                            if (models.downloading) View.VISIBLE else View.GONE
+                        models.progress?.let { supertonicProgress.setProgressCompat((it * 100).toInt(), true) }
+                        downloadSupertonicButton.isEnabled = !models.downloading && !models.ready
+                        val engineLine = when (val state = vm.supertonicState.value) {
+                            is SupertonicSpeaker.State.Idle -> ""
+                            is SupertonicSpeaker.State.Loading -> " · engine loading…"
+                            is SupertonicSpeaker.State.Ready -> " · engine ready"
+                            is SupertonicSpeaker.State.Speaking -> " · speaking…"
+                            is SupertonicSpeaker.State.Error -> " · ${state.detail}"
                         }
+                        supertonicStatus.text = "SuperTonic 3: ${models.detail}$engineLine"
                     }
                 }
                 launch {
-                    // Keep the switch honest when TTS is toggled elsewhere.
-                    vm.ttsEnabled.collect { enabled ->
-                        if (ttsSwitch.isChecked != enabled) ttsSwitch.isChecked = enabled
+                    // Re-render the status line when the engine state changes.
+                    vm.supertonicState.collect {
+                        val models = vm.supertonicModels.value
+                        val engineLine = when (val state = it) {
+                            is SupertonicSpeaker.State.Idle -> ""
+                            is SupertonicSpeaker.State.Loading -> " · engine loading…"
+                            is SupertonicSpeaker.State.Ready -> " · engine ready"
+                            is SupertonicSpeaker.State.Speaking -> " · speaking…"
+                            is SupertonicSpeaker.State.Error -> " · ${state.detail}"
+                        }
+                        supertonicStatus.text = "SuperTonic 3: ${models.detail}$engineLine"
                     }
                 }
             }

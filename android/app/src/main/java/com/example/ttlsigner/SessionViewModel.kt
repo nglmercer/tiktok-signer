@@ -14,6 +14,10 @@ import com.example.ttlsigner.tts.AndroidSpeaker
 import com.example.ttlsigner.tts.NoopSpeaker
 import com.example.ttlsigner.tts.Speaker
 import com.example.ttlsigner.tts.SpeechText
+import com.example.ttlsigner.tts.TtsEngine
+import com.example.ttlsigner.tts.supertonic.SupertonicModels
+import com.example.ttlsigner.tts.supertonic.SupertonicSpeaker
+import kotlinx.coroutines.Job
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -52,22 +56,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         val error: String? = null,
     )
 
-    data class ResolveInfo(
-        val handle: String,
-        val roomId: String,
-        val nickname: String,
-        val title: String,
-        val live: Boolean,
-        val ms: Long,
-    )
-
-    data class SignResult(
-        val room: String,
-        val summary: String,
-        val full: String,
-        val ms: Long,
-    )
-
     data class BundleUiState(
         val version: String = BundleFetch.BUNDLE_VERSION,
         val shaShort: String = BundleFetch.BUNDLE_SHA256.take(16),
@@ -83,8 +71,23 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     val actions = ActionRunner(app, studioDb)
 
     private var speaker: Speaker = NoopSpeaker()
-    private val _ttsEnabled = MutableStateFlow(AndroidSpeaker.isEnabled(app))
-    val ttsEnabled: StateFlow<Boolean> = _ttsEnabled.asStateFlow()
+    private var ttsWatchJob: Job? = null
+    private val _ttsEngine = MutableStateFlow(AndroidSpeaker.engine(app))
+    val ttsEngine: StateFlow<TtsEngine> = _ttsEngine.asStateFlow()
+
+    data class SupertonicModelsUi(
+        val ready: Boolean = false,
+        val detail: String = "",
+        val progress: Float? = null,
+        val downloading: Boolean = false,
+    )
+
+    private val _supertonicModels = MutableStateFlow(SupertonicModelsUi())
+    val supertonicModels: StateFlow<SupertonicModelsUi> = _supertonicModels.asStateFlow()
+
+    private val _supertonicState =
+        MutableStateFlow<SupertonicSpeaker.State>(SupertonicSpeaker.State.Idle)
+    val supertonicState: StateFlow<SupertonicSpeaker.State> = _supertonicState.asStateFlow()
 
     private val _live = MutableStateFlow<LiveStatus>(LiveStatus.Idle)
     val live: StateFlow<LiveStatus> = _live.asStateFlow()
@@ -116,12 +119,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
 
-    private val _resolveInfo = MutableStateFlow<ResolveInfo?>(null)
-    val resolveInfo: StateFlow<ResolveInfo?> = _resolveInfo.asStateFlow()
-
-    private val _signResult = MutableStateFlow<SignResult?>(null)
-    val signResult: StateFlow<SignResult?> = _signResult.asStateFlow()
-
     private val _taskError = MutableStateFlow<String?>(null)
     val taskError: StateFlow<String?> = _taskError.asStateFlow()
 
@@ -130,19 +127,17 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     val lastHandle: StateFlow<String> = _lastHandle.asStateFlow()
 
     private var roomId: String? = null
-    private var rustSigner: RustSigner? = null
     private var liveClient: LiveClient? = null
     private var guestSession = Feed.GuestSession()
     private val eventDeque = ArrayDeque<LiveEvent>()
 
     init {
         log("APP", "native: ${runCatching { RustSigner.version() }.getOrElse { "UNAVAILABLE: $it" }}")
-        if (_ttsEnabled.value) speaker = AndroidSpeaker(app)
+        rebuildSpeaker()
+        refreshSupertonicModels()
     }
 
     override fun onCleared() {
-        rustSigner?.close()
-        rustSigner = null
         speaker.shutdown()
         speaker = NoopSpeaker()
         // The worker is joined on its own thread: onCleared must return promptly,
@@ -202,15 +197,71 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _eventCount.value = 0
     }
 
-    // TTS (frontier: toggle + joins flag today, full console later).
+    // TTS engines: off, the platform voice, or on-device SuperTonic 3.
 
-    fun setTtsEnabled(enabled: Boolean) {
+    fun setTtsEngine(engine: TtsEngine) {
         val app = getApplication<Application>()
-        AndroidSpeaker.setEnabled(app, enabled)
-        _ttsEnabled.value = enabled
+        AndroidSpeaker.setEngine(app, engine)
+        _ttsEngine.value = engine
+        rebuildSpeaker()
+        log("TTS", "engine: ${engine.name.lowercase()}")
+    }
+
+    private fun rebuildSpeaker() {
+        ttsWatchJob?.cancel()
+        ttsWatchJob = null
         speaker.shutdown()
-        speaker = if (enabled) AndroidSpeaker(app) else NoopSpeaker()
-        log("TTS", if (enabled) "speaker on" else "speaker off")
+        val app = getApplication<Application>()
+        speaker = when (_ttsEngine.value) {
+            TtsEngine.OFF -> NoopSpeaker()
+            TtsEngine.DEVICE -> AndroidSpeaker(app)
+            TtsEngine.SUPERTONIC -> SupertonicSpeaker(app).also { current ->
+                ttsWatchJob = viewModelScope.launch {
+                    current.state.collect { _supertonicState.value = it }
+                }
+            }
+        }
+    }
+
+    fun refreshSupertonicModels() {
+        val app = getApplication<Application>()
+        _supertonicModels.value = when (val status = SupertonicModels.status(app)) {
+            is SupertonicModels.Status.Ready ->
+                SupertonicModelsUi(ready = true, detail = "7 files on device · voice F1")
+            is SupertonicModels.Status.Missing ->
+                SupertonicModelsUi(ready = false, detail = "${status.files.size} files missing")
+        }
+    }
+
+    /** Download the v3 model files once; progress lands in [supertonicModels]. */
+    fun downloadSupertonicModels() = run {
+        if (_supertonicModels.value.downloading) return@run
+        log("TTS", "downloading SuperTonic 3 model files …")
+        _supertonicModels.value = _supertonicModels.value.copy(downloading = true, progress = 0f)
+        try {
+            val app = getApplication<Application>()
+            SupertonicModels.download(app) { progress ->
+                _supertonicModels.value = _supertonicModels.value.copy(
+                    downloading = true,
+                    progress = progress.overall(),
+                    detail = "${progress.fileName} (${progress.fileIndex + 1}/${progress.fileCount})",
+                )
+            }
+            log("TTS", "SuperTonic 3 model ready")
+        } finally {
+            refreshSupertonicModels()
+        }
+    }
+
+    /** Speak one sample line through the selected engine. */
+    fun testSpeech() {
+        val current = speaker
+        if (!current.enabled) {
+            log("TTS", "pick an engine first")
+            return
+        }
+        log("TTS", "test: speaking one line")
+        current.speak("TikTools studio ready.")
     }
 
     fun speakJoins(): Boolean = AndroidSpeaker.speakJoins(getApplication())
@@ -219,24 +270,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         AndroidSpeaker.setSpeakJoins(getApplication(), speak)
     }
 
-    // Resolve + sign.
-
-    fun resolve(handle: String) = run { resolveNow(handle) }
-
-    fun sign(handle: String) = run {
-        val room = currentRoomId(handle)
-        log("SIGN", "building socket URL for room $room …")
-        val url = withContext(Dispatchers.IO) { RustSigner.socketUrl(room) }
-        log("SIGN", "unsigned URL ready (${url.length} chars)")
-        val signer = warmRust()
-        log("SIGN", "signing (ws) …")
-        val signed: String
-        val ms = measureTimeMillis { signed = signer.sign(url) }
-        val summary = Logger.summarizeSignedUrl(signed)
-        log("SIGN", "signed in ${ms}ms: $summary", logcat = "signed in ${ms}ms: $summary")
-        log("SIGN", describe(signed), logcat = summary)
-        _signResult.value = SignResult(room, summary, signed, ms)
-    }
+    // Direct login: a handle (or numeric room id) connects in one step —
+    // resolve, sign, and open the stream with no intermediate screens.
 
     /** A numeric input is a room id for offline testing; anything else resolves over HTTPS. */
     private suspend fun currentRoomId(typed: String): String {
@@ -262,14 +297,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 roomId = outcome.room.roomId
                 log("RESOLVE", "${ms}ms: @${outcome.room.uniqueId} (${outcome.room.nickname})")
                 log("RESOLVE", "room=${outcome.room.roomId} live=${outcome.room.isLive()} ${outcome.room.title}")
-                _resolveInfo.value = ResolveInfo(
-                    handle = outcome.room.uniqueId,
-                    roomId = outcome.room.roomId,
-                    nickname = outcome.room.nickname,
-                    title = outcome.room.title,
-                    live = outcome.room.isLive(),
-                    ms = ms,
-                )
                 return outcome.room.roomId
             }
             is Discovery.LookupResult.UserNotFound ->
@@ -279,14 +306,6 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             is Discovery.LookupResult.DecodeError ->
                 throw IllegalStateException("lookup failed: ${outcome.detail}")
         }
-    }
-
-    private suspend fun warmRust(): RustSigner {
-        rustSigner?.let { return it }
-        log("SIGN", "opening signer (bundle download + parse, once) …")
-        val ms = measureTimeMillis { rustSigner = RustSigner.open(getApplication(), "{}") }
-        log("SIGN", "signer open in ${ms}ms")
-        return rustSigner!!
     }
 
     // Feed + random.
@@ -306,17 +325,25 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Feed tap: adopt the room, resolve it, then sign. */
+    /** Feed tap: adopt the room and connect to it directly. */
     fun selectRoom(room: Feed.LiveRoom) = run {
+        if (liveClient != null) {
+            log("LIVE", "already connected; disconnect first")
+            return@run
+        }
         log("SELECT", "@${room.uniqueId} (${room.viewers} watching): ${room.title}")
         _lastHandle.value = "@${room.uniqueId}"
         roomId = null
-        resolveNow("@${room.uniqueId}")
-        signAfterResolve()
+        val id = resolveNow("@${room.uniqueId}")
+        openStream(id)
     }
 
-    /** A random room from the feed, fetching it first when empty. */
+    /** A random room from the feed, fetching it first when empty, then connect. */
     fun connectRandom() = run {
+        if (liveClient != null) {
+            log("LIVE", "already connected; disconnect first")
+            return@run
+        }
         if (_feed.value.rooms.isEmpty()) refreshFeedNow()
         val rooms = _feed.value.rooms
         require(rooms.isNotEmpty()) { "the feed is empty, nothing to pick from" }
@@ -325,8 +352,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         log("RANDOM", "pick ${at + 1}/${rooms.size}: @${room.uniqueId}")
         _lastHandle.value = "@${room.uniqueId}"
         roomId = null
-        resolveNow("@${room.uniqueId}")
-        signAfterResolve()
+        val id = resolveNow("@${room.uniqueId}")
+        openStream(id)
     }
 
     private suspend fun refreshFeedNow() {
@@ -334,30 +361,23 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         _feed.value = FeedUiState(rooms = Feed.fetchFeed("live", userAgent, guestSession))
     }
 
-    private suspend fun signAfterResolve() {
-        val room = roomId ?: throw IllegalStateException("no room after resolve")
-        log("SIGN", "building socket URL for room $room …")
-        val url = withContext(Dispatchers.IO) { RustSigner.socketUrl(room) }
-        log("SIGN", "unsigned URL ready (${url.length} chars)")
-        val signer = warmRust()
-        log("SIGN", "signing (ws) …")
-        val signed: String
-        val ms = measureTimeMillis { signed = signer.sign(url) }
-        val summary = Logger.summarizeSignedUrl(signed)
-        log("SIGN", "signed in ${ms}ms: $summary", logcat = "signed in ${ms}ms: $summary")
-        log("SIGN", describe(signed), logcat = summary)
-        _signResult.value = SignResult(room, summary, signed, ms)
-    }
-
     // Live stream.
 
-    /** Open the room's live event stream. Blank [typed] reuses the resolved room. */
+    /**
+     * Direct login: a handle (or numeric room id) connects in one step.
+     * Blank [typed] reuses the resolved room.
+     */
     fun connect(typed: String) = run {
         if (liveClient != null) {
             log("LIVE", "already connected; disconnect first")
             return@run
         }
         val room = if (typed.trim().isEmpty()) currentRoomId("") else currentRoomId(typed)
+        openStream(room)
+    }
+
+    /** Sign and open [room]'s live event stream. Shared by every login path. */
+    private suspend fun openStream(room: String) {
         val userAgent = withContext(Dispatchers.IO) { RustSigner.userAgent() }
         if (guestSession.isEmpty()) {
             log("LIVE", "bootstrapping guest session …")
@@ -438,23 +458,19 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         BundleUiState(cache = BundleFetch.describeCache(getApplication<Application>().cacheDir))
     }
 
-    /** Redownload the bundle; the warm signer is dropped so the next open parses it. */
+    /** Redownload the bundle; the next stream open parses it. */
     suspend fun redownloadBundle(): Long = withContext(Dispatchers.IO) {
         val app = getApplication<Application>()
         val text = BundleFetch.refresh(app.cacheDir)
-        rustSigner?.close()
-        rustSigner = null
-        log("BUNDLE", "redownloaded ${text.length} chars, signer will reopen on next use")
+        log("BUNDLE", "redownloaded ${text.length} chars, next stream uses it")
         text.length.toLong()
     }
 
-    /** Delete the cached bundle and drop the warm signer. Returns what was removed. */
+    /** Delete the cached bundle. Returns what was removed. */
     suspend fun clearCaches(): String = withContext(Dispatchers.IO) {
         val app = getApplication<Application>()
         val cache: File = BundleFetch.cacheFile(app.cacheDir)
         val hadBundle = cache.isFile && cache.delete()
-        rustSigner?.close()
-        rustSigner = null
         log("BUNDLE", "cache cleared (bundle was ${if (hadBundle) "present" else "absent"})")
         if (hadBundle) "bundle cache cleared" else "nothing cached"
     }
@@ -468,11 +484,5 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearLog() {
         Logger.clear()
-    }
-
-    private fun describe(signed: String): String {
-        val gnarly = signed.substringAfter("&X-Gnarly=", "")
-        return if (gnarly.isEmpty()) "NOT SIGNED: $signed"
-        else "${signed.length} chars, X-Gnarly ${gnarly.length} chars\n$signed"
     }
 }

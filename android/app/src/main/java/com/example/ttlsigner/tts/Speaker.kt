@@ -42,6 +42,13 @@ interface Speaker {
     fun shutdown()
 }
 
+/** The selectable speech engines: off, the platform voice, SuperTonic 3. */
+enum class TtsEngine {
+    OFF,
+    DEVICE,
+    SUPERTONIC,
+}
+
 /** Silent speaker: keeps the pipeline wired while TTS is off. */
 class NoopSpeaker : Speaker {
     override val enabled: Boolean = false
@@ -76,15 +83,34 @@ class AndroidSpeaker(context: Context) : Speaker {
     companion object {
         private const val PREFS = "tiktools_tts"
         private const val KEY_ENABLED = "enabled"
+        private const val KEY_ENGINE = "engine"
         private const val KEY_JOINS = "joins"
 
         fun isEnabled(context: Context): Boolean =
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .getBoolean(KEY_ENABLED, false)
+            engine(context) != TtsEngine.OFF
 
         fun setEnabled(context: Context, enabled: Boolean) {
+            setEngine(context, if (enabled) TtsEngine.DEVICE else TtsEngine.OFF)
+        }
+
+        /**
+         * The selected engine. Upgrades the old boolean toggle once: an
+         * enabled install becomes [TtsEngine.DEVICE].
+         */
+        fun engine(context: Context): TtsEngine {
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val stored = prefs.getString(KEY_ENGINE, null)
+            if (stored != null) {
+                return runCatching { TtsEngine.valueOf(stored) }.getOrDefault(TtsEngine.OFF)
+            }
+            val upgraded = if (prefs.getBoolean(KEY_ENABLED, false)) TtsEngine.DEVICE else TtsEngine.OFF
+            prefs.edit().putString(KEY_ENGINE, upgraded.name).apply()
+            return upgraded
+        }
+
+        fun setEngine(context: Context, engine: TtsEngine) {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putBoolean(KEY_ENABLED, enabled).apply()
+                .edit().putString(KEY_ENGINE, engine.name).apply()
         }
 
         fun speakJoins(context: Context): Boolean =

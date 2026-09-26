@@ -15,6 +15,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.example.ttlsigner.events.EventIcons
 import com.example.ttlsigner.events.LiveEvent
 import com.example.ttlsigner.ui.CollapsibleCard
 import com.example.ttlsigner.ui.StatusPillView
@@ -32,6 +33,26 @@ class EventsFragment : Fragment() {
 
     private val vm: SessionViewModel by activityViewModels()
     private val chips = mutableMapOf<LiveEvent.Category, Chip>()
+    private var lastCounts: Map<LiveEvent.Category, Int> = emptyMap()
+
+    /**
+     * Sync chips with the filter: checked state follows [filter], and a
+     * selected chip expands to show its live count (`chat · 12`), collapsing
+     * back to the bare label when toggled off.
+     */
+    private fun renderChips(
+        filter: com.example.ttlsigner.events.EventFilter,
+        counts: Map<LiveEvent.Category, Int>,
+    ) {
+        for ((category, chip) in chips) {
+            val selected = category in filter.enabled
+            if (chip.isChecked != selected) chip.isChecked = selected
+            val label = category.name.lowercase()
+            val count = counts[category] ?: 0
+            val text = if (selected && count > 0) "$label · $count" else label
+            if (chip.text.toString() != text) chip.text = text
+        }
+    }
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -56,16 +77,22 @@ class EventsFragment : Fragment() {
         eventList.adapter = adapter
 
         // One checkable chip per category, built once; checked state follows
-        // the view model's filter below.
+        // the view model's filter below. A selected chip expands to show its
+        // live count; tapping the clear button shows everything again.
         for (category in LiveEvent.Category.values()) {
             val chip = Chip(requireContext()).apply {
                 text = category.name.lowercase()
                 isCheckable = true
                 isChecked = true
+                setChipIconResource(EventIcons.res(category))
+                isChipIconVisible = true
                 setOnClickListener { vm.toggleCategory(category) }
             }
             chips[category] = chip
             chipGroup.addView(chip)
+        }
+        view.findViewById<Button>(R.id.filterClearButton).setOnClickListener {
+            vm.setFilter(vm.filter.value.showAll())
         }
 
         searchInput.addTextChangedListener(object : TextWatcher {
@@ -90,11 +117,7 @@ class EventsFragment : Fragment() {
                 }
                 launch {
                     vm.filter.collect { filter ->
-                        for ((category, chip) in chips) {
-                            if (chip.isChecked != (category in filter.enabled)) {
-                                chip.isChecked = category in filter.enabled
-                            }
-                        }
+                        renderChips(filter, lastCounts)
                         if (searchInput.text.toString() != filter.query) {
                             searchInput.setText(filter.query)
                         }
@@ -119,6 +142,8 @@ class EventsFragment : Fragment() {
                 }
                 launch {
                     vm.counts.collect { counts ->
+                        lastCounts = counts
+                        renderChips(vm.filter.value, counts)
                         countsText.text = if (counts.isEmpty()) {
                             getString(R.string.events_empty_hint)
                         } else {

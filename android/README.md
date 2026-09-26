@@ -16,10 +16,10 @@ small Android sibling: actions, events viewer, points, and config only.
 
 | Tab | What it does |
 |---|---|
-| Events | Live reader: per-category filter chips (chat, gift, like, follow, share, join, member, room), search, pause, per-type counts, latest award |
+| Events | Live reader: icon filter chips that expand with live counts when selected, search, clear-filters button, pause, per-type counts, latest award |
 | Points | SQLite leaderboard, per-event rates editor (mirrors desktop `PointsConfig`), manual adjust, reset |
 | Actions | Fetch-only automations: pick trigger kinds, GET/POST a URL template with `{{user}} {{name}} {{text}} {{type}} {{count}} {{diamonds}}`, cooldown, test fire, run log |
-| Setup | Connect/disconnect, live feed, resolve + sign, TTS toggles, signer/session maintenance, debug console |
+| Setup | Direct login (username input + live feed, one tap connects), TTS engine console, signer/session maintenance, debug console |
 
 ## Data
 
@@ -28,13 +28,23 @@ small Android sibling: actions, events viewer, points, and config only.
 - `SharedPreferences`: points rates, TTS toggles. Balances stay in SQLite so
   they survive process death and feed the leaderboard query directly.
 
-## TTS frontier
+## TTS engines
 
-Every component that may speak takes a `tts.Speaker`. Today the app ships a
-silent `NoopSpeaker` plus an `AndroidSpeaker` (platform `TextToSpeech`) behind
-the Setup toggles, with `SpeechText` mapping events to spoken lines. Voices,
-per-event toggles, and queue controls plug into the same seam later without
-touching the event pipeline.
+Every component that may speak takes a `tts.Speaker`. Setup offers three
+engines: off, the device voice (`AndroidSpeaker` over platform
+`TextToSpeech`), and on-device SuperTonic 3, with `SpeechText` mapping events
+to spoken lines in all cases.
+
+SuperTonic 3 is a port of the nabu example
+([mewmix/nabu](https://github.com/mewmix/nabu),
+`app/.../supertonic/`): four ONNX Runtime CPU sessions
+(`duration_predictor`, `text_encoder`, `vector_estimator`, `vocoder`) plus the
+unicode text processor, running only the v3 model (`Supertone/supertonic-3`,
+voice F1). Model files (~7 downloads) never ship in the APK — the Setup tab
+fetches them once into `files/supertonic3/` with progress, then synthesis and
+`AudioTrack` playback run fully on-device. Speech drops (never queues) while
+an utterance is playing, so it can't lag the stream. The ONNX dependency adds
+native libraries per ABI, so the debug APK is ~100 MB.
 
 ## Prerequisites
 
@@ -85,6 +95,8 @@ cd android && ./gradlew connectedDebugAndroidTest
 |---|---|
 | `.../events/LiveEvent.kt` | Typed event model + total JSON parser |
 | `.../events/EventFilter.kt` | Category set + query matching for the reader |
+| `.../events/EventIcons.kt` | Category → vector drawable for the filter chips |
+| `.../tts/supertonic/` | Ported v3 engine, model manifest + downloader, `AudioTrack` speaker |
 | `.../data/StudioDb.kt` | The only database: viewers, actions, run log |
 | `.../points/PointsConfig.kt` | Rates per trigger + level threshold (prefs) |
 | `.../points/PointsEngine.kt` | Pure award math (in `PointsConfig.kt`) |

@@ -13,6 +13,7 @@
     <string name="events_empty">No events yet — connect to a room.</string>
     <string name="events_empty_hint">chat · gift · like · follow · share · join</string>
     <string name="search_hint">Search user or text…</string>
+    <string name="clear_filters">All</string>
     <string name="pause">Pause</string>
     <string name="resume">Resume</string>
     <string name="clear">Clear</string>
@@ -51,25 +52,24 @@
     <string name="delete">Delete</string>
 
     <!-- Setup tab. -->
-    <string name="room_hint">room id (or leave empty to use the resolved room)</string>
+    <string name="username_hint">@someone or room id — Connect logs in directly</string>
     <string name="connect">Connect</string>
     <string name="disconnect">Disconnect</string>
     <string name="feed">Refresh feed</string>
     <string name="random">Surprise me</string>
     <string name="feed_label">LIVE FEED</string>
     <string name="handle_hint">@someone</string>
-    <string name="resolve">Resolve</string>
-    <string name="sign">Sign</string>
-    <string name="sign_label">RESOLVE + SIGN</string>
-    <string name="result_title">RESULT</string>
-    <string name="result_placeholder">Resolve a handle, then sign. The outcome lands here.</string>
     <string name="output_label">DEBUG LOG</string>
     <string name="copy">Copy</string>
     <string name="output_placeholder">Steps and latencies appear here.</string>
     <string name="tts_title">READ ALOUD (TTS)</string>
-    <string name="tts_enable">Speak events</string>
+    <string name="tts_engine_off">Off</string>
+    <string name="tts_engine_device">Device voice</string>
+    <string name="tts_engine_super">SuperTonic 3 (on-device, voice F1)</string>
     <string name="tts_joins">Also announce joins</string>
-    <string name="tts_note">Chat, gifts, follows and shares are spoken. Voices and per-event toggles come later.</string>
+    <string name="tts_note">Chat, gifts, follows and shares are spoken. SuperTonic 3 downloads its model once, then synthesizes fully on-device.</string>
+    <string name="supertonic_download">Download model</string>
+    <string name="test_speech">Test speech</string>
     <string name="settings_signer">Signer</string>
     <string name="settings_native_version">Native core</string>
     <string name="settings_user_agent">User-Agent</string>
