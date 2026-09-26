@@ -19,6 +19,7 @@ import com.example.ttlsigner.tts.TtsEngine
 import com.example.ttlsigner.tts.supertonic.SupertonicSpeaker
 import com.example.ttlsigner.ui.CollapsibleCard
 import com.example.ttlsigner.ui.StatusPillView
+import com.example.ttlsigner.ui.UiKit.addMinimalDividers
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.TextInputEditText
@@ -67,6 +68,7 @@ class SetupFragment : Fragment() {
         val aboutValue: TextView = view.findViewById(R.id.aboutValue)
 
         feedList.layoutManager = LinearLayoutManager(requireContext())
+        feedList.addMinimalDividers()
         feedList.isNestedScrollingEnabled = false
         val feedAdapter = FeedAdapter { room -> vm.selectRoom(room) }
         feedList.adapter = feedAdapter
@@ -183,7 +185,7 @@ class SetupFragment : Fragment() {
                 launch {
                     vm.feed.collect { state ->
                         feedAdapter.submitList(state.rooms)
-                        feedCard.setTitle("$feedLabel (${state.rooms.size})")
+                        feedCard.setTitleWithCount(feedLabel, state.rooms.size)
                         feedError.visibility = if (state.error == null) View.GONE else View.VISIBLE
                         feedError.text = state.error.orEmpty()
                     }

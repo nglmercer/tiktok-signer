@@ -41,13 +41,27 @@ class CollapsibleCard @JvmOverloads constructor(
     private var redirectChildren = false
 
     init {
-        val pad = (12 * resources.displayMetrics.density).toInt()
+        // Flat minimalist outline: no shadow, hairline stroke, shared radius.
+        val density = resources.displayMetrics.density
+        cardElevation = 0f
+        radius = 12 * density
+        strokeWidth = (1 * density).toInt()
+        val outline = TypedValue()
+        context.theme.resolveAttribute(
+            com.google.android.material.R.attr.colorOutlineVariant,
+            outline,
+            true,
+        )
+        strokeColor = outline.data
+
+        val padH = (12 * density).toInt()
+        val padV = (10 * density).toInt()
         val ripple = TypedValue()
         context.theme.resolveAttribute(android.R.attr.selectableItemBackground, ripple, true)
         val header = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = android.view.Gravity.CENTER_VERTICAL
-            setPadding(pad, pad, pad, pad)
+            setPadding(padH, padV, padH, padV)
             setBackgroundResource(ripple.resourceId)
             isClickable = true
             isFocusable = true
@@ -103,6 +117,14 @@ class CollapsibleCard @JvmOverloads constructor(
 
     fun setTitle(title: CharSequence) {
         titleView.text = title
+    }
+
+    /**
+     * Minimalist count suffix: "Events · 12", collapsing to the bare label
+     * while empty instead of shouting "(0)".
+     */
+    fun setTitleWithCount(label: String, count: Int) {
+        titleView.text = UiKit.sectionTitle(label, count)
     }
 
     fun setExpanded(value: Boolean) {

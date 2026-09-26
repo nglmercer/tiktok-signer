@@ -5,7 +5,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:padding="@dimen/space_md">
 
     <com.example.ttlsigner.ui.CollapsibleCard
         android:id="@+id/boardCard"
@@ -18,14 +18,14 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:orientation="vertical"
-            android:padding="12dp">
+            android:padding="@dimen/space_md">
 
-            <TextView
+            <com.example.ttlsigner.ui.EmptyStateView
                 android:id="@+id/boardEmpty"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="@string/board_empty"
-                android:textAppearance="@style/TextAppearance.Material3.BodyMedium" />
+                app:emptyIcon="@drawable/ic_ev_member"
+                app:emptyMessage="@string/board_empty" />
 
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/boardList"
@@ -40,7 +40,7 @@
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_marginTop="12dp"
+        android:layout_marginTop="@dimen/space_md"
         android:layout_weight="1"
         android:clipToPadding="false">
 
@@ -50,6 +50,7 @@
             android:orientation="vertical">
 
             <com.google.android.material.card.MaterialCardView
+                style="@style/Widget.TikTools.MinimalCard"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content">
 
@@ -57,30 +58,31 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="12dp">
+                    android:padding="@dimen/space_md">
 
-                    <TextView
+                    <com.example.ttlsigner.ui.SectionHeaderView
+                        android:id="@+id/ratesHeader"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="@string/rates_title"
-                        android:textAppearance="@style/TextAppearance.Material3.TitleSmall" />
+                        app:sectionTitle="@string/rates_title" />
 
                     <LinearLayout
                         android:id="@+id/ratesBox"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/space_sm"
                         android:orientation="vertical" />
 
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
+                        android:layout_marginTop="@dimen/space_sm"
                         android:orientation="horizontal">
 
                         <com.google.android.material.textfield.TextInputLayout
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:layout_marginEnd="8dp"
+                            android:layout_marginEnd="@dimen/space_sm"
                             android:layout_weight="1"
                             android:hint="@string/currency_hint"
                             style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense">
@@ -116,7 +118,7 @@
                         android:id="@+id/saveRatesButton"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
+                        android:layout_marginTop="@dimen/space_sm"
                         android:text="@string/save_rates" />
 
                 </LinearLayout>
@@ -124,32 +126,33 @@
             </com.google.android.material.card.MaterialCardView>
 
             <com.google.android.material.card.MaterialCardView
+                style="@style/Widget.TikTools.MinimalCard"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="12dp">
+                android:layout_marginTop="@dimen/space_md">
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="12dp">
+                    android:padding="@dimen/space_md">
 
-                    <TextView
+                    <com.example.ttlsigner.ui.SectionHeaderView
+                        android:id="@+id/adjustHeader"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="@string/adjust_title"
-                        android:textAppearance="@style/TextAppearance.Material3.TitleSmall" />
+                        app:sectionTitle="@string/adjust_title" />
 
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
+                        android:layout_marginTop="@dimen/space_sm"
                         android:orientation="horizontal">
 
                         <com.google.android.material.textfield.TextInputLayout
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:layout_marginEnd="8dp"
+                            android:layout_marginEnd="@dimen/space_sm"
                             android:layout_weight="1"
                             android:hint="@string/handle_hint"
                             style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense">
@@ -184,14 +187,14 @@
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
+                        android:layout_marginTop="@dimen/space_sm"
                         android:orientation="horizontal">
 
                         <Button
                             android:id="@+id/adjustButton"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:layout_marginEnd="8dp"
+                            android:layout_marginEnd="@dimen/space_sm"
                             android:layout_weight="1"
                             android:text="@string/adjust" />
 

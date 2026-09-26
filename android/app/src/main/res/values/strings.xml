@@ -9,7 +9,7 @@
     <string name="tab_setup">Setup</string>
 
     <!-- Events tab. -->
-    <string name="events_label">EVENTS</string>
+    <string name="events_label">Events</string>
     <string name="events_empty">No events yet — connect to a room.</string>
     <string name="events_empty_hint">chat · gift · like · follow · share · join</string>
     <string name="search_hint">Search user or text…</string>
@@ -21,19 +21,19 @@
     <string name="collapsed">▶</string>
 
     <!-- Points tab. -->
-    <string name="board_label">LEADERBOARD</string>
+    <string name="board_label">Leaderboard</string>
     <string name="board_empty">No viewers yet — points land here while live.</string>
-    <string name="rates_title">RATES</string>
+    <string name="rates_title">Rates</string>
     <string name="currency_hint">Currency name</string>
     <string name="level_hint">Points per level</string>
     <string name="save_rates">Save rates</string>
-    <string name="adjust_title">MANUAL ADJUST</string>
+    <string name="adjust_title">Manual adjust</string>
     <string name="amount_hint">Amount (may be negative)</string>
     <string name="adjust">Adjust</string>
     <string name="reset_points">Reset all</string>
 
     <!-- Actions tab. -->
-    <string name="actions_label">FETCH ACTIONS</string>
+    <string name="actions_label">Fetch actions</string>
     <string name="actions_empty">No actions yet — tap + to fire a URL when an event lands.</string>
     <string name="action_add">+ New fetch action</string>
     <string name="action_new">New fetch action</string>
@@ -45,7 +45,7 @@
     <string name="body_hint">Body (POST only, optional)</string>
     <string name="cooldown_hint">Cooldown seconds (0 = none)</string>
     <string name="template_help">Placeholders: {{user}} {{name}} {{text}} {{type}} {{count}} {{diamonds}}</string>
-    <string name="runs_label">RUN LOG</string>
+    <string name="runs_label">Run log</string>
     <string name="runs_empty">Nothing fired yet.</string>
     <string name="edit">Edit</string>
     <string name="test">Test</string>
@@ -57,12 +57,12 @@
     <string name="disconnect">Disconnect</string>
     <string name="feed">Refresh feed</string>
     <string name="random">Surprise me</string>
-    <string name="feed_label">LIVE FEED</string>
+    <string name="feed_label">Live feed</string>
     <string name="handle_hint">@someone</string>
-    <string name="output_label">DEBUG LOG</string>
+    <string name="output_label">Debug log</string>
     <string name="copy">Copy</string>
     <string name="output_placeholder">Steps and latencies appear here.</string>
-    <string name="tts_title">READ ALOUD (TTS)</string>
+    <string name="tts_title">Read aloud</string>
     <string name="tts_engine_off">Off</string>
     <string name="tts_engine_device">Device voice</string>
     <string name="tts_engine_super">SuperTonic 3 (on-device, voice F1)</string>

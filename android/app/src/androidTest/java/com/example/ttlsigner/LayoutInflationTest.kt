@@ -5,7 +5,11 @@ import android.view.View
 import androidx.appcompat.view.ContextThemeWrapper
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.example.ttlsigner.ui.EmptyStateView
+import com.example.ttlsigner.ui.SectionHeaderView
+import com.example.ttlsigner.ui.SettingRowView
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -172,7 +176,68 @@ class LayoutInflationTest {
         assertNotNull(rateRow!!.findViewById<View>(R.id.rateEnabled))
     }
 
+    @Test
+    fun emptyStatesAreSharedMinimalistComponent() {
+        assertViewType(R.layout.fragment_events, R.id.eventsEmpty, EmptyStateView::class.java)
+        assertViewType(R.layout.fragment_points, R.id.boardEmpty, EmptyStateView::class.java)
+        assertViewType(R.layout.fragment_actions, R.id.actionsEmpty, EmptyStateView::class.java)
+    }
+
+    @Test
+    fun sectionHeadersAreSharedMinimalistComponent() {
+        assertViewType(R.layout.fragment_points, R.id.ratesHeader, SectionHeaderView::class.java)
+        assertViewType(R.layout.fragment_points, R.id.adjustHeader, SectionHeaderView::class.java)
+        assertViewType(R.layout.fragment_setup, R.id.ttsHeader, SectionHeaderView::class.java)
+        assertViewType(R.layout.fragment_setup, R.id.signerHeader, SectionHeaderView::class.java)
+    }
+
+    @Test
+    fun setupValuesSitInsideSettingRows() {
+        // SettingRowView redirects its XML children into a value slot; the
+        // wired IDs must still resolve somewhere beneath it.
+        for (id in listOf(R.id.nativeVersionValue, R.id.bundleCacheValue, R.id.guestValue)) {
+            val root = inflate(R.layout.fragment_setup)
+            var parent = root.findViewById<View>(id).parent
+            var insideRow = false
+            while (parent != null && parent !== root) {
+                if (parent is SettingRowView) {
+                    insideRow = true
+                    break
+                }
+                parent = (parent as? View)?.parent
+            }
+            assertTrue(
+                "missing SettingRowView above ${root.resources.getResourceEntryName(id)}",
+                insideRow,
+            )
+        }
+    }
+
+    private fun assertViewType(layout: Int, id: Int, type: Class<out View>) {
+        val root = inflate(layout)
+        val found = root.findViewById<View>(id)
+        assertNotNull(
+            "missing view: ${root.resources.getResourceEntryName(id)}",
+            found,
+        )
+        assertTrue(
+            "${root.resources.getResourceEntryName(id)} is ${found.javaClass.simpleName}, " +
+                "want ${type.simpleName}",
+            type.isInstance(found),
+        )
+    }
+
     private fun assertIds(layout: Int, ids: List<Int>) {
+        val view = inflate(layout)
+        for (id in ids) {
+            assertNotNull(
+                "missing view: ${view.resources.getResourceEntryName(id)}",
+                view.findViewById<View>(id),
+            )
+        }
+    }
+
+    private fun inflate(layout: Int): View {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = themedContext()
         // Inflate on main: animated widgets (ripples, button states) start
@@ -181,13 +246,7 @@ class LayoutInflationTest {
         instrumentation.runOnMainSync {
             root = LayoutInflater.from(context).inflate(layout, null)
         }
-        val view = root!!
-        for (id in ids) {
-            assertNotNull(
-                "missing view: ${context.resources.getResourceEntryName(id)}",
-                view.findViewById<View>(id),
-            )
-        }
+        return root!!
     }
 
     private fun themedContext(): ContextThemeWrapper {

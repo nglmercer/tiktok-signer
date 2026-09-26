@@ -1,23 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- One event row: category badge, rendered line, arrival time. -->
+<!-- One event row: pill badge, rendered line, muted arrival time. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:gravity="center_vertical"
     android:orientation="horizontal"
     android:paddingVertical="6dp"
-    android:paddingHorizontal="8dp">
+    android:paddingHorizontal="4dp">
 
     <TextView
         android:id="@+id/eventBadge"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginEnd="8dp"
-        android:background="?attr/colorSecondaryContainer"
+        android:layout_marginEnd="@dimen/space_sm"
+        android:background="@drawable/bg_pill"
         android:ellipsize="none"
         android:maxLines="1"
         android:paddingVertical="2dp"
-        android:paddingHorizontal="6dp"
+        android:paddingHorizontal="8dp"
         android:textAppearance="@style/TextAppearance.Material3.LabelSmall"
         android:textColor="?attr/colorOnSecondaryContainer" />
 
@@ -34,8 +34,8 @@
         android:id="@+id/eventTime"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginStart="8dp"
+        android:layout_marginStart="@dimen/space_sm"
         android:fontFamily="monospace"
-        android:textAppearance="@style/TextAppearance.Material3.BodySmall" />
+        android:textAppearance="@style/TextAppearance.TikTools.Muted" />
 
 </LinearLayout>

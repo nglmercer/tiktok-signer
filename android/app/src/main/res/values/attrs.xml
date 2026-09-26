@@ -4,4 +4,23 @@
         <attr name="cardTitle" format="string" />
         <attr name="startExpanded" format="boolean" />
     </declare-styleable>
+
+    <declare-styleable name="EmptyStateView">
+        <attr name="emptyMessage" format="string" />
+        <attr name="emptyIcon" format="reference" />
+    </declare-styleable>
+
+    <declare-styleable name="SectionHeaderView">
+        <attr name="sectionTitle" format="string" />
+        <attr name="sectionCount" format="string" />
+    </declare-styleable>
+
+    <declare-styleable name="SettingRowView">
+        <attr name="rowLabel" format="string" />
+    </declare-styleable>
+
+    <declare-styleable name="MinimalDivider">
+        <attr name="dividerInsetStart" format="dimension" />
+        <attr name="dividerInsetEnd" format="dimension" />
+    </declare-styleable>
 </resources>

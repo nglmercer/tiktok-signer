@@ -4,7 +4,7 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:padding="16dp">
+    android:padding="@dimen/space_lg">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -29,28 +29,29 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="@dimen/space_md"
             android:text="@string/triggers_title"
-            android:textAppearance="@style/TextAppearance.Material3.LabelLarge" />
+            android:textAppearance="@style/TextAppearance.TikTools.SectionLabel" />
 
         <com.google.android.material.chip.ChipGroup
             android:id="@+id/triggerChips"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content" />
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_xs" />
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
+            android:layout_marginTop="@dimen/space_xs"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginEnd="8dp"
+                android:layout_marginEnd="@dimen/space_sm"
                 android:text="@string/method_title"
-                android:textAppearance="@style/TextAppearance.Material3.LabelLarge" />
+                android:textAppearance="@style/TextAppearance.TikTools.SectionLabel" />
 
             <Spinner
                 android:id="@+id/methodSpinner"
@@ -62,7 +63,7 @@
         <com.google.android.material.textfield.TextInputLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="@dimen/space_sm"
             android:hint="@string/url_hint"
             style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense">
 
@@ -79,7 +80,7 @@
         <com.google.android.material.textfield.TextInputLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="@dimen/space_sm"
             android:hint="@string/body_hint"
             style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense">
 
@@ -96,7 +97,7 @@
         <com.google.android.material.textfield.TextInputLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="@dimen/space_sm"
             android:hint="@string/cooldown_hint"
             style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense">
 
@@ -112,9 +113,9 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="@dimen/space_sm"
             android:text="@string/template_help"
-            android:textAppearance="@style/TextAppearance.Material3.BodySmall" />
+            android:textAppearance="@style/TextAppearance.TikTools.Muted" />
 
     </LinearLayout>
 

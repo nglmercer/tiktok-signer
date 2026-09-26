@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Minimalist spacing scale: one step (4dp) between related rows, two
+         steps between sections, three for screen edges. -->
+    <dimen name="space_xs">4dp</dimen>
+    <dimen name="space_sm">8dp</dimen>
+    <dimen name="space_md">12dp</dimen>
+    <dimen name="space_lg">16dp</dimen>
+
+    <!-- Single corner radius shared by cards, pills use a full round. -->
+    <dimen name="radius_minimal">12dp</dimen>
+    <dimen name="stroke_minimal">1dp</dimen>
+</resources>

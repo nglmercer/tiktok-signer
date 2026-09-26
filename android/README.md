@@ -21,6 +21,28 @@ small Android sibling: actions, events viewer, points, and config only.
 | Actions | Fetch-only automations: pick trigger kinds, GET/POST a URL template with `{{user}} {{name}} {{text}} {{type}} {{count}} {{diamonds}}`, cooldown, test fire, run log |
 | Setup | Direct login (username input + live feed, one tap connects), TTS engine console, signer/session maintenance, debug console |
 
+## Design
+
+The UI is deliberately minimalist: flat outlined cards (no shadows), one
+12dp corner radius, a 4/8/12/16dp spacing scale (`values/dimens.xml`),
+sentence-case letterspaced section labels, muted secondary lines, hairline
+dividers between rows, and counts as a quiet `· N` suffix that disappears
+while empty. All color comes from the Material3 theme (day/night + dynamic
+color), plus the three semantic connection dots.
+
+Shared building blocks live in `.../ui/`:
+
+| Component | What it is |
+|---|---|
+| `UiKit` | One home for the label rules: `sectionTitle` (`Events · 12`), `countsLine` (`chat 3 · gift 1`), `dp`, `addMinimalDividers` |
+| `EmptyStateView` | Centered muted icon + one line; every empty list (events, leaderboard, actions) |
+| `SectionHeaderView` | Small label + optional count; headings of the flat cards (rates, adjust, TTS, signer) |
+| `SettingRowView` | Label-over-value slot; the Setup maintenance rows keep their wired value IDs inside it |
+| `MinimalDivider` | 1dp outline-variant hairline with optional insets |
+| `CollapsibleCard` | Flat tappable-header card, `setTitleWithCount` for the `· N` suffix |
+| `StatusPillView` | 8dp dot + one-line connection state |
+| `LogConsoleView` | Shared debug console: follows, copies, clears |
+
 ## Data
 
 - `tiktools-studio.db` (SQLite, one `SQLiteOpenHelper`): `viewers` point
@@ -120,6 +142,8 @@ cd android && ./gradlew connectedDebugAndroidTest
 | `.../TtlEvents.kt` | Stream callback interface (must match `jni_live.rs`) |
 | `.../EventFormat.kt` | One event JSON object → one display line |
 | `.../MainActivity.kt` | Four-tab shell over the shared view model |
-| `.../ui/` | `CollapsibleCard`, `LogConsoleView`, `StatusPillView` building blocks |
-| `app/src/test/...` | JVM unit tests (pure logic, no device) |
-| `app/src/androidTest/...` | On-device tests: layout inflation + full connect/stream/disconnect flow |
+| `.../ui/` | `UiKit`, `EmptyStateView`, `SectionHeaderView`, `SettingRowView`, `MinimalDivider`, `CollapsibleCard`, `LogConsoleView`, `StatusPillView` |
+| `values/dimens.xml` + `themes.xml` | Spacing scale, `Widget.TikTools.MinimalCard`, `SectionLabel`/`Muted` text styles, thin-indicator tabs |
+| `drawable/bg_pill.xml` | Flat pill behind event badges and level chips |
+| `app/src/test/...` | JVM unit tests (pure logic, no device — incl. `ui/UiKitTest`) |
+| `app/src/androidTest/...` | On-device tests: layout inflation + shared-component types + full connect/stream/disconnect flow |

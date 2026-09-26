@@ -18,6 +18,8 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.ttlsigner.points.PointsConfig
 import com.example.ttlsigner.ui.CollapsibleCard
+import com.example.ttlsigner.ui.EmptyStateView
+import com.example.ttlsigner.ui.UiKit.addMinimalDividers
 import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.launch
 
@@ -65,7 +67,7 @@ class PointsFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         val boardCard: CollapsibleCard = view.findViewById(R.id.boardCard)
-        val boardEmpty: TextView = view.findViewById(R.id.boardEmpty)
+        val boardEmpty: EmptyStateView = view.findViewById(R.id.boardEmpty)
         val boardList: RecyclerView = view.findViewById(R.id.boardList)
         val ratesBox: LinearLayout = view.findViewById(R.id.ratesBox)
         val currencyInput: TextInputEditText = view.findViewById(R.id.currencyInput)
@@ -77,6 +79,7 @@ class PointsFragment : Fragment() {
         val resetButton: Button = view.findViewById(R.id.resetButton)
 
         boardList.layoutManager = LinearLayoutManager(requireContext())
+        boardList.addMinimalDividers()
         val adapter = PointsAdapter()
         boardList.adapter = adapter
 
@@ -136,7 +139,7 @@ class PointsFragment : Fragment() {
                     vm.points.leaderboard.collect { viewers ->
                         adapter.submitList(viewers)
                         boardEmpty.visibility = if (viewers.isEmpty()) View.VISIBLE else View.GONE
-                        boardCard.setTitle("$boardLabel (${viewers.size})")
+                        boardCard.setTitleWithCount(boardLabel, viewers.size)
                     }
                 }
                 launch {

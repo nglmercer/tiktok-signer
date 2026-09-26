@@ -18,7 +18,10 @@ import androidx.recyclerview.widget.RecyclerView
 import com.example.ttlsigner.events.EventIcons
 import com.example.ttlsigner.events.LiveEvent
 import com.example.ttlsigner.ui.CollapsibleCard
+import com.example.ttlsigner.ui.EmptyStateView
 import com.example.ttlsigner.ui.StatusPillView
+import com.example.ttlsigner.ui.UiKit
+import com.example.ttlsigner.ui.UiKit.addMinimalDividers
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import com.google.android.material.textfield.TextInputEditText
@@ -68,11 +71,12 @@ class EventsFragment : Fragment() {
         val pauseButton: Button = view.findViewById(R.id.pauseButton)
         val clearButton: Button = view.findViewById(R.id.clearButton)
         val eventsCard: CollapsibleCard = view.findViewById(R.id.eventsCard)
-        val eventsEmpty: TextView = view.findViewById(R.id.eventsEmpty)
+        val eventsEmpty: EmptyStateView = view.findViewById(R.id.eventsEmpty)
         val eventList: RecyclerView = view.findViewById(R.id.eventList)
         val awardText: TextView = view.findViewById(R.id.awardText)
 
         eventList.layoutManager = LinearLayoutManager(requireContext())
+        eventList.addMinimalDividers()
         val adapter = EventAdapter()
         eventList.adapter = adapter
 
@@ -137,20 +141,18 @@ class EventsFragment : Fragment() {
                 }
                 launch {
                     vm.eventCount.collect { total ->
-                        eventsCard.setTitle("$eventsLabel ($total)")
+                        eventsCard.setTitleWithCount(eventsLabel, total)
                     }
                 }
                 launch {
                     vm.counts.collect { counts ->
                         lastCounts = counts
                         renderChips(vm.filter.value, counts)
-                        countsText.text = if (counts.isEmpty()) {
-                            getString(R.string.events_empty_hint)
-                        } else {
-                            counts.entries.sortedBy { it.key.ordinal }.joinToString(" · ") {
-                                "${it.key.name.lowercase()} ${it.value}"
-                            }
-                        }
+                        val pairs = counts.entries
+                            .sortedBy { it.key.ordinal }
+                            .map { it.key.name.lowercase() to it.value }
+                        countsText.text =
+                            UiKit.countsLine(pairs, getString(R.string.events_empty_hint))
                     }
                 }
                 launch {

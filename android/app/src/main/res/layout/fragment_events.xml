@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Events tab: status, filter chips, search, pause/clear, event tail. -->
+<!-- Events tab: flat status header, filter chips, search, event tail. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:padding="@dimen/space_md">
 
     <com.google.android.material.card.MaterialCardView
+        style="@style/Widget.TikTools.MinimalCard"
         android:layout_width="match_parent"
         android:layout_height="wrap_content">
 
@@ -15,7 +16,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="12dp">
+            android:padding="@dimen/space_md">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -51,21 +52,21 @@
                 android:id="@+id/countsText"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginTop="@dimen/space_xs"
                 android:text="@string/events_empty_hint"
-                android:textAppearance="@style/TextAppearance.Material3.BodySmall" />
+                android:textAppearance="@style/TextAppearance.TikTools.Muted" />
 
             <TextView
                 android:id="@+id/awardText"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+                android:textAppearance="@style/TextAppearance.TikTools.Muted"
                 android:visibility="gone" />
 
             <HorizontalScrollView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_marginTop="@dimen/space_sm"
                 android:scrollbars="none">
 
                 <com.google.android.material.chip.ChipGroup
@@ -79,7 +80,7 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_marginTop="@dimen/space_sm"
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
@@ -117,7 +118,7 @@
         android:id="@+id/eventsCard"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_marginTop="12dp"
+        android:layout_marginTop="@dimen/space_md"
         android:layout_weight="1"
         app:cardTitle="@string/events_label">
 
@@ -125,14 +126,14 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:orientation="vertical"
-            android:padding="12dp">
+            android:padding="@dimen/space_md">
 
-            <TextView
+            <com.example.ttlsigner.ui.EmptyStateView
                 android:id="@+id/eventsEmpty"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="@string/events_empty"
-                android:textAppearance="@style/TextAppearance.Material3.BodyMedium" />
+                app:emptyIcon="@drawable/ic_ev_chat"
+                app:emptyMessage="@string/events_empty" />
 
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/eventList"

@@ -29,7 +29,7 @@ class StatusPillView @JvmOverloads constructor(
         orientation = HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         val density = resources.displayMetrics.density
-        val dotSize = (10 * density).toInt()
+        val dotSize = (8 * density).toInt()
         dot = View(context).apply {
             layoutParams = LayoutParams(dotSize, dotSize)
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL }
@@ -39,7 +39,9 @@ class StatusPillView @JvmOverloads constructor(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply { marginStart = (8 * density).toInt() }
-            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodySmall)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
         }
         addView(dot)
         addView(label)

@@ -20,6 +20,8 @@ import androidx.recyclerview.widget.RecyclerView
 import com.example.ttlsigner.actions.EventAction
 import com.example.ttlsigner.events.LiveEvent
 import com.example.ttlsigner.ui.CollapsibleCard
+import com.example.ttlsigner.ui.EmptyStateView
+import com.example.ttlsigner.ui.UiKit.addMinimalDividers
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import com.google.android.material.textfield.TextInputEditText
@@ -45,12 +47,13 @@ class ActionsFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         val actionsCard: CollapsibleCard = view.findViewById(R.id.actionsCard)
-        val actionsEmpty: TextView = view.findViewById(R.id.actionsEmpty)
+        val actionsEmpty: EmptyStateView = view.findViewById(R.id.actionsEmpty)
         val actionsList: RecyclerView = view.findViewById(R.id.actionsList)
         val addButton: Button = view.findViewById(R.id.addActionButton)
         val runsText: TextView = view.findViewById(R.id.runsText)
 
         actionsList.layoutManager = LinearLayoutManager(requireContext())
+        actionsList.addMinimalDividers()
         val adapter = ActionsAdapter(object : ActionsAdapter.Listener {
             override fun onToggle(action: EventAction, enabled: Boolean) {
                 vm.actions.setEnabled(action, enabled)
@@ -79,7 +82,7 @@ class ActionsFragment : Fragment() {
                         adapter.submitList(state.actions)
                         actionsEmpty.visibility =
                             if (state.actions.isEmpty()) View.VISIBLE else View.GONE
-                        actionsCard.setTitle("$actionsLabel (${state.actions.size})")
+                        actionsCard.setTitleWithCount(actionsLabel, state.actions.size)
                         runsText.text = if (state.runs.isEmpty()) {
                             getString(R.string.runs_empty)
                         } else {

@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- One feed row: room line, muted title. Tap selects the room. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
@@ -6,7 +7,8 @@
     android:clickable="true"
     android:focusable="true"
     android:orientation="vertical"
-    android:padding="8dp">
+    android:paddingVertical="6dp"
+    android:paddingHorizontal="4dp">
 
     <TextView
         android:id="@+id/roomLine"
@@ -14,8 +16,7 @@
         android:layout_height="wrap_content"
         android:ellipsize="end"
         android:maxLines="1"
-        android:textAppearance="@style/TextAppearance.Material3.BodyLarge"
-        android:textStyle="bold" />
+        android:textAppearance="@style/TextAppearance.Material3.TitleSmall" />
 
     <TextView
         android:id="@+id/titleLine"
@@ -23,6 +24,6 @@
         android:layout_height="wrap_content"
         android:ellipsize="end"
         android:maxLines="1"
-        android:textAppearance="@style/TextAppearance.Material3.BodyMedium" />
+        android:textAppearance="@style/TextAppearance.TikTools.Muted" />
 
 </LinearLayout>

@@ -5,7 +5,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:padding="@dimen/space_md">
 
     <com.example.ttlsigner.ui.CollapsibleCard
         android:id="@+id/actionsCard"
@@ -18,27 +18,27 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:orientation="vertical"
-            android:padding="12dp">
+            android:padding="@dimen/space_md">
 
             <Button
                 android:id="@+id/addActionButton"
+                style="@style/Widget.Material3.Button.OutlinedButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/action_add" />
 
-            <TextView
+            <com.example.ttlsigner.ui.EmptyStateView
                 android:id="@+id/actionsEmpty"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/actions_empty"
-                android:textAppearance="@style/TextAppearance.Material3.BodyMedium" />
+                app:emptyIcon="@drawable/ic_ev_share"
+                app:emptyMessage="@string/actions_empty" />
 
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/actionsList"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:layout_marginTop="8dp"
+                android:layout_marginTop="@dimen/space_sm"
                 android:clipToPadding="false" />
 
         </LinearLayout>
@@ -49,14 +49,14 @@
         android:id="@+id/runsCard"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_marginTop="12dp"
+        android:layout_marginTop="@dimen/space_md"
         android:layout_weight="1"
         app:cardTitle="@string/runs_label">
 
         <ScrollView
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:padding="12dp">
+            android:padding="@dimen/space_md">
 
             <TextView
                 android:id="@+id/runsText"
@@ -64,7 +64,7 @@
                 android:layout_height="wrap_content"
                 android:fontFamily="monospace"
                 android:text="@string/runs_empty"
-                android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+                android:textAppearance="@style/TextAppearance.TikTools.Muted"
                 android:textIsSelectable="true" />
 
         </ScrollView>
