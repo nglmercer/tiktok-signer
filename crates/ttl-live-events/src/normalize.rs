@@ -9,6 +9,7 @@ use ttl_live_proto::messages::{
     Contributor, WebcastChatMessage, WebcastGiftMessage, WebcastLikeMessage, WebcastMemberMessage,
     WebcastRoomUserSeqMessage, WebcastSocialMessage,
 };
+use ttl_live_proto::webcast::model::Gift;
 
 use crate::event::{
     ChatEvent, GiftEvent, LikeEvent, LiveEvent, MemberEvent, RoomUserEvent, SocialEvent,
@@ -44,6 +45,7 @@ pub(crate) fn gift(payload: &[u8]) -> Result<LiveEvent, prost::DecodeError> {
         combo_count: count(message.combo_count),
         group_id: count(message.group_id),
         repeat_end: message.repeat_end != 0,
+        gift_image_url: detail.and_then(gift_image_url),
     }))
 }
 
@@ -85,6 +87,21 @@ pub(crate) fn room_user(payload: &[u8]) -> Result<LiveEvent, prost::DecodeError>
         top_viewers: message.ranks.iter().map(top_viewer).collect(),
         ranked_viewers: message.ranks.iter().map(top_viewer).collect(),
     }))
+}
+
+/// Best available gift artwork: the full `image`, then the small `icon`,
+/// then the `preview_image`. Each is an `ImageModel` whose first URL wins.
+fn gift_image_url(detail: &Gift) -> Option<String> {
+    [&detail.image, &detail.icon, &detail.preview_image]
+        .into_iter()
+        .flatten()
+        .find_map(|image| {
+            image
+                .url_list
+                .first()
+                .filter(|url| !url.is_empty())
+                .cloned()
+        })
 }
 
 fn top_viewer(contributor: &Contributor) -> crate::event::TopViewer {

@@ -86,6 +86,44 @@ class FeedTest {
     }
 
     @Test
+    fun parseKeepsCoverAndAvatarUrls() {
+        val raw = JSONObject()
+            .put("status", 2)
+            .put("id_str", "100")
+            .put("title", "Ay live")
+            .put("user_count", 50)
+            .put("cover", JSONObject().put("url_list", org.json.JSONArray(listOf(
+                "https://cdn/cover.webp",
+                "https://cdn/cover2.webp",
+            ))))
+            .put("owner", JSONObject()
+                .put("display_id", "a")
+                .put("nickname", "Ay")
+                .put("avatar_thumb", JSONObject().put("url_list", org.json.JSONArray(listOf(
+                    "https://cdn/avatar.webp",
+                )))))
+            .toString()
+        val body = JSONObject()
+            .put("status_code", 0)
+            .put("data", org.json.JSONArray(listOf(
+                JSONObject().put("live_info", JSONObject().put("raw_data", raw)),
+            )))
+            .toString()
+        val rooms = Feed.parseFeed(body)
+        assertEquals(1, rooms.size)
+        assertEquals("https://cdn/cover.webp", rooms[0].coverUrl)
+        assertEquals("https://cdn/avatar.webp", rooms[0].avatarUrl)
+    }
+
+    @Test
+    fun missingImagesParseAsEmpty() {
+        val rooms = Feed.parseFeed(fixture())
+        assertTrue(rooms.all { it.coverUrl.isEmpty() && it.avatarUrl.isEmpty() })
+        assertEquals("", Feed.firstImageUrl(null))
+        assertEquals("", Feed.firstImageUrl(JSONObject()))
+    }
+
+    @Test
     fun malformedFeedIsAnError() {
         for (bad in listOf("not json", "", """{"status_code":0}""")) {
             try {

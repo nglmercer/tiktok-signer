@@ -65,10 +65,10 @@
 
     <!-- Setup tab. -->
     <string name="username_hint">@someone or room id — Connect logs in directly</string>
+    <string name="connect_background_hint">Stays connected in the background while live.</string>
     <string name="connect">Connect</string>
     <string name="disconnect">Disconnect</string>
-    <string name="feed">Refresh feed</string>
-    <string name="random">Surprise me</string>
+    <string name="random">Connect a random room</string>
     <string name="feed_label">Live feed</string>
     <string name="handle_hint">@someone</string>
     <string name="output_label">Debug log</string>

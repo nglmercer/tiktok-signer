@@ -3,10 +3,12 @@ package com.example.ttlsigner
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
+import com.example.ttlsigner.ui.ImageLoader
 
-/** Renders feed rooms; a tap selects the room for connecting. */
+/** Renders feed rooms; a tap connects to the room directly. */
 class FeedAdapter(
     private val onSelect: (Feed.LiveRoom) -> Unit,
 ) : RecyclerView.Adapter<FeedAdapter.ViewHolder>() {
@@ -14,6 +16,7 @@ class FeedAdapter(
     private var rooms: List<Feed.LiveRoom> = emptyList()
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+        val thumb: ImageView = view.findViewById(R.id.feedThumb)
         val roomLine: TextView = view.findViewById(R.id.roomLine)
         val titleLine: TextView = view.findViewById(R.id.titleLine)
     }
@@ -29,6 +32,13 @@ class FeedAdapter(
         val name = room.nickname.ifEmpty { room.uniqueId }
         holder.roomLine.text = "$name (@${room.uniqueId}) · ${room.viewers} watching"
         holder.titleLine.text = room.title.ifEmpty { "(no title)" }
+        // Cover art first, broadcaster avatar as the fallback frame.
+        ImageLoader.load(
+            holder.thumb,
+            room.coverUrl.ifEmpty { room.avatarUrl },
+            placeholder = R.drawable.ic_ev_room,
+            fallback = R.drawable.ic_ev_room,
+        )
         holder.itemView.setOnClickListener { onSelect(room) }
     }
 

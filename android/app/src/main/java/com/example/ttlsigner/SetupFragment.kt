@@ -45,11 +45,9 @@ class SetupFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         val statusPill: StatusPillView = view.findViewById(R.id.statusPill)
         val usernameInput: TextInputEditText = view.findViewById(R.id.usernameInput)
-        val connectButton: Button = view.findViewById(R.id.connectButton)
-        val disconnectButton: Button = view.findViewById(R.id.disconnectButton)
+        val connectToggleButton: Button = view.findViewById(R.id.connectToggleButton)
         val setupProgress: LinearProgressIndicator = view.findViewById(R.id.setupProgress)
         val feedCard: CollapsibleCard = view.findViewById(R.id.feedCard)
-        val feedButton: Button = view.findViewById(R.id.feedButton)
         val randomButton: Button = view.findViewById(R.id.randomButton)
         val feedError: TextView = view.findViewById(R.id.feedError)
         val feedList: RecyclerView = view.findViewById(R.id.feedList)
@@ -58,6 +56,7 @@ class SetupFragment : Fragment() {
         val supertonicStatus: TextView = view.findViewById(R.id.supertonicStatus)
         val supertonicProgress: LinearProgressIndicator = view.findViewById(R.id.supertonicProgress)
         val downloadSupertonicButton: Button = view.findViewById(R.id.downloadSupertonicButton)
+        val ttsEngineActionsRow: View = view.findViewById(R.id.ttsEngineActionsRow)
         val testSpeechButton: Button = view.findViewById(R.id.testSpeechButton)
         val ttsControlsHint: TextView = view.findViewById(R.id.ttsControlsHint)
         val ttsControlsRow: View = view.findViewById(R.id.ttsControlsRow)
@@ -77,10 +76,29 @@ class SetupFragment : Fragment() {
         val feedAdapter = FeedAdapter { room -> vm.selectRoom(room) }
         feedList.adapter = feedAdapter
 
-        connectButton.setOnClickListener { vm.connect(usernameInput.text.toString()) }
-        disconnectButton.setOnClickListener { vm.disconnect("user request") }
-        feedButton.setOnClickListener { vm.refreshFeed() }
+        // One connection button, driven by state: Connect while idle, Disconnect
+        // once leaving idle (which also cancels a pending connect).
+        fun syncToggle() {
+            val idle = vm.live.value is SessionViewModel.LiveStatus.Idle
+            connectToggleButton.text =
+                getString(if (idle) R.string.connect else R.string.disconnect)
+            connectToggleButton.isEnabled = !idle || !vm.busy.value
+        }
+        connectToggleButton.setOnClickListener {
+            if (vm.live.value is SessionViewModel.LiveStatus.Idle) {
+                vm.connect(usernameInput.text.toString())
+            } else {
+                vm.disconnect("user request")
+            }
+        }
+        syncToggle()
         randomButton.setOnClickListener { vm.connectRandom() }
+
+        // The feed always loads itself: opening Setup with an empty list
+        // fetches it, so there is no refresh button to hunt for.
+        if (vm.feed.value.rooms.isEmpty() && !vm.feed.value.loading && !vm.busy.value) {
+            vm.refreshFeed()
+        }
 
         fun checkEngine(engine: TtsEngine) {
             val id = when (engine) {
@@ -91,6 +109,18 @@ class SetupFragment : Fragment() {
             if (ttsEngineGroup.checkedRadioButtonId != id) ttsEngineGroup.check(id)
         }
         checkEngine(vm.ttsEngine.value)
+        // Progressive disclosure: options appear only for the selected engine —
+        // nothing TTS-related while off, nothing SuperTonic while on device voice.
+        fun applyTtsVisibility(engine: TtsEngine) {
+            val on = if (engine != TtsEngine.OFF) View.VISIBLE else View.GONE
+            val superOnly = if (engine == TtsEngine.SUPERTONIC) View.VISIBLE else View.GONE
+            ttsJoinsSwitch.visibility = on
+            ttsEngineActionsRow.visibility = on
+            supertonicStatus.visibility = superOnly
+            downloadSupertonicButton.visibility = superOnly
+            if (engine != TtsEngine.SUPERTONIC) supertonicProgress.visibility = View.GONE
+        }
+        applyTtsVisibility(vm.ttsEngine.value)
         ttsEngineGroup.setOnCheckedChangeListener { _, id ->
             vm.setTtsEngine(
                 when (id) {
@@ -175,17 +205,14 @@ class SetupFragment : Fragment() {
                 launch {
                     vm.live.collect { status ->
                         statusPill.setStatus(status)
-                        connectButton.isEnabled = status is SessionViewModel.LiveStatus.Idle
-                        disconnectButton.isEnabled = status !is SessionViewModel.LiveStatus.Idle
+                        syncToggle()
                     }
                 }
                 launch {
                     vm.busy.collect { busy ->
                         setupProgress.visibility = if (busy) View.VISIBLE else View.GONE
-                        connectButton.isEnabled = !busy &&
-                            vm.live.value is SessionViewModel.LiveStatus.Idle
-                        feedButton.isEnabled = !busy
                         randomButton.isEnabled = !busy
+                        syncToggle()
                     }
                 }
                 launch {
@@ -207,7 +234,10 @@ class SetupFragment : Fragment() {
                     }
                 }
                 launch {
-                    vm.ttsEngine.collect { checkEngine(it) }
+                    vm.ttsEngine.collect { engine ->
+                        checkEngine(engine)
+                        applyTtsVisibility(engine)
+                    }
                 }
                 launch {
                     // Repeat / skip show only while speech is on.
@@ -225,8 +255,12 @@ class SetupFragment : Fragment() {
                 }
                 launch {
                     vm.supertonicModels.collect { models ->
-                        supertonicProgress.visibility =
-                            if (models.downloading) View.VISIBLE else View.GONE
+                        // The bar belongs to the SuperTonic section: a download
+                        // started there keeps running when the user switches away,
+                        // but its progress hides with the section.
+                        val show = models.downloading &&
+                            vm.ttsEngine.value == TtsEngine.SUPERTONIC
+                        supertonicProgress.visibility = if (show) View.VISIBLE else View.GONE
                         models.progress?.let { supertonicProgress.setProgressCompat((it * 100).toInt(), true) }
                         downloadSupertonicButton.isEnabled = !models.downloading && !models.ready
                         val engineLine = when (val state = vm.supertonicState.value) {

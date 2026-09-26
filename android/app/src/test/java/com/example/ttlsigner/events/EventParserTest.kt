@@ -72,6 +72,39 @@ class EventParserTest {
     }
 
     @Test
+    fun chatKeepsAvatarUrl() {
+        val event = EventParser.parse(
+            """{"type":"chat","comment":"hi","user":{"unique_id":"ay","nickname":"Ay","avatar_url":"https://cdn/a.webp"}}""",
+        )
+        assertEquals("https://cdn/a.webp", event.avatarUrl)
+        assertEquals("", event.giftImageUrl)
+    }
+
+    @Test
+    fun giftKeepsArtworkUrl() {
+        val event = EventParser.parse(
+            """{"type":"gift","gift_name":"Rose","gift_image_url":"https://cdn/rose.webp","user":{"unique_id":"ay"}}""",
+        )
+        assertEquals(LiveEvent.Category.GIFT, event.category)
+        assertEquals("https://cdn/rose.webp", event.giftImageUrl)
+    }
+
+    @Test
+    fun nullImageUrlsParseAsEmpty() {
+        // serde serializes a missing URL as null; older builds omit the keys.
+        val nulled = EventParser.parse(
+            """{"type":"chat","comment":"hi","user":{"unique_id":"ay","avatar_url":null},"gift_image_url":null}""",
+        )
+        assertEquals("", nulled.avatarUrl)
+        assertEquals("", nulled.giftImageUrl)
+        val omitted = EventParser.parse(
+            """{"type":"chat","comment":"hi","user":{"unique_id":"ay"}}""",
+        )
+        assertEquals("", omitted.avatarUrl)
+        assertEquals("", omitted.giftImageUrl)
+    }
+
+    @Test
     fun rawPayloadIsKeptForActionsAndDebugging() {
         val json = """{"type":"like","count":3,"user":{"unique_id":"ay"}}"""
         val event = EventParser.parse(json)

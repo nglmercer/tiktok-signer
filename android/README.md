@@ -19,7 +19,7 @@ small Android sibling: actions, events viewer, points, and config only.
 | Events | Live reader: icon toolbar (search, filter, row style, pause, clear), search icon expanding a field on tap, filter dropdown with icon checkbox rows + Select all/Clear, per-type counts, latest award, customizable rows (minimalist default) |
 | Points | SQLite leaderboard, per-event rates editor (mirrors desktop `PointsConfig`), manual adjust, reset |
 | Actions | Fetch-only automations: pick trigger kinds, GET/POST a URL template with `{{user}} {{name}} {{text}} {{type}} {{count}} {{diamonds}}`, cooldown, test fire, run log |
-| Setup | Direct login (username input + live feed, one tap connects), TTS engine console, signer/session maintenance, debug console |
+| Setup | Direct login (username input + auto-loading live feed with cover thumbnails, one tap connects), single connect/disconnect toggle, TTS engine console, signer/session maintenance, debug console |
 
 ## Design
 
@@ -142,7 +142,7 @@ cd android && ./gradlew connectedDebugAndroidTest
 
 | File | What it is |
 |---|---|
-| `.../events/LiveEvent.kt` | Typed event model + total JSON parser |
+| `.../events/LiveEvent.kt` | Typed event model (incl. avatar + gift image URLs) + total JSON parser |
 | `.../events/EventFilter.kt` | Category set + query matching, select-all / clear-selection |
 | `.../events/EventDisplayConfig.kt` | Customizable row style (density, badge, time, lines), minimalist default, prefs-backed |
 | `.../events/EventIcons.kt` | Category → vector drawable for the filter rows |
@@ -166,14 +166,14 @@ cd android && ./gradlew connectedDebugAndroidTest
 | `.../RustSigner.kt` | Warm native signer: `open` once, `sign` per request |
 | `.../Discovery.kt` | Unsigned `unique_id` → `room_id` lookup + parsing |
 | `.../BundleFetch.kt` | Bundle download + SHA-256 pin |
-| `.../Feed.kt` | Live feed: unsigned search + guest cookies, parse/sort |
-| `.../FeedAdapter.kt` | Feed rows; tap selects a room for connecting |
+| `.../Feed.kt` | Live feed: unsigned search + guest cookies, parse/sort, cover + avatar URLs |
+| `.../FeedAdapter.kt` | Feed rows with cover thumbnails; tap connects directly |
 | `.../Logger.kt` | Timestamped log lines; logcat gets signature summaries only |
 | `.../LiveClient.kt` | Live event stream: worker callbacks posted to main |
 | `.../TtlEvents.kt` | Stream callback interface (must match `jni_live.rs`) |
 | `.../EventFormat.kt` | One event JSON object → one display line |
 | `.../MainActivity.kt` | Four-tab shell over the shared view model |
-| `.../ui/` | `UiKit`, `EmptyStateView`, `SectionHeaderView`, `SettingRowView`, `MinimalDivider`, `CollapsibleCard`, `LogConsoleView`, `StatusPillView` |
+| `.../ui/` | `UiKit`, `EmptyStateView`, `SectionHeaderView`, `SettingRowView`, `MinimalDivider`, `CollapsibleCard`, `LogConsoleView`, `StatusPillView`, `ImageLoader` (memory-cached URL → `ImageView`) |
 | `values/dimens.xml` + `themes.xml` | Spacing scale, `Widget.TikTools.MinimalCard`, `SectionLabel`/`Muted` text styles, thin-indicator tabs |
 | `drawable/bg_pill.xml` | Flat pill behind event badges and level chips |
 | `app/src/test/...` | JVM unit tests (pure logic, no device — incl. `ui/UiKitTest`) |

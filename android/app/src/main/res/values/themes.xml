@@ -29,4 +29,16 @@
         <item name="tabIndicatorHeight">2dp</item>
         <item name="tabIndicatorColor">?attr/colorPrimary</item>
     </style>
+
+    <!-- Circular avatars (ShapeableImageView overlay). -->
+    <style name="ShapeAppearance.TikTools.Circle" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">50%</item>
+    </style>
+
+    <!-- Softly rounded thumbnails (ShapeableImageView overlay). -->
+    <style name="ShapeAppearance.TikTools.Rounded8" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">8dp</item>
+    </style>
 </resources>

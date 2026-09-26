@@ -25,7 +25,7 @@ class UiFlowTest {
         scenario.onActivity { activity = it }
         try {
             onView(withText(R.string.tab_setup)).perform(click())
-            onView(withId(R.id.feedButton)).perform(scrollTo(), click())
+            // The feed loads itself on open; no refresh tap needed.
             assertTrue("feed never rendered", waitFor(30_000) { activityFeedRows() > 0 })
 
             tapFirstFeedRow()
@@ -37,7 +37,7 @@ class UiFlowTest {
             assertTrue("no events rendered", waitFor(45_000) { activityEventRows() > 0 })
 
             onView(withText(R.string.tab_setup)).perform(click())
-            onView(withId(R.id.disconnectButton)).perform(scrollTo(), click())
+            onView(withId(R.id.connectToggleButton)).perform(scrollTo(), click())
             assertTrue("disconnect never landed", waitFor(15_000) {
                 outputText().contains("disconnected in")
             })

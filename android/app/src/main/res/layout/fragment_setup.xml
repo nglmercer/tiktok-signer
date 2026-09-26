@@ -45,34 +45,21 @@
 
                 </com.google.android.material.textfield.TextInputLayout>
 
-                <LinearLayout
+                <Button
+                    android:id="@+id/connectToggleButton"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="@dimen/space_md"
-                    android:orientation="horizontal">
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="@string/connect" />
 
-                    <Button
-                        android:id="@+id/connectButton"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_marginEnd="@dimen/space_sm"
-                        android:layout_weight="1"
-                        android:ellipsize="end"
-                        android:maxLines="1"
-                        android:text="@string/connect" />
-
-                    <Button
-                        android:id="@+id/disconnectButton"
-                        style="@style/Widget.Material3.Button.OutlinedButton"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:ellipsize="end"
-                        android:enabled="false"
-                        android:maxLines="1"
-                        android:text="@string/disconnect" />
-
-                </LinearLayout>
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_sm"
+                    android:text="@string/connect_background_hint"
+                    android:textAppearance="@style/TextAppearance.TikTools.Muted" />
 
                 <com.google.android.material.progressindicator.LinearProgressIndicator
                     android:id="@+id/setupProgress"
@@ -99,33 +86,14 @@
                 android:orientation="vertical"
                 android:padding="@dimen/space_md">
 
-                <LinearLayout
+                <Button
+                    android:id="@+id/randomButton"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal">
-
-                    <Button
-                        android:id="@+id/feedButton"
-                        style="@style/Widget.Material3.Button.OutlinedButton"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_marginEnd="@dimen/space_sm"
-                        android:layout_weight="1"
-                        android:ellipsize="end"
-                        android:maxLines="1"
-                        android:text="@string/feed" />
-
-                    <Button
-                        android:id="@+id/randomButton"
-                        style="@style/Widget.Material3.Button.OutlinedButton"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:ellipsize="end"
-                        android:maxLines="1"
-                        android:text="@string/random" />
-
-                </LinearLayout>
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="@string/random" />
 
                 <TextView
                     android:id="@+id/feedError"
@@ -221,6 +189,7 @@
                     android:visibility="gone" />
 
                 <LinearLayout
+                    android:id="@+id/ttsEngineActionsRow"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="@dimen/space_sm"
@@ -374,14 +343,32 @@
 
                 </LinearLayout>
 
-                <com.example.ttlsigner.ui.MinimalDivider
+            </LinearLayout>
+
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.TikTools.MinimalCard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_md">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="@dimen/space_md">
+
+                <com.example.ttlsigner.ui.SectionHeaderView
+                    android:id="@+id/sessionHeader"
                     android:layout_width="match_parent"
-                    android:layout_height="1dp"
-                    android:layout_marginVertical="@dimen/space_sm" />
+                    android:layout_height="wrap_content"
+                    app:sectionTitle="@string/settings_session" />
 
                 <com.example.ttlsigner.ui.SettingRowView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_sm"
                     app:rowLabel="@string/settings_cookies">
 
                     <TextView

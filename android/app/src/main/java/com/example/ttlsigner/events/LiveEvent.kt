@@ -21,6 +21,10 @@ data class LiveEvent(
     val count: Long,
     /** Gift diamond value; 0 when absent. */
     val diamonds: Long,
+    /** Sender avatar URL (`user.avatar_url`); empty when absent. */
+    val avatarUrl: String = "",
+    /** Gift artwork URL; empty when absent or not a gift. */
+    val giftImageUrl: String = "",
     /** Epoch millis when the event landed on device. */
     val at: Long = System.currentTimeMillis(),
     /** The original JSON, kept for actions templates and debugging. */
@@ -49,7 +53,7 @@ object EventParser {
         val value = try {
             JSONObject(json)
         } catch (e: Exception) {
-            return LiveEvent(LiveEvent.Category.UNKNOWN, "", "", "", 0, 0, at, json)
+            return LiveEvent(LiveEvent.Category.UNKNOWN, "", "", "", 0, 0, at = at, raw = json)
         }
         val type = value.optString("type", "?")
         val userObj = value.optJSONObject("user")
@@ -62,6 +66,10 @@ object EventParser {
             text = "",
             count = 0,
             diamonds = 0,
+            // optString maps a JSON null (serde's None) to the default, so
+            // older native builds without these keys parse identically.
+            avatarUrl = userObj?.optString("avatar_url", "").orEmpty(),
+            giftImageUrl = value.optString("gift_image_url", ""),
             at = at,
             raw = json,
         )

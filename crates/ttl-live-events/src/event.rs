@@ -21,6 +21,10 @@ pub struct GiftEvent {
     pub combo_count: u64,
     pub group_id: u64,
     pub repeat_end: bool,
+    /// Best available gift artwork URL from the detail block (`image`, then
+    /// `icon`, then `preview_image`). Absent on repeat messages whose detail
+    /// block TikTok omits.
+    pub gift_image_url: Option<String>,
 }
 
 /// A like burst. `count` is this batch, `total` the room-wide running total.

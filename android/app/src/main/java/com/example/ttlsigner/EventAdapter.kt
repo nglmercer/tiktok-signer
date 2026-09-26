@@ -3,12 +3,14 @@ package com.example.ttlsigner
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.example.ttlsigner.events.EventDisplayConfig
 import com.example.ttlsigner.events.LiveEvent
+import com.example.ttlsigner.ui.ImageLoader
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -41,8 +43,10 @@ class EventAdapter(
     }
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+        val avatar: ImageView = view.findViewById(R.id.eventAvatar)
         val badge: TextView = view.findViewById(R.id.eventBadge)
         val body: TextView = view.findViewById(R.id.eventBody)
+        val giftImage: ImageView = view.findViewById(R.id.eventGiftImage)
         val time: TextView = view.findViewById(R.id.eventTime)
     }
 
@@ -54,6 +58,31 @@ class EventAdapter(
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val event = getItem(position)
+        // Avatar only when the sender shipped one: userless rows (room stats,
+        // unknowns) keep the clean text-only shape.
+        if (event.avatarUrl.isEmpty()) {
+            holder.avatar.visibility = View.GONE
+        } else {
+            holder.avatar.visibility = View.VISIBLE
+            ImageLoader.load(
+                holder.avatar,
+                event.avatarUrl,
+                placeholder = R.drawable.ic_ev_member,
+                fallback = R.drawable.ic_ev_member,
+            )
+        }
+        val giftUrl = if (event.category == LiveEvent.Category.GIFT) event.giftImageUrl else ""
+        if (giftUrl.isEmpty()) {
+            holder.giftImage.visibility = View.GONE
+        } else {
+            holder.giftImage.visibility = View.VISIBLE
+            ImageLoader.load(
+                holder.giftImage,
+                giftUrl,
+                placeholder = R.drawable.ic_ev_gift,
+                fallback = R.drawable.ic_ev_gift,
+            )
+        }
         holder.badge.visibility = if (display.showBadge) View.VISIBLE else View.GONE
         holder.badge.text = event.category.name.lowercase()
         holder.body.text = EventFormat.line(event.raw.ifEmpty { "{}" })

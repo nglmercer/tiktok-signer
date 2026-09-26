@@ -127,11 +127,9 @@ class LayoutInflationTest {
             listOf(
                 R.id.statusPill,
                 R.id.usernameInput,
-                R.id.connectButton,
-                R.id.disconnectButton,
+                R.id.connectToggleButton,
                 R.id.setupProgress,
                 R.id.feedCard,
-                R.id.feedButton,
                 R.id.randomButton,
                 R.id.feedError,
                 R.id.feedList,
@@ -142,6 +140,7 @@ class LayoutInflationTest {
                 R.id.ttsJoinsSwitch,
                 R.id.supertonicStatus,
                 R.id.supertonicProgress,
+                R.id.ttsEngineActionsRow,
                 R.id.downloadSupertonicButton,
                 R.id.testSpeechButton,
                 R.id.ttsControlsHint,
@@ -196,10 +195,13 @@ class LayoutInflationTest {
             actionRow = inflater.inflate(R.layout.item_action, null)
             rateRow = inflater.inflate(R.layout.item_rate, null)
         }
+        assertNotNull(feed!!.findViewById<View>(R.id.feedThumb))
         assertNotNull(feed!!.findViewById<View>(R.id.roomLine))
         assertNotNull(feed!!.findViewById<View>(R.id.titleLine))
+        assertNotNull(eventRow!!.findViewById<View>(R.id.eventAvatar))
         assertNotNull(eventRow!!.findViewById<View>(R.id.eventBadge))
         assertNotNull(eventRow!!.findViewById<View>(R.id.eventBody))
+        assertNotNull(eventRow!!.findViewById<View>(R.id.eventGiftImage))
         assertNotNull(eventRow!!.findViewById<View>(R.id.eventTime))
         assertNotNull(pointsRow!!.findViewById<View>(R.id.rankText))
         assertNotNull(pointsRow!!.findViewById<View>(R.id.userText))
@@ -229,6 +231,7 @@ class LayoutInflationTest {
         assertViewType(R.layout.fragment_points, R.id.adjustHeader, SectionHeaderView::class.java)
         assertViewType(R.layout.fragment_setup, R.id.ttsHeader, SectionHeaderView::class.java)
         assertViewType(R.layout.fragment_setup, R.id.signerHeader, SectionHeaderView::class.java)
+        assertViewType(R.layout.fragment_setup, R.id.sessionHeader, SectionHeaderView::class.java)
     }
 
     @Test

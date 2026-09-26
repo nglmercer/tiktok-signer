@@ -1,12 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- One event row: pill badge, rendered line, muted arrival time. -->
+<!-- One event row: sender avatar, pill badge, rendered line, gift art, arrival time. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:gravity="center_vertical"
     android:orientation="horizontal"
     android:paddingVertical="6dp"
     android:paddingHorizontal="4dp">
+
+    <com.google.android.material.imageview.ShapeableImageView
+        android:id="@+id/eventAvatar"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:layout_marginEnd="@dimen/space_sm"
+        android:scaleType="centerCrop"
+        android:visibility="gone"
+        app:shapeAppearanceOverlay="@style/ShapeAppearance.TikTools.Circle" />
 
     <TextView
         android:id="@+id/eventBadge"
@@ -29,6 +39,14 @@
         android:ellipsize="end"
         android:maxLines="2"
         android:textAppearance="@style/TextAppearance.Material3.BodyMedium" />
+
+    <ImageView
+        android:id="@+id/eventGiftImage"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:layout_marginStart="@dimen/space_sm"
+        android:scaleType="fitCenter"
+        android:visibility="gone" />
 
     <TextView
         android:id="@+id/eventTime"

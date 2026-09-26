@@ -25,6 +25,10 @@ object Feed {
         val nickname: String,
         val title: String,
         val viewers: Long,
+        /** Room cover art, first `cover.url_list` entry; empty when absent. */
+        val coverUrl: String = "",
+        /** Broadcaster avatar, first `owner.avatar_thumb.url_list` entry; empty when absent. */
+        val avatarUrl: String = "",
     )
 
     private const val SEARCH_HOST = "https://www.tiktok.com/api/search/live/full/?"
@@ -171,10 +175,23 @@ object Feed {
                     nickname = owner?.optString("nickname", "").orEmpty(),
                     title = room.optString("title", ""),
                     viewers = room.optLong("user_count", 0L),
+                    coverUrl = firstImageUrl(room.optJSONObject("cover")),
+                    avatarUrl = firstImageUrl(owner?.optJSONObject("avatar_thumb")),
                 )
             )
         }
         return rooms.sortedByDescending { it.viewers }
+    }
+
+    /** First entry of a TikTok image object's `url_list`; empty when absent. */
+    fun firstImageUrl(image: JSONObject?): String {
+        if (image == null) return ""
+        val urls = image.optJSONArray("url_list") ?: return ""
+        for (i in 0 until urls.length()) {
+            val url = urls.optString(i, "")
+            if (url.isNotEmpty()) return url
+        }
+        return ""
     }
 
     /** The endpoint refused anonymously: bootstrap guest cookies and retry once. */
