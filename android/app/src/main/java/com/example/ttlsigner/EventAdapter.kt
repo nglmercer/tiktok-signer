@@ -4,19 +4,35 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
+import androidx.recyclerview.widget.DiffUtil
+import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
+import com.example.ttlsigner.events.LiveEvent
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-/** Scrolling event tail. Capped so a busy room cannot grow memory without bound. */
-class EventAdapter : RecyclerView.Adapter<EventAdapter.ViewHolder>() {
+/**
+ * The event reader's rows: a category badge, the rendered line (see
+ * [EventFormat]), and the arrival time. Backed by [ListAdapter] so filter
+ * changes animate instead of flashing.
+ */
+class EventAdapter : ListAdapter<LiveEvent, EventAdapter.ViewHolder>(DIFF) {
 
     companion object {
-        const val MAX_LINES = 300
+        private val CLOCK = SimpleDateFormat("HH:mm:ss", Locale.US)
+
+        private val DIFF = object : DiffUtil.ItemCallback<LiveEvent>() {
+            override fun areItemsTheSame(a: LiveEvent, b: LiveEvent): Boolean =
+                a.at == b.at && a.raw == b.raw
+            override fun areContentsTheSame(a: LiveEvent, b: LiveEvent): Boolean = a == b
+        }
     }
 
-    private val lines = ArrayDeque<String>()
-
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-        val text: TextView = view as TextView
+        val badge: TextView = view.findViewById(R.id.eventBadge)
+        val body: TextView = view.findViewById(R.id.eventBody)
+        val time: TextView = view.findViewById(R.id.eventTime)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
@@ -26,27 +42,9 @@ class EventAdapter : RecyclerView.Adapter<EventAdapter.ViewHolder>() {
     }
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-        holder.text.text = lines[position]
-    }
-
-    override fun getItemCount(): Int = lines.size
-
-    /** Append a rendered line, dropping the oldest past the cap. */
-    fun append(line: String) {
-        lines.addLast(line)
-        if (lines.size > MAX_LINES) lines.removeFirst()
-        notifyDataSetChanged()
-    }
-
-    fun clear() {
-        lines.clear()
-        notifyDataSetChanged()
-    }
-
-    /** Replace the whole tail; the view model owns the cap. */
-    fun submitList(rendered: List<String>) {
-        lines.clear()
-        lines.addAll(rendered.takeLast(MAX_LINES))
-        notifyDataSetChanged()
+        val event = getItem(position)
+        holder.badge.text = event.category.name.lowercase()
+        holder.body.text = EventFormat.line(event.raw.ifEmpty { "{}" })
+        holder.time.text = CLOCK.format(Date(event.at))
     }
 }

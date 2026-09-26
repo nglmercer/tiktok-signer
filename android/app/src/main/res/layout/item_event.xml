@@ -1,9 +1,41 @@
 <?xml version="1.0" encoding="utf-8"?>
-<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- One event row: category badge, rendered line, arrival time. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:ellipsize="end"
-    android:fontFamily="monospace"
-    android:maxLines="2"
-    android:padding="8dp"
-    android:textAppearance="@style/TextAppearance.Material3.BodySmall" />
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingVertical="6dp"
+    android:paddingHorizontal="8dp">
+
+    <TextView
+        android:id="@+id/eventBadge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="8dp"
+        android:background="?attr/colorSecondaryContainer"
+        android:ellipsize="none"
+        android:maxLines="1"
+        android:paddingVertical="2dp"
+        android:paddingHorizontal="6dp"
+        android:textAppearance="@style/TextAppearance.Material3.LabelSmall"
+        android:textColor="?attr/colorOnSecondaryContainer" />
+
+    <TextView
+        android:id="@+id/eventBody"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:ellipsize="end"
+        android:maxLines="2"
+        android:textAppearance="@style/TextAppearance.Material3.BodyMedium" />
+
+    <TextView
+        android:id="@+id/eventTime"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:fontFamily="monospace"
+        android:textAppearance="@style/TextAppearance.Material3.BodySmall" />
+
+</LinearLayout>

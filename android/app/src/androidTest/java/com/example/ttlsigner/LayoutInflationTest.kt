@@ -26,71 +26,114 @@ class LayoutInflationTest {
     }
 
     @Test
-    fun liveTabInflatesWithEveryWiredId() {
+    fun eventsTabInflatesWithEveryWiredId() {
         assertIds(
-            R.layout.fragment_live,
+            R.layout.fragment_events,
             listOf(
                 R.id.statusPill,
-                R.id.roomInput,
-                R.id.connectButton,
-                R.id.disconnectButton,
-                R.id.liveProgress,
-                R.id.feedCard,
-                R.id.feedButton,
-                R.id.randomButton,
-                R.id.feedError,
-                R.id.feedList,
+                R.id.countsText,
+                R.id.awardText,
+                R.id.filterChips,
+                R.id.searchInput,
+                R.id.pauseButton,
+                R.id.clearButton,
                 R.id.eventsCard,
                 R.id.eventsEmpty,
-                R.id.eventsClearButton,
                 R.id.eventList,
             ),
         )
     }
 
     @Test
-    fun signTabInflatesWithEveryWiredId() {
+    fun pointsTabInflatesWithEveryWiredId() {
         assertIds(
-            R.layout.fragment_sign,
+            R.layout.fragment_points,
             listOf(
+                R.id.boardCard,
+                R.id.boardEmpty,
+                R.id.boardList,
+                R.id.ratesBox,
+                R.id.currencyInput,
+                R.id.levelInput,
+                R.id.saveRatesButton,
+                R.id.adjustUser,
+                R.id.adjustAmount,
+                R.id.adjustButton,
+                R.id.resetButton,
+            ),
+        )
+    }
+
+    @Test
+    fun actionsTabInflatesWithEveryWiredId() {
+        assertIds(
+            R.layout.fragment_actions,
+            listOf(
+                R.id.actionsCard,
+                R.id.actionsEmpty,
+                R.id.actionsList,
+                R.id.addActionButton,
+                R.id.runsCard,
+                R.id.runsText,
+            ),
+        )
+    }
+
+    @Test
+    fun setupTabInflatesWithEveryWiredId() {
+        assertIds(
+            R.layout.fragment_setup,
+            listOf(
+                R.id.statusPill,
+                R.id.roomInput,
+                R.id.connectButton,
+                R.id.disconnectButton,
+                R.id.setupProgress,
+                R.id.feedCard,
+                R.id.feedButton,
+                R.id.randomButton,
+                R.id.feedError,
+                R.id.feedList,
+                R.id.signCard,
                 R.id.handleInput,
                 R.id.resolveButton,
                 R.id.signButton,
-                R.id.signProgress,
-                R.id.resultCard,
                 R.id.resultPlaceholder,
                 R.id.resultRoom,
                 R.id.resultUser,
                 R.id.resultSummary,
                 R.id.resultLatency,
                 R.id.resultError,
+                R.id.ttsSwitch,
+                R.id.ttsJoinsSwitch,
+                R.id.nativeVersionValue,
+                R.id.bundleCacheValue,
+                R.id.redownloadButton,
+                R.id.clearCacheButton,
+                R.id.guestValue,
+                R.id.resetSessionButton,
                 R.id.logConsole,
                 // The console's internals: UiFlowTest reads the log through R.id.output.
                 R.id.copyButton,
                 R.id.clearButton,
                 R.id.outputScroll,
                 R.id.output,
+                R.id.aboutValue,
             ),
         )
     }
 
     @Test
-    fun settingsTabInflatesWithEveryWiredId() {
+    fun actionEditorInflatesWithEveryWiredId() {
         assertIds(
-            R.layout.fragment_settings,
+            R.layout.dialog_action_edit,
             listOf(
-                R.id.nativeVersionValue,
-                R.id.userAgentValue,
-                R.id.bundleVersionValue,
-                R.id.bundleCacheValue,
-                R.id.redownloadButton,
-                R.id.clearCacheButton,
-                R.id.settingsProgress,
-                R.id.guestValue,
-                R.id.resetSessionButton,
-                R.id.copyLogButton,
-                R.id.clearLogButton,
-                R.id.aboutValue,
+                R.id.actionNameInput,
+                R.id.triggerChips,
+                R.id.methodSpinner,
+                R.id.urlInput,
+                R.id.bodyInput,
+                R.id.cooldownInput,
             ),
         )
     }
@@ -101,14 +144,34 @@ class LayoutInflationTest {
         val inflater = LayoutInflater.from(themedContext())
         var feed: View? = null
         var eventRow: View? = null
+        var pointsRow: View? = null
+        var actionRow: View? = null
+        var rateRow: View? = null
         instrumentation.runOnMainSync {
             feed = inflater.inflate(R.layout.item_feed, null)
             eventRow = inflater.inflate(R.layout.item_event, null)
+            pointsRow = inflater.inflate(R.layout.item_points, null)
+            actionRow = inflater.inflate(R.layout.item_action, null)
+            rateRow = inflater.inflate(R.layout.item_rate, null)
         }
         assertNotNull(feed!!.findViewById<View>(R.id.roomLine))
         assertNotNull(feed!!.findViewById<View>(R.id.titleLine))
-        // The event row IS its TextView.
-        assertNotNull(eventRow)
+        assertNotNull(eventRow!!.findViewById<View>(R.id.eventBadge))
+        assertNotNull(eventRow!!.findViewById<View>(R.id.eventBody))
+        assertNotNull(eventRow!!.findViewById<View>(R.id.eventTime))
+        assertNotNull(pointsRow!!.findViewById<View>(R.id.rankText))
+        assertNotNull(pointsRow!!.findViewById<View>(R.id.userText))
+        assertNotNull(pointsRow!!.findViewById<View>(R.id.balanceText))
+        assertNotNull(pointsRow!!.findViewById<View>(R.id.levelText))
+        assertNotNull(actionRow!!.findViewById<View>(R.id.actionName))
+        assertNotNull(actionRow!!.findViewById<View>(R.id.actionDetail))
+        assertNotNull(actionRow!!.findViewById<View>(R.id.actionToggle))
+        assertNotNull(actionRow!!.findViewById<View>(R.id.actionEdit))
+        assertNotNull(actionRow!!.findViewById<View>(R.id.actionTest))
+        assertNotNull(actionRow!!.findViewById<View>(R.id.actionDelete))
+        assertNotNull(rateRow!!.findViewById<View>(R.id.rateLabel))
+        assertNotNull(rateRow!!.findViewById<View>(R.id.rateInput))
+        assertNotNull(rateRow!!.findViewById<View>(R.id.rateEnabled))
     }
 
     private fun assertIds(layout: Int, ids: List<Int>) {

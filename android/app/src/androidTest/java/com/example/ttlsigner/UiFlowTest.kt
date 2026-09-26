@@ -3,7 +3,9 @@ package com.example.ttlsigner
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.action.ViewActions.click
+import androidx.test.espresso.action.ViewActions.scrollTo
 import androidx.test.espresso.matcher.ViewMatchers.withId
+import androidx.test.espresso.matcher.ViewMatchers.withText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertTrue
@@ -11,8 +13,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Full UI drive: feed → tap a room → connect → events render → disconnect.
- * Needs network and a visible screen; the feed must be non-empty.
+ * Full UI drive: Setup feed → tap a room → connect → Events render →
+ * disconnect. Needs network and a visible screen; the feed must be non-empty.
  */
 @RunWith(AndroidJUnit4::class)
 class UiFlowTest {
@@ -22,18 +24,22 @@ class UiFlowTest {
         val scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario.onActivity { activity = it }
         try {
-            onView(withId(R.id.feedButton)).perform(click())
+            onView(withText(R.string.tab_setup)).perform(click())
+            onView(withId(R.id.feedButton)).perform(scrollTo(), click())
             assertTrue("feed never rendered", waitFor(30_000) { activityFeedRows() > 0 })
 
             tapFirstFeedRow()
             // Tap selects, resolves, and signs (~10 s with the one-time bundle parse).
             assertTrue("room never resolved", waitFor(45_000) { outputText().contains("room=") })
 
-            onView(withId(R.id.connectButton)).perform(click())
+            onView(withId(R.id.connectButton)).perform(scrollTo(), click())
             assertTrue("stream never opened", waitFor(30_000) { outputText().contains("LIVE open:") })
+
+            onView(withText(R.string.tab_events)).perform(click())
             assertTrue("no events rendered", waitFor(45_000) { activityEventRows() > 0 })
 
-            onView(withId(R.id.disconnectButton)).perform(click())
+            onView(withText(R.string.tab_setup)).perform(click())
+            onView(withId(R.id.disconnectButton)).perform(scrollTo(), click())
             assertTrue("disconnect never landed", waitFor(15_000) {
                 outputText().contains("disconnected in")
             })
