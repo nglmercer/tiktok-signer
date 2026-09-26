@@ -35,17 +35,53 @@ class LayoutInflationTest {
             R.layout.fragment_events,
             listOf(
                 R.id.statusPill,
-                R.id.countsText,
-                R.id.awardText,
-                R.id.filterChips,
-                R.id.searchInput,
-                R.id.filterClearButton,
                 R.id.pauseButton,
                 R.id.clearButton,
+                R.id.searchButton,
+                R.id.filterButton,
+                R.id.displayButton,
+                R.id.countsText,
+                R.id.awardText,
+                R.id.searchBar,
+                R.id.searchInput,
+                R.id.closeSearchButton,
+                R.id.filterPanel,
+                R.id.filterBox,
+                R.id.selectAllButton,
+                R.id.clearFilterButton,
                 R.id.eventsCard,
                 R.id.eventsEmpty,
                 R.id.eventList,
             ),
+        )
+    }
+
+    @Test
+    fun eventsToolbarButtonsAreIconButtons() {
+        assertViewType(
+            R.layout.fragment_events,
+            R.id.pauseButton,
+            com.google.android.material.button.MaterialButton::class.java,
+        )
+        assertViewType(
+            R.layout.fragment_events,
+            R.id.clearButton,
+            com.google.android.material.button.MaterialButton::class.java,
+        )
+        assertViewType(
+            R.layout.fragment_events,
+            R.id.searchButton,
+            com.google.android.material.button.MaterialButton::class.java,
+        )
+        assertViewType(
+            R.layout.fragment_events,
+            R.id.filterButton,
+            com.google.android.material.button.MaterialButton::class.java,
+        )
+        assertViewType(
+            R.layout.fragment_events,
+            R.id.displayButton,
+            com.google.android.material.button.MaterialButton::class.java,
         )
     }
 

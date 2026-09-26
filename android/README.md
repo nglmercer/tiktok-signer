@@ -16,7 +16,7 @@ small Android sibling: actions, events viewer, points, and config only.
 
 | Tab | What it does |
 |---|---|
-| Events | Live reader: icon filter chips that expand with live counts when selected, search, clear-filters button, pause, per-type counts, latest award |
+| Events | Live reader: icon toolbar (search, filter, row style, pause, clear), search icon expanding a field on tap, filter dropdown with icon checkbox rows + Select all/Clear, per-type counts, latest award, customizable rows (minimalist default) |
 | Points | SQLite leaderboard, per-event rates editor (mirrors desktop `PointsConfig`), manual adjust, reset |
 | Actions | Fetch-only automations: pick trigger kinds, GET/POST a URL template with `{{user}} {{name}} {{text}} {{type}} {{count}} {{diamonds}}`, cooldown, test fire, run log |
 | Setup | Direct login (username input + live feed, one tap connects), TTS engine console, signer/session maintenance, debug console |
@@ -116,8 +116,10 @@ cd android && ./gradlew connectedDebugAndroidTest
 | File | What it is |
 |---|---|
 | `.../events/LiveEvent.kt` | Typed event model + total JSON parser |
-| `.../events/EventFilter.kt` | Category set + query matching for the reader |
-| `.../events/EventIcons.kt` | Category → vector drawable for the filter chips |
+| `.../events/EventFilter.kt` | Category set + query matching, select-all / clear-selection |
+| `.../events/EventDisplayConfig.kt` | Customizable row style (density, badge, time, lines), minimalist default, prefs-backed |
+| `.../events/EventIcons.kt` | Category → vector drawable for the filter rows |
+| `drawable/ic_*` | Toolbar icon set: search, filter, pause/play, delete, close, tune |
 | `.../tts/supertonic/` | Ported v3 engine, model manifest + downloader, `AudioTrack` speaker |
 | `.../data/StudioDb.kt` | The only database: viewers, actions, run log |
 | `.../points/PointsConfig.kt` | Rates per trigger + level threshold (prefs) |

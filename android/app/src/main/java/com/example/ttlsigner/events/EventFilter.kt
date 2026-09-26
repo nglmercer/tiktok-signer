@@ -29,4 +29,15 @@ data class EventFilter(
 
     fun showAll(): EventFilter =
         copy(enabled = LiveEvent.Category.values().toSet(), query = "")
+
+    /** Check every category; the query is kept. */
+    fun selectAll(): EventFilter =
+        copy(enabled = LiveEvent.Category.values().toSet())
+
+    /**
+     * Uncheck every category: [matches] then hides everything and the reader
+     * shows its empty state. Unlike [toggle] this allows the empty set — it
+     * is only reachable through the explicit Clear button.
+     */
+    fun clearSelection(): EventFilter = copy(enabled = emptySet())
 }

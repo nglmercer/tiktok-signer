@@ -7,6 +7,7 @@ import android.widget.TextView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
+import com.example.ttlsigner.events.EventDisplayConfig
 import com.example.ttlsigner.events.LiveEvent
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -15,9 +16,19 @@ import java.util.Locale
 /**
  * The event reader's rows: a category badge, the rendered line (see
  * [EventFormat]), and the arrival time. Backed by [ListAdapter] so filter
- * changes animate instead of flashing.
+ * changes animate instead of flashing. [setDisplay] restyles every row from
+ * the reader's [EventDisplayConfig] — minimalist by default.
  */
-class EventAdapter : ListAdapter<LiveEvent, EventAdapter.ViewHolder>(DIFF) {
+class EventAdapter(
+    private var display: EventDisplayConfig = EventDisplayConfig(),
+) : ListAdapter<LiveEvent, EventAdapter.ViewHolder>(DIFF) {
+
+    fun setDisplay(next: EventDisplayConfig) {
+        if (display != next) {
+            display = next
+            notifyDataSetChanged()
+        }
+    }
 
     companion object {
         private val CLOCK = SimpleDateFormat("HH:mm:ss", Locale.US)
@@ -43,8 +54,19 @@ class EventAdapter : ListAdapter<LiveEvent, EventAdapter.ViewHolder>(DIFF) {
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val event = getItem(position)
+        holder.badge.visibility = if (display.showBadge) View.VISIBLE else View.GONE
         holder.badge.text = event.category.name.lowercase()
         holder.body.text = EventFormat.line(event.raw.ifEmpty { "{}" })
+        holder.body.maxLines = if (display.singleLine) 1 else 3
+        holder.time.visibility = if (display.showTime) View.VISIBLE else View.GONE
         holder.time.text = CLOCK.format(Date(event.at))
+        val density = holder.itemView.resources.displayMetrics.density
+        val vertical = ((if (display.compact) 4 else 8) * density).toInt()
+        holder.itemView.setPadding(
+            holder.itemView.paddingStart,
+            vertical,
+            holder.itemView.paddingEnd,
+            vertical,
+        )
     }
 }

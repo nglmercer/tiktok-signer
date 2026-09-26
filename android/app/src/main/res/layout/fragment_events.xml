@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Events tab: flat status header, filter chips, search, event tail. -->
+<!-- Events tab, minimalist remake: a status row, an icon toolbar (search,
+     filter, row style), a collapsible search bar, a filter dropdown panel
+     with checkbox rows, and the event tail. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -30,31 +32,66 @@
                     android:layout_height="wrap_content"
                     android:layout_weight="1" />
 
-                <Button
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/pauseButton"
-                    style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:minWidth="0dp"
-                    android:text="@string/pause" />
+                    style="@style/Widget.Material3.Button.IconButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    app:contentDescription="@string/desc_pause"
+                    app:icon="@drawable/ic_pause" />
 
-                <Button
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/clearButton"
-                    style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:minWidth="0dp"
-                    android:text="@string/clear" />
+                    style="@style/Widget.Material3.Button.IconButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    app:contentDescription="@string/desc_clear"
+                    app:icon="@drawable/ic_delete" />
 
             </LinearLayout>
 
-            <TextView
-                android:id="@+id/countsText"
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/space_xs"
-                android:text="@string/events_empty_hint"
-                android:textAppearance="@style/TextAppearance.TikTools.Muted" />
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/searchButton"
+                    style="@style/Widget.Material3.Button.IconButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    app:contentDescription="@string/desc_search"
+                    app:icon="@drawable/ic_search" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/filterButton"
+                    style="@style/Widget.Material3.Button.IconButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    app:contentDescription="@string/desc_filter"
+                    app:icon="@drawable/ic_filter" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/displayButton"
+                    style="@style/Widget.Material3.Button.IconButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    app:contentDescription="@string/desc_display"
+                    app:icon="@drawable/ic_tune" />
+
+                <TextView
+                    android:id="@+id/countsText"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:gravity="end"
+                    android:maxLines="1"
+                    android:text="@string/events_empty_hint"
+                    android:textAppearance="@style/TextAppearance.TikTools.Muted" />
+
+            </LinearLayout>
 
             <TextView
                 android:id="@+id/awardText"
@@ -63,26 +100,14 @@
                 android:textAppearance="@style/TextAppearance.TikTools.Muted"
                 android:visibility="gone" />
 
-            <HorizontalScrollView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/space_sm"
-                android:scrollbars="none">
-
-                <com.google.android.material.chip.ChipGroup
-                    android:id="@+id/filterChips"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    app:singleLine="true" />
-
-            </HorizontalScrollView>
-
             <LinearLayout
+                android:id="@+id/searchBar"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="@dimen/space_sm"
                 android:gravity="center_vertical"
-                android:orientation="horizontal">
+                android:orientation="horizontal"
+                android:visibility="gone">
 
                 <com.google.android.material.textfield.TextInputLayout
                     android:layout_width="0dp"
@@ -100,13 +125,63 @@
 
                 </com.google.android.material.textfield.TextInputLayout>
 
-                <Button
-                    android:id="@+id/filterClearButton"
-                    style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="wrap_content"
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/closeSearchButton"
+                    style="@style/Widget.Material3.Button.IconButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    app:contentDescription="@string/desc_close"
+                    app:icon="@drawable/ic_close" />
+
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/filterPanel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_sm"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <com.example.ttlsigner.ui.MinimalDivider
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp" />
+
+                <com.example.ttlsigner.ui.SectionHeaderView
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:minWidth="0dp"
-                    android:text="@string/clear_filters" />
+                    android:layout_marginTop="@dimen/space_sm"
+                    app:sectionTitle="@string/filter_title" />
+
+                <LinearLayout
+                    android:id="@+id/filterBox"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_xs"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/selectAllButton"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minWidth="0dp"
+                        android:text="@string/select_all" />
+
+                    <Button
+                        android:id="@+id/clearFilterButton"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minWidth="0dp"
+                        android:text="@string/clear_selection" />
+
+                </LinearLayout>
 
             </LinearLayout>
 

@@ -66,4 +66,20 @@ class EventFilterTest {
         assertEquals(LiveEvent.Category.values().toSet(), filter.enabled)
         assertEquals("", filter.query)
     }
+
+    @Test
+    fun selectAllEnablesEveryCategoryAndKeepsQuery() {
+        val filter = EventFilter(setOf(LiveEvent.Category.CHAT), "ay").selectAll()
+        assertEquals(LiveEvent.Category.values().toSet(), filter.enabled)
+        assertEquals("ay", filter.query)
+    }
+
+    @Test
+    fun clearSelectionHidesEverything() {
+        val filter = EventFilter().clearSelection()
+        assertTrue(filter.enabled.isEmpty())
+        for (category in LiveEvent.Category.values()) {
+            assertFalse(filter.matches(LiveEvent(category, "u", "", "t", 0, 0)))
+        }
+    }
 }

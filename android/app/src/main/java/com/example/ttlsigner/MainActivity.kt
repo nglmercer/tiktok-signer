@@ -44,7 +44,17 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.tab_actions),
             getString(R.string.tab_setup),
         )
-        TabLayoutMediator(tabs, pager) { tab, position -> tab.text = titles[position] }.attach()
+        // Icons for every tab; text stays for accessibility and tests.
+        val icons = listOf(
+            R.drawable.ic_ev_chat,
+            R.drawable.ic_ev_gift,
+            R.drawable.ic_ev_share,
+            R.drawable.ic_tune,
+        )
+        TabLayoutMediator(tabs, pager) { tab, position ->
+            tab.text = titles[position]
+            tab.setIcon(icons[position])
+        }.attach()
     }
 
     private class TabsAdapter(activity: FragmentActivity) : FragmentStateAdapter(activity) {
