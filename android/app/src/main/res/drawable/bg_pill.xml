@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Minimalist pill behind badges and level chips: flat container color,
-     fully rounded, no stroke, no elevation. -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="rectangle">
-    <corners android:radius="999dp" />
-    <solid android:color="?attr/colorSecondaryContainer" />
-</shape>

@@ -1,180 +1,92 @@
-# TikTools Studio — small Android app for TikTok LIVE
+# TikTools Studio for Android
 
-A simple, Android-only studio: read live events with filters, award viewer
-points from a local database, and fire fetch-only automations per event kind.
-Signing and the event stream run on-device by reusing the Rust core:
-`libttl_sign_mobile.so` (QuickJS engine + URL builders + live socket from
-`crates/ttl-sign-mobile`) over JNI. No separate Android signing SDK — the app
-is a thin UI over the reused core, plus its own SQLite studio database.
+A Jetpack Compose / Material 3 studio for TikTok LIVE. The Android app owns
+its session, event history, HTTP automations, rewards, and speech controls.
+Signing and the live socket still use the existing Rust JNI core. The Java
+SDK and Rust implementations are unchanged by this refactor.
 
-The reuse analysis lives in [docs/16-android-signing.md](../docs/16-android-signing.md).
-The desktop reference (Windows/Linux) is
-[TikTools-app](https://github.com/nglmercer/TikTools-app); this app is the
-small Android sibling: actions, events viewer, points, and config only.
+## Navigation
 
-## Tabs
+- **Home:** username or room connection, live discovery, recent creators,
+  connection progress, session counters, recent activity, and quick speech controls.
+- **Events:** searchable event history, category filters, display density,
+  pause/clear, and event details with raw JSON copying.
+- **Actions:** HTTP GET/POST automations, trigger categories, optional gift
+  matching, template fields, cooldowns, test execution, and run history.
+- **Rewards:** leaderboard, event rates, viewer earnings, manual adjustments,
+  and confirmed resets.
+- **Settings:** secondary destination for connection policies and appearance;
+  separate Speech and Diagnostics screens hold engine/model controls and logs.
 
-| Tab | What it does |
-|---|---|
-| Events | Live reader: icon toolbar (search, filter, row style, pause, clear), search icon expanding a field on tap, filter dropdown with icon checkbox rows + Select all/Clear, per-type counts, latest award, customizable rows (minimalist default) |
-| Points | SQLite leaderboard, per-event rates editor (mirrors desktop `PointsConfig`), manual adjust, reset |
-| Actions | Fetch-only automations: pick trigger kinds, GET/POST a URL template with `{{user}} {{name}} {{text}} {{type}} {{count}} {{diamonds}}`, cooldown, test fire, run log |
-| Setup | Direct login (username input + auto-loading live feed with cover thumbnails, one tap connects), single connect/disconnect toggle, TTS engine console, signer/session maintenance, debug console |
+Phones use bottom navigation; windows at least 600 dp wide use a navigation
+rail. Colors support system/light/dark appearance and Android 12+ dynamic
+colors. Shared Compose components and spacing live in `ui/`.
 
-## Design
+## Architecture and compatibility
 
-The UI is deliberately minimalist: flat outlined cards (no shadows), one
-12dp corner radius, a 4/8/12/16dp spacing scale (`values/dimens.xml`),
-sentence-case letterspaced section labels, muted secondary lines, hairline
-dividers between rows, and counts as a quiet `· N` suffix that disappears
-while empty. All color comes from the Material3 theme (day/night + dynamic
-color), plus the three semantic connection dots.
+The application-scoped `AppContainer` owns `LiveSessionManager`, repositories,
+and the single event pipeline. Screen ViewModels expose state to stateless
+Compose screens; navigation and Activity recreation do not own the socket.
+The session distinguishes resolution, preparation, connection, live, retry,
+and failure. Only the native open callback marks a connection live. Cancelled
+connections release their native handle and stale callbacks are ignored.
 
-Shared building blocks live in `.../ui/`:
+Room opens the existing `tiktools-studio.db`. Migration 1 → 2 retains viewer
+balances, actions, run history, and auto-increment sequences, and adds earning
+attribution for future awards. Existing balances appear as previous balance
+because historical per-category earnings cannot be reconstructed. Awards and
+manual adjustments use transactions. The exported Room schema is in `app/schemas/`.
 
-| Component | What it is |
-|---|---|
-| `UiKit` | One home for the label rules: `sectionTitle` (`Events · 12`), `countsLine` (`chat 3 · gift 1`), `dp`, `addMinimalDividers` |
-| `EmptyStateView` | Centered muted icon + one line; every empty list (events, leaderboard, actions) |
-| `SectionHeaderView` | Small label + optional count; headings of the flat cards (rates, adjust, TTS, signer) |
-| `SettingRowView` | Label-over-value slot; the Setup maintenance rows keep their wired value IDs inside it |
-| `MinimalDivider` | 1dp outline-variant hairline with optional insets |
-| `CollapsibleCard` | Flat tappable-header card, `setTitleWithCount` for the `· N` suffix |
-| `StatusPillView` | 8dp dot + one-line connection state |
-| `LogConsoleView` | Shared debug console: follows, copies, clears |
+DataStore migrates the existing points, speech, and event-display preferences.
+It also persists filters, recent creators, theme, speech categories, and
+connection policies. Event history is memory-only and limited to 300 rows;
+pausing the reader does not pause rewards, actions, or speech.
 
-## Data
+The source namespace is `dev.nglmercer.tiktools`. The installed application ID
+remains `com.example.ttlsigner` to preserve upgrade data. `TtlNative` and
+`TtlEvents` retain their original package and signatures for JNI compatibility.
 
-- `tiktools-studio.db` (SQLite, one `SQLiteOpenHelper`): `viewers` point
-  balances, `actions` fetch automations, `runs` capped run log.
-- `SharedPreferences`: points rates, TTS toggles. Balances stay in SQLite so
-  they survive process death and feed the leaderboard query directly.
+## Speech and background operation
 
-## TTS engines
+Speech supports Off, Android device TTS, and offline Supertonic 3 (voice F1).
+Models download separately into `files/supertonic3/`; Speech shows download
+progress and provides cancel/delete, test, repeat, skip, and category controls.
+The ONNX dependency includes native libraries and increases APK size.
 
-Every component that may speak takes a `tts.Speaker`. Setup offers three
-engines: off, the device voice (`AndroidSpeaker` over platform
-`TextToSpeech`), and on-device SuperTonic 3, with `SpeechText` mapping events
-to spoken lines in all cases.
+When background connection is enabled, `LiveService` maintains the foreground
+notification with disconnect and speech controls. Disabling this policy ends
+an active connection when the Activity goes into the background. Reconnection
+can be disabled independently. Notification permission is requested on Android
+13+. The service does not reconstruct a session after process death.
 
-SuperTonic 3 is a port of the nabu example
-([mewmix/nabu](https://github.com/mewmix/nabu),
-`app/.../supertonic/`): four ONNX Runtime CPU sessions
-(`duration_predictor`, `text_encoder`, `vector_estimator`, `vocoder`) plus the
-unicode text processor, running only the v3 model (`Supertone/supertonic-3`,
-voice F1). Model files (~7 downloads) never ship in the APK — the Setup tab
-fetches them once into `files/supertonic3/` with progress, then synthesis and
-`AudioTrack` playback run fully on-device. Speech drops (never queues) while
-an utterance is playing, so it can't lag the stream. The ONNX dependency adds
-native libraries per ABI, so the debug APK is ~100 MB.
+## Build and verification
 
-Both engines support the speech controls: Repeat replays the last spoken line
-(stopping the current utterance first so a busy engine replays instead of
-dropping), Skip stops the current utterance. Every utterance routes through
-`tts/TtsController`, the app-scoped front desk that remembers the last line and
-hands the live speaker to the background notification. The controls — the Setup
-buttons and the notification actions — render only while a speech engine is
-selected (`ttsControlsVisible`); Repeat enables once a line exists to replay.
-
-## Background
-
-Connecting starts `LiveService`, a foreground service holding an ongoing
-notification (`Live session` channel, `mediaPlayback` type) so the system ranks
-the process as user-visible: home, screen-off, and other apps no longer kill
-the live socket or the speech. The session still owns the connection — the
-service only holds the process and mirrors state: room, TTS on/off, Repeat /
-Skip actions while speech is enabled, and Disconnect, which asks the session to
-hang up. Disconnecting (in-app, from the notification, or on a terminal stream
-`closed`/`error`) stops the service and releases the hold. Swiping the app away
-finishes the session and disconnects by design; the service never keeps a dead
-session alive (a system restart with no live session stops itself).
-
-Android 13+ gates the notification behind the `POST_NOTIFICATIONS` runtime
-grant, requested once on launch; without it the stream still connects, but the
-background hold has no notification to show. Manifest additions:
-`FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK`,
-`POST_NOTIFICATIONS`, and the `.LiveService` declaration.
-
-## Prerequisites
-
-- JDK 17+ (`/usr/lib/jvm/java-21-openjdk` works; the wrapper was generated with Gradle 9.7.1)
-- Android SDK with platform 35, NDK 27 (`sdk.dir` in `local.properties`)
-- For the native library: the `*-linux-android` Rust targets, `cargo-ndk`, libclang
-
-## Build
+Requirements: JDK 21, Android SDK platform 35, and Gradle (the checked-in wrapper
+uses 9.7.1). Native builds additionally require NDK 27, Rust Android targets,
+`cargo-ndk`, and libclang. Set `sdk.dir` in ignored `android/local.properties`.
 
 ```sh
-# 1. Native library, all four ABIs -> app/src/main/jniLibs/ (gitignored: reproducible)
+# From the repository root: build the live/signing JNI library for all ABIs.
 ./scripts/android/build-native.sh
 
-# 2. APK
-cd android && ./gradlew assembleDebug
-# app/build/outputs/apk/debug/app-debug.apk
+cd android
+./gradlew assembleDebug
+./gradlew testDebugUnitTest lintDebug assembleDebugAndroidTest
+# APK: app/build/outputs/apk/debug/app-debug.apk
 ```
 
-JVM unit tests (pure logic — no device, no network):
+JVM tests cover event/reward/template logic, session cancellation and stale
+callbacks, real SQLite migration, preference migration, and Compose navigation
+and touch targets using Robolectric. Screenshots can be emitted by supplying
+`screenshotDir` as a test JVM system property. The APK can compile without the
+JNI artifact, but signing and LIVE require `libttl_sign_mobile.so` on the device.
 
 ```sh
-cd android && ./gradlew testDebugUnitTest
+./gradlew installDebug
+adb shell am start -n com.example.ttlsigner/dev.nglmercer.tiktools.app.MainActivity
+# Explicitly opt into native + network device integration tests:
+./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.liveIntegration=true
 ```
 
-## Run
-
-On a device or emulator:
-
-```sh
-cd android && ./gradlew installDebug
-adb shell am start -n com.example.ttlsigner/.MainActivity
-```
-
-In the app: open Setup, tap a feed room (or type a handle / numeric room id),
-then Connect. Watch Events land filtered, Points accrue on the leaderboard,
-and Actions fire their URLs. Signed URLs are shown on screen but never written
-to logcat.
-
-On-device tests (need network for the one-time bundle download):
-
-```sh
-cd android && ./gradlew connectedDebugAndroidTest
-```
-
-## Layout
-
-| File | What it is |
-|---|---|
-| `.../events/LiveEvent.kt` | Typed event model (incl. avatar + gift image URLs) + total JSON parser |
-| `.../events/EventFilter.kt` | Category set + query matching, select-all / clear-selection |
-| `.../events/EventDisplayConfig.kt` | Customizable row style (density, badge, time, lines), minimalist default, prefs-backed |
-| `.../events/EventIcons.kt` | Category → vector drawable for the filter rows |
-| `drawable/ic_*` | Toolbar icon set: search, filter, pause/play, delete, close, tune |
-| `.../tts/supertonic/` | Ported v3 engine, model manifest + downloader, `AudioTrack` speaker |
-| `.../data/StudioDb.kt` | The only database: viewers, actions, run log |
-| `.../points/PointsConfig.kt` | Rates per trigger + level threshold (prefs) |
-| `.../points/PointsEngine.kt` | Pure award math (in `PointsConfig.kt`) |
-| `.../points/PointsRepository.kt` | Balances over SQLite, leaderboard flow |
-| `.../actions/EventAction.kt` | Fetch-action model + `{{template}}` + matcher |
-| `.../actions/ActionRunner.kt` | Cooldowns, fetch execution, run log |
-| `.../tts/Speaker.kt` | `Speaker` seam (`speak`/`stop`), noop + Android TTS, `SpeechText` |
-| `.../tts/TtsController.kt` | App-scoped TTS front desk: live speaker, last line, repeat/skip |
-| `.../LiveService.kt` | Foreground keep-alive: ongoing notification + TTS/disconnect actions |
-| `.../SessionViewModel.kt` | Connection + one event pipeline fanning out to reader/points/actions/speaker; starts/stops the keep-alive |
-| `.../EventsFragment.kt` | Reader: chips, search, pause, counts |
-| `.../PointsFragment.kt` | Leaderboard, rates editor, adjust, reset |
-| `.../ActionsFragment.kt` | Action list, editor sheet, run log |
-| `.../SetupFragment.kt` | Connect, feed, sign, TTS, signer, console |
-| `.../TtlNative.kt` | Raw JNI signatures; must match `crates/ttl-sign-mobile/src/jni.rs` |
-| `.../RustSigner.kt` | Warm native signer: `open` once, `sign` per request |
-| `.../Discovery.kt` | Unsigned `unique_id` → `room_id` lookup + parsing |
-| `.../BundleFetch.kt` | Bundle download + SHA-256 pin |
-| `.../Feed.kt` | Live feed: unsigned search + guest cookies, parse/sort, cover + avatar URLs |
-| `.../FeedAdapter.kt` | Feed rows with cover thumbnails; tap connects directly |
-| `.../Logger.kt` | Timestamped log lines; logcat gets signature summaries only |
-| `.../LiveClient.kt` | Live event stream: worker callbacks posted to main |
-| `.../TtlEvents.kt` | Stream callback interface (must match `jni_live.rs`) |
-| `.../EventFormat.kt` | One event JSON object → one display line |
-| `.../MainActivity.kt` | Four-tab shell over the shared view model |
-| `.../ui/` | `UiKit`, `EmptyStateView`, `SectionHeaderView`, `SettingRowView`, `MinimalDivider`, `CollapsibleCard`, `LogConsoleView`, `StatusPillView`, `ImageLoader` (memory-cached URL → `ImageView`) |
-| `values/dimens.xml` + `themes.xml` | Spacing scale, `Widget.TikTools.MinimalCard`, `SectionLabel`/`Muted` text styles, thin-indicator tabs |
-| `drawable/bg_pill.xml` | Flat pill behind event badges and level chips |
-| `app/src/test/...` | JVM unit tests (pure logic, no device — incl. `ui/UiKitTest`) |
-| `app/src/androidTest/...` | On-device tests: layout inflation + shared-component types + full connect/stream/disconnect flow |
+Host checks do not establish real-device LIVE connectivity or ONNX audio
+playback. Those require the native artifact and device/network verification.
