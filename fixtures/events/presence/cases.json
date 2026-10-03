@@ -1,0 +1,9 @@
+[
+ {"name":"live","id":"fixture","httpStatus":200,"body":"{\"data\":{\"user\":{\"roomId\":\"7300000000000000001\",\"uniqueId\":\"fixture\",\"nickname\":\"Fixture\",\"status\":2},\"liveRoom\":{\"title\":\"LIVE\"}}}","expected":"LIVE"},
+ {"name":"ended-room-id-persists","id":"fixture","httpStatus":200,"body":"{\"data\":{\"user\":{\"roomId\":\"7300000000000000001\",\"uniqueId\":\"fixture\",\"status\":4}}}","expected":"OFFLINE"},
+ {"name":"zero-room","id":"fixture","httpStatus":200,"body":"{\"data\":{\"user\":{\"roomId\":\"0\",\"status\":2}}}","expected":"OFFLINE"},
+ {"name":"forbidden","id":"fixture","httpStatus":403,"body":"{}","expected":"UNKNOWN"},
+ {"name":"rate-limit","id":"fixture","httpStatus":429,"body":"{}","expected":"UNKNOWN"},
+ {"name":"invalid-json","id":"fixture","httpStatus":200,"body":"<html>challenge</html>","expected":"UNKNOWN"},
+ {"name":"changed-schema","id":"fixture","httpStatus":200,"body":"{\"data\":{\"user\":\"changed\"}}","expected":"UNKNOWN"}
+]

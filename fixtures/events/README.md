@@ -46,3 +46,13 @@ cd examples/node-connector && npx tsx golden-fixtures.ts
 
 Step 3 is what makes these golden tests meaningful: the expected values come
 from the *other* implementation, so Rust cannot mark its own homework.
+
+## Java SDK parity
+
+`transport-parity.json` is generated offline by the existing Node player/frame encoders:
+`node packages/tiktok-live/scripts/java-parity-fixtures.mjs` after building that package.
+It contains synthetic transport envelopes around the already-redacted `batch.pb`, not real
+signed URLs or cookies. Java compares exact protobuf bytes. Rust compares envelope and
+payload semantics, accounting for proto3's omission of zero-valued fields and Rust's explicit
+heartbeat sequence counter. `presence/cases.json` supplies the same HTTP/status cases to
+Java, Node, and Rust. A Rust `NoRoom` maps to OFFLINE at the presence boundary.

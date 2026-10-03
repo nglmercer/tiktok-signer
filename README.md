@@ -8,6 +8,12 @@ Wry, WebKit, or a display.
 **Primary objective:** replace the proprietary sign server with a reproducible headless signing
 path. That is now the only path; the WebView oracle has been removed.
 
+## Java SDK
+
+The [Java 17+ SDK](sdk/java/README.md) supports broker-backed LIVE event streaming and confirmed
+HTTP-only presence monitoring, with optional Rust JNI signing. Build and test it with
+`cd sdk/java && ./gradlew build`.
+
 ## Status
 
 Verified against live rooms on 2026-08-18 with no browser: discovery, `room/info` and `gift/list`
