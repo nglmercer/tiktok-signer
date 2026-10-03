@@ -1,4 +1,4 @@
-//! JNI entry points for `com.example.ttlsigner.TtlNative` (see `android/`).
+//! JNI entry points for the Java SDK and the compatibility Android demo.
 //!
 //! The Kotlin side holds an opaque `Long` handle; zero means the open failed. Every error —
 //! Rust or JNI — arrives in Kotlin as a `RuntimeException` via
@@ -31,7 +31,9 @@ fn read(env: &Env, value: &JString) -> Result<String> {
 /// Open a signer. `bundle` is the webmssdk source, `optionsJson` a
 /// [`crate::SignOptions`] object. Returns the handle, or 0 with an exception pending.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_example_ttlsigner_TtlNative_nOpen<'caller>(
+pub extern "system" fn Java_io_github_nglmercer_tiktoklive_internal_NativeBindings_nOpen<
+    'caller,
+>(
     mut unowned: EnvUnowned<'caller>,
     _cls: JClass<'caller>,
     bundle: JString<'caller>,
@@ -50,7 +52,9 @@ pub extern "system" fn Java_com_example_ttlsigner_TtlNative_nOpen<'caller>(
 /// Sign one URL. `product` is `fetch`, `frontier`, or `ws`. Returns the signed URL
 /// as a Java string, or null with an exception pending.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_example_ttlsigner_TtlNative_nSign<'caller>(
+pub extern "system" fn Java_io_github_nglmercer_tiktoklive_internal_NativeBindings_nSign<
+    'caller,
+>(
     mut unowned: EnvUnowned<'caller>,
     _cls: JClass<'caller>,
     handle: jlong,
@@ -74,7 +78,9 @@ pub extern "system" fn Java_com_example_ttlsigner_TtlNative_nSign<'caller>(
 
 /// Close a signer opened by `nOpen`. Zero is a no-op.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_example_ttlsigner_TtlNative_nClose<'caller>(
+pub extern "system" fn Java_io_github_nglmercer_tiktoklive_internal_NativeBindings_nClose<
+    'caller,
+>(
     mut unowned: EnvUnowned<'caller>,
     _cls: JClass<'caller>,
     handle: jlong,
@@ -137,4 +143,38 @@ pub extern "system" fn Java_com_example_ttlsigner_TtlNative_nVersion<'caller>(
             Ok(env.new_string(version)?.into())
         })
         .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+// Android demo compatibility namespace. The SDK entry points above are the implementation;
+// both namespaces enter the same panic-safe JNI implementation and Rust signing engine.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_example_ttlsigner_TtlNative_nOpen<'caller>(
+    unowned: EnvUnowned<'caller>,
+    cls: JClass<'caller>,
+    bundle: JString<'caller>,
+    options: JString<'caller>,
+) -> jlong {
+    Java_io_github_nglmercer_tiktoklive_internal_NativeBindings_nOpen(unowned, cls, bundle, options)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_example_ttlsigner_TtlNative_nSign<'caller>(
+    unowned: EnvUnowned<'caller>,
+    cls: JClass<'caller>,
+    handle: jlong,
+    url: JString<'caller>,
+    product: JString<'caller>,
+) -> JObject<'caller> {
+    Java_io_github_nglmercer_tiktoklive_internal_NativeBindings_nSign(
+        unowned, cls, handle, url, product,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_example_ttlsigner_TtlNative_nClose<'caller>(
+    unowned: EnvUnowned<'caller>,
+    cls: JClass<'caller>,
+    handle: jlong,
+) {
+    Java_io_github_nglmercer_tiktoklive_internal_NativeBindings_nClose(unowned, cls, handle)
 }

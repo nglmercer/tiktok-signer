@@ -97,7 +97,7 @@ impl RoomLookup {
         let user = value
             .get("data")?
             .get("user")
-            .filter(|user| !user.is_null())?;
+            .filter(|user| user.is_object())?;
         let live_room = value.get("data").and_then(|d| d.get("liveRoom"));
 
         Some(Self {
