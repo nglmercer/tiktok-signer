@@ -14,6 +14,8 @@ members = [
     "crates/ttl-live-ws",
     "crates/ttl-live-proto",
     "crates/ttl-live-events",
+    "crates/ttl-live-native",
+    "crates/ttl-live-core",
     "crates/ttl-live-api",
     "crates/ttl-sign-mobile",
 ]
@@ -30,6 +32,8 @@ default-members = [
     "crates/ttl-live-ws",
     "crates/ttl-live-proto",
     "crates/ttl-live-events",
+    "crates/ttl-live-native",
+    "crates/ttl-live-core",
     "crates/ttl-live-api",
     "crates/ttl-sign-mobile",
 ]
@@ -52,6 +56,8 @@ ttl-sign-embedded = { path = "crates/ttl-sign-embedded" }
 ttl-live-ws = { path = "crates/ttl-live-ws" }
 ttl-live-proto = { path = "crates/ttl-live-proto" }
 ttl-live-events = { path = "crates/ttl-live-events" }
+ttl-live-native = { path = "crates/ttl-live-native" }
+ttl-live-core = { path = "crates/ttl-live-core" }
 ttl-live-api = { path = "crates/ttl-live-api" }
 ttl-sign-mobile = { path = "crates/ttl-sign-mobile" }
 

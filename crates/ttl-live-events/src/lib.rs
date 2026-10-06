@@ -32,8 +32,8 @@ mod user;
 
 pub use dynamic::{decode_webcast_message, SchemaField, SchemaMessage, SchemaObject, SchemaValue};
 pub use event::{
-    ChatEvent, DecodedEvent, EventBatch, GiftEvent, LikeEvent, LiveEvent, MemberEvent, RawEvent,
-    RoomUserEvent, SocialEvent, TopViewer,
+    ChatEvent, DecodedEvent, EventBatch, EventEnvelope, EventSupport, GiftEvent, JsonMode,
+    LikeEvent, LiveEvent, MemberEvent, RawEvent, RoomUserEvent, SocialEvent, TopViewer,
 };
 pub use user::EventUser;
 
@@ -57,15 +57,40 @@ pub mod method {
 /// Only a corrupt outer envelope fails.
 #[derive(Debug, thiserror::Error)]
 pub enum EventError {
+    #[error("batch exceeds 16 MiB or 8192-message limit")]
+    TooLarge,
     #[error("failed to decode the event batch envelope: {0}")]
     Batch(#[from] prost::DecodeError),
 }
 
 /// Decodes one decompressed WebSocket payload into normalised events.
 pub fn decode_batch(payload: &[u8]) -> Result<EventBatch, EventError> {
+    if payload.len() > 16 * 1024 * 1024 {
+        return Err(EventError::TooLarge);
+    }
+    // Preflight with borrowed wire views before Prost allocates repeated messages.
+    let mut reader = ttl_sign_core::proto::Reader::new(payload);
+    let mut count = 0;
+    while let Some(field) = reader.next_field() {
+        match field {
+            Ok((1, _)) => {
+                count += 1;
+                if count > 8192 {
+                    return Err(EventError::TooLarge);
+                }
+            }
+            Ok(_) => (),
+            Err(_) => break, // Prost reports the precise envelope error.
+        }
+    }
     let result = ttl_live_proto::decode_event_batch(payload)?;
+    let mut schema_budget = 65_536;
     Ok(EventBatch {
-        events: result.messages.iter().map(decode_message).collect(),
+        events: result
+            .messages
+            .iter()
+            .map(|message| decode_message(message, &mut schema_budget))
+            .collect(),
         cursor: result.cursor,
         internal_ext: result.internal_ext,
         need_ack: result.need_ack,
@@ -80,40 +105,67 @@ pub fn decode_batch(payload: &[u8]) -> Result<EventBatch, EventError> {
 /// relay that receives one message at a time. Never fails: an unmodelled method
 /// or an unreadable payload becomes [`LiveEvent::Unknown`] with its bytes kept.
 pub fn decode_event(method: &str, payload: &[u8]) -> LiveEvent {
-    decode_message(&BaseProtoMessage {
-        method: method.to_owned(),
-        payload: payload.to_vec(),
-        ..Default::default()
-    })
-    .event
+    decode_event_envelope(method, 0, false, payload).event
 }
 
 /// Normalises one `BaseProtoMessage`, keeping its raw envelope alongside.
 ///
 /// Internal: `BaseProtoMessage` is a generated type, and this crate's public API
 /// deliberately does not expose those. Use [`decode_batch`] or [`decode_event`].
-fn decode_message(message: &BaseProtoMessage) -> DecodedEvent {
+fn decode_message(message: &BaseProtoMessage, budget: &mut usize) -> DecodedEvent {
+    decode_envelope_budget(
+        &message.method,
+        message.msg_id as u64,
+        message.is_history,
+        &message.payload,
+        budget,
+    )
+}
+
+/// Transport-independent, complete event decoding. Oversized events retain a
+/// 4 MiB prefix and are flagged truncated; typed normalization is skipped.
+pub fn decode_event_envelope(
+    method: &str,
+    msg_id: u64,
+    is_history: bool,
+    payload: &[u8],
+) -> EventEnvelope {
+    decode_envelope_budget(method, msg_id, is_history, payload, &mut 4096)
+}
+
+fn decode_envelope_budget(
+    method: &str,
+    msg_id: u64,
+    is_history: bool,
+    payload: &[u8],
+    budget: &mut usize,
+) -> EventEnvelope {
+    let oversized = payload.len() > dynamic::MAX_EVENT_BYTES;
+    let payload = &payload[..payload.len().min(dynamic::MAX_EVENT_BYTES)];
     let raw = Raw {
-        method: message.method.clone(),
-        msg_id: message.msg_id.max(0) as u64,
-        payload: message.payload.to_vec(),
-        is_history: message.is_history,
+        method: method.to_owned(),
+        msg_id,
+        payload: payload.to_vec(),
+        is_history,
     };
-
-    let normalized = match message.method.as_str() {
-        method::CHAT => normalize::chat(&message.payload),
-        method::GIFT => normalize::gift(&message.payload),
-        method::LIKE => normalize::like(&message.payload),
-        method::MEMBER => normalize::member(&message.payload),
-        method::SOCIAL => normalize::social(&message.payload),
-        method::ROOM_USER => normalize::room_user(&message.payload),
-        _ => Ok(unknown(&raw)),
+    let mut schema = dynamic::decode_webcast_message_budget(method, payload, budget)
+        .expect("partial decoder is infallible");
+    schema.truncated |= oversized;
+    let normalized = if schema.truncated {
+        Ok(unknown(&raw))
+    } else {
+        match method {
+            method::CHAT => normalize::chat(payload),
+            method::GIFT => normalize::gift(payload),
+            method::LIKE => normalize::like(payload),
+            method::MEMBER => normalize::member(payload),
+            method::SOCIAL => normalize::social(payload),
+            method::ROOM_USER => normalize::room_user(payload),
+            _ => Ok(unknown(&raw)),
+        }
     };
-
-    // A payload that fails to decode is still real traffic: keep the bytes and
-    // let the caller decide, rather than dropping the event or the whole batch.
     let event = normalized.unwrap_or_else(|_| unknown(&raw));
-    DecodedEvent { raw, event }
+    DecodedEvent { raw, event, schema }
 }
 
 fn unknown(raw: &Raw) -> LiveEvent {
@@ -122,3 +174,5 @@ fn unknown(raw: &Raw) -> LiveEvent {
         payload: raw.payload.clone(),
     }
 }
+
+pub use event::method_id as event_method_id;

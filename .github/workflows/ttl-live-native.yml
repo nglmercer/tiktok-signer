@@ -1,0 +1,104 @@
+name: ttl-live-native
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.88'
+          targets: ${{ matrix.target }}
+      - name: Rust decoding, catalog, lifecycle and transport tests
+        run: cargo test --locked -p ttl-live-native -p ttl-live-events -p ttl-live-proto -p ttl-live-core --target ${{ matrix.target }}
+      - name: Build both native library formats
+        run: cargo build --locked --release -p ttl-live-native --target ${{ matrix.target }}
+      - name: Verify Linux/macOS C and C++ linkage and exported ABI
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          libdir="$PWD/target/${{ matrix.target }}/release"
+          cc -std=c11 -Wall -Wextra -Werror -Icrates/ttl-live-native/include crates/ttl-live-native/tests/smoke.c -L"$libdir" -lttl_live -Wl,-rpath,"$libdir" -o /tmp/ttl-native-c
+          /tmp/ttl-native-c
+          c++ -x c++ -std=c++17 -Wall -Wextra -Werror -Icrates/ttl-live-native/include crates/ttl-live-native/tests/smoke.c -L"$libdir" -lttl_live -Wl,-rpath,"$libdir" -o /tmp/ttl-native-cpp
+          /tmp/ttl-native-cpp
+          if [ "$RUNNER_OS" = Linux ]; then
+            python3 scripts/native/check-exports.py "$libdir/libttl_live.so"
+          else
+            python3 scripts/native/check-exports.py "$libdir/libttl_live.dylib"
+          fi
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - name: Verify Windows C and C++ linkage
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          cl /nologo /W4 /WX /Icrates\ttl-live-native\include crates\ttl-live-native\tests\smoke.c target\${{ matrix.target }}\release\ttl_live.dll.lib /Fe:ttl-native-c.exe
+          copy target\${{ matrix.target }}\release\ttl_live.dll .
+          ttl-native-c.exe
+          cl /nologo /W4 /WX /TP /Icrates\ttl-live-native\include crates\ttl-live-native\tests\smoke.c target\${{ matrix.target }}\release\ttl_live.dll.lib /Fe:ttl-native-cpp.exe
+          ttl-native-cpp.exe
+      - name: Stage libraries and curated headers
+        shell: bash
+        run: |
+          python - <<'PY'
+          import pathlib, shutil
+          out=pathlib.Path('native-package')
+          out.mkdir(exist_ok=True)
+          built=pathlib.Path('target/${{ matrix.target }}/release')
+          for name in ['ttl_live.lib','ttl_live.dll','ttl_live.dll.lib','libttl_live.a','libttl_live.so','libttl_live.dylib']:
+              if (built/name).exists(): shutil.copy2(built/name,out/name)
+          shutil.copytree('crates/ttl-live-native/include',out/'include',dirs_exist_ok=True)
+          shutil.copy2('crates/ttl-live-native/README.md',out/'README.md')
+          shutil.copy2('crates/ttl-live-native/LICENSE',out/'LICENSE')
+          notices=out/'protobuf-license'
+          notices.mkdir(exist_ok=True)
+          for name in ['LICENSE.upstream','README.md','UPSTREAM']:
+              shutil.copy2(pathlib.Path('crates/ttl-live-proto')/name,notices/name)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ttl-live-${{ matrix.target }}
+          path: native-package/
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz --locked
+      - name: Instrumented event and FFI fuzz smoke
+        run: |
+          cargo fuzz run event_envelope -- -max_total_time=30 -max_len=65536
+          cargo fuzz run native_decode -- -max_total_time=30 -max_len=65536
+
+  thread-sanitizer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - name: Instrument native callback and destruction tests
+        env:
+          RUSTFLAGS: '-Zsanitizer=thread'
+          RUSTDOCFLAGS: '-Zsanitizer=thread'
+        run: cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p ttl-live-native --lib

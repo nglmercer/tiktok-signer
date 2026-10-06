@@ -71,6 +71,9 @@ pub enum WsError {
     #[error("TikTok rejected the handshake (HTTP {HTTP_OK}){}", .0.as_ref().map(|m| format!(": {m}")).unwrap_or_default())]
     Blocked200(Option<String>),
 
+    #[error("WebSocket handshake refused with HTTP {0}")]
+    HttpStatus(u16),
+
     #[error("could not decode protobuf: {0}")]
     Decode(String),
 
@@ -238,7 +241,11 @@ impl LiveConnection {
         // No protocol keepalive: TikTok does not answer `ping`, so a ping interval with
         // its timeout would close the connection. `tungstenite` does not send pings on its
         // own; the application heartbeat is the real keepalive.
-        let ws_config = WebSocketConfig::default();
+        let ws_config = WebSocketConfig {
+            max_message_size: Some(16 * 1024 * 1024),
+            max_frame_size: Some(16 * 1024 * 1024),
+            ..WebSocketConfig::default()
+        };
 
         let (mut stream, response) =
             tokio_tungstenite::connect_async_with_config(request, Some(ws_config), false)
@@ -389,6 +396,7 @@ fn map_handshake_error(err: tokio_tungstenite::tungstenite::Error) -> WsError {
                 .map(str::to_owned);
             WsError::Blocked200(msg)
         }
+        Error::Http(response) => WsError::HttpStatus(response.status().as_u16()),
         other => WsError::Transport(other.to_string()),
     }
 }
@@ -421,10 +429,15 @@ fn parse_handshake_options(raw: &str) -> Vec<(String, String)> {
 }
 
 fn gunzip(data: &[u8]) -> Result<Vec<u8>, WsError> {
+    const MAX_BATCH_BYTES: usize = 16 * 1024 * 1024;
     let mut out = Vec::new();
     GzDecoder::new(data)
+        .take((MAX_BATCH_BYTES + 1) as u64)
         .read_to_end(&mut out)
         .map_err(|e| WsError::Decode(format!("gzip: {e}")))?;
+    if out.len() > MAX_BATCH_BYTES {
+        return Err(WsError::Decode("decompressed batch exceeds 16 MiB".into()));
+    }
     Ok(out)
 }
 

@@ -2884,6 +2884,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ttl-live-core"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "prost",
+ "rustls",
+ "tokio",
+ "tokio-tungstenite 0.24.0",
+ "ttl-live-events",
+ "ttl-live-proto",
+ "ttl-live-ws",
+ "ttl-sign-core",
+]
+
+[[package]]
 name = "ttl-live-discovery"
 version = "0.1.0"
 dependencies = [
@@ -2903,12 +2918,29 @@ dependencies = [
 name = "ttl-live-events"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "prost",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
  "ttl-live-proto",
  "ttl-sign-core",
+]
+
+[[package]]
+name = "ttl-live-native"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "ttl-live-core",
+ "ttl-live-discovery",
+ "ttl-live-events",
+ "ttl-live-proto",
+ "ttl-sign-core",
+ "ttl-sign-embedded",
 ]
 
 [[package]]
@@ -2992,14 +3024,12 @@ version = "0.1.0"
 dependencies = [
  "jni",
  "rand 0.8.7",
- "ring",
  "rquickjs",
- "rustls",
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
+ "ttl-live-core",
  "ttl-live-events",
- "ttl-live-ws",
  "ttl-sign-core",
 ]
 

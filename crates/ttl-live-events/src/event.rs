@@ -139,10 +139,12 @@ pub struct RawEvent {
 }
 
 /// One event: its raw envelope plus the normalised interpretation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DecodedEvent {
     pub raw: RawEvent,
     pub event: LiveEvent,
+    #[serde(skip)]
+    pub schema: crate::SchemaMessage,
 }
 
 /// A decoded `ProtoMessageFetchResult` batch.
@@ -150,7 +152,7 @@ pub struct DecodedEvent {
 /// The three transport-relevant fields (`cursor`, `internal_ext`, `need_ack`)
 /// are surfaced because the WebSocket ACK path needs them; the transport itself
 /// still reads them via its own decoder during the migration.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EventBatch {
     pub events: Vec<DecodedEvent>,
     pub cursor: String,
@@ -178,5 +180,294 @@ impl EventBatch {
         methods.sort_unstable();
         methods.dedup();
         methods
+    }
+}
+
+/// The complete envelope; `event` remains the legacy compact convenience model.
+pub type EventEnvelope = DecodedEvent;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventSupport {
+    Normalized = 1,
+    Schema = 2,
+    Raw = 3,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JsonMode {
+    Normalized,
+    Schema,
+    Full,
+    Compact,
+    Raw,
+}
+
+impl DecodedEvent {
+    pub fn method(&self) -> &str {
+        &self.raw.method
+    }
+    pub fn message_id(&self) -> u64 {
+        self.raw.msg_id
+    }
+    pub fn normalized(&self) -> Option<&LiveEvent> {
+        (!self.event.is_unknown()).then_some(&self.event)
+    }
+    pub fn schema(&self) -> &crate::SchemaMessage {
+        &self.schema
+    }
+    pub fn raw_payload(&self) -> &[u8] {
+        &self.raw.payload
+    }
+    pub fn support(&self) -> EventSupport {
+        if self.normalized().is_some() {
+            EventSupport::Normalized
+        } else if self.schema.is_known() {
+            EventSupport::Schema
+        } else {
+            EventSupport::Raw
+        }
+    }
+    /// FNV-1a over UTF-8 method bytes. Collisions are possible; method is canonical.
+    pub fn method_id(&self) -> u32 {
+        method_id(self.method())
+    }
+    pub fn flags(&self) -> u32 {
+        fn unknown(fields: &[crate::SchemaField]) -> bool {
+            fields.iter().any(|f| {
+                f.descriptor.is_none()
+                    || matches!(&f.value, crate::SchemaValue::Message(o) if unknown(&o.fields))
+            })
+        }
+        u32::from(self.schema.truncated)
+            | (u32::from(!self.schema.is_known()) << 1)
+            | (u32::from(unknown(&self.schema.fields)) << 2)
+            | (u32::from(self.schema.warning) << 3)
+    }
+    /// Timestamp from common.create_time, when present, in server-defined units.
+    pub fn timestamp(&self) -> Option<u64> {
+        self.schema.message("common")?.number("create_time")
+    }
+    pub fn to_json(&self, mode: JsonMode) -> Option<String> {
+        use serde_json::json;
+        let normalized = || self.normalized().map(normalized_json);
+        let schema = || {
+            json!({"method": self.method(), "schema": self.schema.schema.map(|s| s.name),
+            "fields": object_json(&self.schema.fields), "wireFields": wire_json(&self.schema.fields),
+            "truncated": self.schema.truncated, "warning": self.schema.warning})
+        };
+        let v = match mode {
+            JsonMode::Normalized => normalized()?,
+            JsonMode::Schema => schema(),
+            JsonMode::Full => {
+                json!({"version":1, "method":self.method(), "methodId":self.method_id(),
+                "messageId": self.message_id().to_string(), "history":self.raw.is_history,
+                "support": match self.support() { EventSupport::Normalized => "normalized", EventSupport::Schema => "schema", EventSupport::Raw => "raw" },
+                "schema": {"known":self.schema.is_known(), "name":self.schema.schema.map(|s| s.name)},
+                "normalized":normalized(), "data":object_json(&self.schema.fields),
+                "wireFields":wire_json(&self.schema.fields), "flags":self.flags(),
+                "raw":{"size":self.raw.payload.len()}, "timestamp":self.timestamp().map(|v| v.to_string())})
+            }
+            JsonMode::Raw => {
+                json!({"method": self.method(), "messageId":self.message_id().to_string(),
+                "history":self.raw.is_history, "fields":wire_json(&self.schema.fields), "payload":bytes_json(&self.raw.payload)})
+            }
+            JsonMode::Compact => {
+                if self.event.is_unknown() {
+                    json!({"type":"unknown", "method":self.method(), "bytes":self.raw.payload.len()})
+                } else {
+                    normalized()?
+                }
+            }
+        };
+        Some(v.to_string())
+    }
+}
+pub fn method_id(method: &str) -> u32 {
+    method.bytes().fold(2_166_136_261, |h, b| {
+        (h ^ u32::from(b)).wrapping_mul(16_777_619)
+    })
+}
+fn normalized_json(event: &LiveEvent) -> serde_json::Value {
+    fn safe(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Number(n) => *v = serde_json::Value::String(n.to_string()),
+            serde_json::Value::Object(o) => {
+                for v in o.values_mut() {
+                    safe(v);
+                }
+            }
+            serde_json::Value::Array(a) => {
+                for v in a {
+                    safe(v);
+                }
+            }
+            _ => (),
+        }
+    }
+    let mut v = serde_json::to_value(event).expect("normalized model serializes");
+    safe(&mut v);
+    if let LiveEvent::Member(e) = event {
+        v["action"] = serde_json::json!(e.action);
+    }
+    v
+}
+fn bytes_json(bytes: &[u8]) -> serde_json::Value {
+    use base64::Engine;
+    serde_json::json!({"$bytes":base64::engine::general_purpose::STANDARD.encode(bytes)})
+}
+fn value_json(v: &crate::SchemaValue) -> serde_json::Value {
+    use crate::SchemaValue as V;
+    use serde_json::json;
+    match v {
+        V::Varint(v) | V::Uint64(v) | V::Fixed64(v) => json!(v.to_string()),
+        V::Int64(v) | V::Sint64(v) | V::Sfixed64(v) => json!(v.to_string()),
+        V::Uint32(v) | V::Fixed32(v) => json!(v),
+        V::Int32(v) | V::Sint32(v) | V::Sfixed32(v) => json!(v),
+        V::Bool(v) => json!(v),
+        V::Text(v) => json!(v),
+        V::Double(v) => float_json(*v),
+        V::Float(v) => float_json(*v as f64),
+        V::Enum { number, .. } => json!(number),
+        V::Bytes(b) | V::Truncated(b) => bytes_json(b),
+        V::Message(o) => object_json(&o.fields),
+    }
+}
+fn float_json(v: f64) -> serde_json::Value {
+    if v.is_finite() {
+        serde_json::json!(v)
+    } else {
+        serde_json::json!(if v.is_nan() {
+            "NaN"
+        } else if v > 0. {
+            "Infinity"
+        } else {
+            "-Infinity"
+        })
+    }
+}
+/// Named protobuf JSON; repeated fields and unexpected duplicate occurrences are arrays.
+fn object_json(fields: &[crate::SchemaField]) -> serde_json::Value {
+    use ttl_live_proto::FieldCardinality;
+    let mut o = serde_json::Map::new();
+    for f in fields {
+        let key = f
+            .descriptor
+            .map(|d| d.json_name.to_owned())
+            .unwrap_or_else(|| format!("#{}", f.number));
+        if f.descriptor.is_some_and(|d| d.is_map) {
+            if let crate::SchemaValue::Message(entry) = &f.value {
+                let k = entry
+                    .fields
+                    .iter()
+                    .rev()
+                    .find(|f| f.number == 1)
+                    .map(|f| value_json(&f.value))
+                    .unwrap_or_else(|| default_json(entry.schema.and_then(|s| s.field(1))));
+                let v = entry
+                    .fields
+                    .iter()
+                    .rev()
+                    .find(|f| f.number == 2)
+                    .map(|f| value_json(&f.value))
+                    .unwrap_or_else(|| default_json(entry.schema.and_then(|s| s.field(2))));
+                let map = o.entry(key).or_insert_with(|| serde_json::json!({}));
+                if let Some(map) = map.as_object_mut() {
+                    map.insert(k.as_str().map_or_else(|| k.to_string(), str::to_owned), v);
+                }
+                continue;
+            }
+        }
+        let v = value_json(&f.value);
+        let repeated = f
+            .descriptor
+            .is_some_and(|d| d.cardinality == FieldCardinality::Repeated);
+        match o.entry(key) {
+            serde_json::map::Entry::Vacant(e) => {
+                e.insert(if repeated {
+                    serde_json::Value::Array(vec![v])
+                } else {
+                    v
+                });
+            }
+            serde_json::map::Entry::Occupied(mut e) => {
+                if let serde_json::Value::Array(a) = e.get_mut() {
+                    a.push(v);
+                } else {
+                    let old = e.get().clone();
+                    e.insert(serde_json::Value::Array(vec![old, v]));
+                }
+            }
+        }
+    }
+    serde_json::Value::Object(o)
+}
+fn wire_json(fields: &[crate::SchemaField]) -> serde_json::Value {
+    serde_json::Value::Array(fields.iter().map(|f| serde_json::json!({
+        "number":f.number,"name":f.name,"jsonName":f.descriptor.map(|d| d.json_name),
+        "known":f.descriptor.is_some(),"wireType":f.wire_type,
+        "protoType": f.descriptor.map(|d| proto_type_name(d.value_kind)),
+        "enumType": f.descriptor.and_then(|d| match d.value_kind { ttl_live_proto::FieldValueKind::Enum(n) => Some(n),_ => None }),
+        "enumName": match &f.value { crate::SchemaValue::Enum { name,.. } => *name,_ => None },
+        "messageType": f.descriptor.and_then(|d| match d.value_kind { ttl_live_proto::FieldValueKind::Message(n) => Some(n),_ => None }),
+        "repeated":f.descriptor.is_some_and(|d| d.cardinality == ttl_live_proto::FieldCardinality::Repeated),
+        "map":f.descriptor.is_some_and(|d| d.is_map), "oneof":f.descriptor.and_then(|d| d.oneof_name),
+        "value":value_json(&f.value), "warning": f.warning,
+        "fields": match &f.value { crate::SchemaValue::Message(o) => wire_json(&o.fields), _ => serde_json::Value::Null }
+    })).collect())
+}
+
+// Preserve legacy serialized envelopes while rebuilding the complete schema
+// on deserialization; descriptors themselves are never serialized as pointers.
+impl<'de> Deserialize<'de> for DecodedEvent {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Compatibility {
+            raw: RawEvent,
+            event: LiveEvent,
+        }
+        let old = Compatibility::deserialize(d)?;
+        let mut decoded = crate::decode_event_envelope(
+            &old.raw.method,
+            old.raw.msg_id,
+            old.raw.is_history,
+            &old.raw.payload,
+        );
+        if !decoded.schema.truncated {
+            decoded.event = old.event;
+        }
+        Ok(decoded)
+    }
+}
+
+fn default_json(d: Option<&ttl_live_proto::FieldSchema>) -> serde_json::Value {
+    use ttl_live_proto::FieldValueKind as K;
+    match d.map(|d| d.value_kind) {
+        Some(K::String) => serde_json::json!(""),
+        Some(K::Bool) => serde_json::json!(false),
+        Some(K::Int64 | K::Uint64 | K::Sint64 | K::Fixed64 | K::Sfixed64) => serde_json::json!("0"),
+        Some(K::Bytes) => bytes_json(&[]),
+        Some(K::Message(_)) | None => serde_json::Value::Null,
+        _ => serde_json::json!(0),
+    }
+}
+
+fn proto_type_name(k: ttl_live_proto::FieldValueKind) -> &'static str {
+    use ttl_live_proto::FieldValueKind as K;
+    match k {
+        K::Double => "double",
+        K::Float => "float",
+        K::Int64 => "int64",
+        K::Uint64 => "uint64",
+        K::Sint64 => "sint64",
+        K::Fixed64 => "fixed64",
+        K::Sfixed64 => "sfixed64",
+        K::Int32 => "int32",
+        K::Uint32 => "uint32",
+        K::Sint32 => "sint32",
+        K::Fixed32 => "fixed32",
+        K::Sfixed32 => "sfixed32",
+        K::Bool => "bool",
+        K::String => "string",
+        K::Bytes => "bytes",
+        K::Enum(_) => "enum",
+        K::Message(_) => "message",
     }
 }
