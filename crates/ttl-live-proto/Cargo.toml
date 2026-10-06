@@ -21,3 +21,8 @@ prost = { workspace = true }
 prost-build = { workspace = true }
 prost-types = { workspace = true }
 protoc-bin-vendored = { workspace = true }
+
+[dev-dependencies]
+prost-types.workspace = true
+prost-build.workspace = true
+protoc-bin-vendored.workspace = true

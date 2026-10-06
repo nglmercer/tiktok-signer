@@ -162,7 +162,13 @@ pub enum MobileError {
 struct Request {
     url: String,
     product: Product,
-    reply: mpsc::Sender<Result<String, MobileError>>,
+    reply: Reply,
+}
+
+enum Reply {
+    Blocking(mpsc::Sender<Result<String, MobileError>>),
+    #[cfg(feature = "live")]
+    Async(tokio::sync::oneshot::Sender<Result<String, MobileError>>),
 }
 
 /// A signer holding a warm QuickJS context on its own thread.
@@ -200,10 +206,23 @@ impl MobileSigner {
             .send(Request {
                 url: url.to_string(),
                 product,
-                reply,
+                reply: Reply::Blocking(reply),
             })
             .map_err(|_| MobileError::Stopped)?;
         answer.recv().map_err(|_| MobileError::Stopped)?
+    }
+    /// Live worker variant: cancelling the wait never blocks runtime shutdown.
+    #[cfg(feature = "live")]
+    pub async fn sign_async(&self, url: &str, product: Product) -> Result<String, MobileError> {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        self.requests
+            .send(Request {
+                url: url.to_owned(),
+                product,
+                reply: Reply::Async(reply),
+            })
+            .map_err(|_| MobileError::Stopped)?;
+        answer.await.map_err(|_| MobileError::Stopped)?
     }
 }
 
@@ -229,7 +248,15 @@ fn worker(
     // which is how a dropped signer shuts its engine down.
     while let Ok(request) = incoming.recv() {
         let answer = engine.sign(&request.url, request.product.as_driver_arg());
-        let _ = request.reply.send(answer);
+        match request.reply {
+            Reply::Blocking(reply) => {
+                let _ = reply.send(answer);
+            }
+            #[cfg(feature = "live")]
+            Reply::Async(reply) => {
+                let _ = reply.send(answer);
+            }
+        }
     }
 }
 

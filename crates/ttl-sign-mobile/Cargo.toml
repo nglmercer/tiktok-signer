@@ -21,11 +21,11 @@ jni = ["dep:jni"]
 # Live event streaming: the reused transport (`ttl-live-ws`) and event decoding
 # (`ttl-live-events`) behind a blocking handle with a push callback. Carries its
 # own tokio runtime on the worker thread; the signing core stays runtime-free.
-live = ["dep:ttl-live-ws", "dep:ttl-live-events", "dep:tokio", "dep:ring", "dep:rustls"]
+live = ["dep:ttl-live-core", "dep:ttl-live-events", "dep:tokio"]
 
 [dependencies]
 ttl-sign-core = { workspace = true }
-ttl-live-ws = { workspace = true, optional = true }
+ttl-live-core = { workspace = true, optional = true }
 ttl-live-events = { workspace = true, optional = true }
 rand = { workspace = true }
 serde_json = { workspace = true }
@@ -33,12 +33,6 @@ thiserror = { workspace = true }
 rquickjs = { version = "0.12" }
 jni = { version = "0.22", optional = true }
 tokio = { workspace = true, features = ["rt"], optional = true }
-# TLS crypto provider for the live socket. tungstenite brings rustls with no
-# provider; without exactly one of these the first handshake panics. ring matches
-# the workspace lock (reqwest uses it too); aws-lc-rs is absent on purpose.
-ring = { version = "0.17", optional = true }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
-
 # rquickjs ships pre-generated C bindings per host platform, and Android is not
 # among them — without this the aarch64-linux-android build fails in
 # rquickjs-sys with "No such file or directory" on its bindings include.

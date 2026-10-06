@@ -70,6 +70,10 @@ pub struct FieldSchema {
     pub kind: FieldKind,
     pub value_kind: FieldValueKind,
     pub cardinality: FieldCardinality,
+    pub is_map: bool,
+    pub oneof_name: Option<&'static str>,
+    pub oneof_index: Option<i32>,
+    pub deprecated: bool,
 }
 
 /// Descriptor for one protobuf message.
@@ -78,6 +82,7 @@ pub struct MessageSchema {
     /// Fully qualified protobuf name, e.g. `webcast.model.message.WebcastChatMessage`.
     pub name: &'static str,
     pub fields: &'static [FieldSchema],
+    pub is_map_entry: bool,
 }
 
 impl MessageSchema {
@@ -367,3 +372,19 @@ mod tests {
         assert!(schema_for_method("RoomMessage").is_none());
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnumValueSchema {
+    pub number: i32,
+    pub name: &'static str,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnumSchema {
+    pub name: &'static str,
+    pub values: &'static [EnumValueSchema],
+}
+pub fn enum_by_name(name: &str) -> Option<&'static EnumSchema> {
+    ENUMS.iter().find(|e| e.name == name)
+}
+/// SHA-256 of the generated descriptor set, including enum/oneof/map semantics.
+pub const DESCRIPTOR_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/v3_descriptor.bin"));

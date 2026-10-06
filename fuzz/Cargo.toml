@@ -12,6 +12,8 @@ libfuzzer-sys = "0.4"
 serde_json = "1"
 ttl-sign-core = { path = "../crates/ttl-sign-core" }
 ttl-sign-replay = { path = "../crates/ttl-sign-replay" }
+ttl-live-events = { path = "../crates/ttl-live-events" }
+ttl-live-native = { path = "../crates/ttl-live-native" }
 
 [[bin]]
 name = "uri_sanitizer"
@@ -30,6 +32,20 @@ bench = false
 [[bin]]
 name = "fixture_loader"
 path = "fuzz_targets/fixture_loader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "event_envelope"
+path = "fuzz_targets/event_envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "native_decode"
+path = "fuzz_targets/native_decode.rs"
 test = false
 doc = false
 bench = false

@@ -1,0 +1,26 @@
+[package]
+name = "ttl-live-native"
+description = "Complete descriptor-driven TikTok LIVE native C ABI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "ttl_live"
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[dependencies]
+ttl-live-events.workspace = true
+ttl-live-proto.workspace = true
+ttl-live-core.workspace = true
+ttl-live-discovery.workspace = true
+ttl-sign-core.workspace = true
+ttl-sign-embedded.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+prost.workspace = true

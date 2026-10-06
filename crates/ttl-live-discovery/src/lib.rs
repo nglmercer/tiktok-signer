@@ -744,3 +744,5 @@ pub fn interpret_gift_list(room_id: &str, body: &str) -> Result<Vec<Gift>, Disco
         DiscoveryError::Decode(format!("unexpected gift/list response for room {room_id}"))
     })
 }
+
+pub mod identity;

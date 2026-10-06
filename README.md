@@ -14,6 +14,22 @@ The [Java 17+ SDK](sdk/java/README.md) supports broker-backed LIVE event streami
 HTTP-only presence monitoring, with optional Rust JNI signing. Build and test it with
 `cd sdk/java && ./gradlew build`.
 
+## Native C/C++ API
+
+The [native LIVE API](crates/ttl-live-native/README.md) exposes immutable event
+handles, normalized convenience models, complete descriptor-driven field trees,
+and raw fallback for future TikTok methods. It includes offline event/batch
+decoding, schema discovery, cloning, JSON, and an in-process live client.
+
+```sh
+cargo build --release -p ttl-live-native
+```
+
+Include `<ttl/ttl.h>` from `crates/ttl-live-native/include` and link `ttl_live`.
+See the native documentation for ownership, callback threading, defensive limits,
+C examples, and cross-platform artifacts. Mobile and native frontends share the
+same cancellable Rust transport loop.
+
 ## Status
 
 Verified against live rooms on 2026-08-18 with no browser: discovery, `room/info` and `gift/list`
@@ -53,6 +69,10 @@ client will parse) without disturbing the signature, and `ttl-live-events` decod
 | `ttl-live-discovery` | Browser-free discovery, entirely unsigned: room lookup, `room/info`, `gift/list`, and live channels. |
 | `ttl-sign-headless` | Browser-free `SignerBackend`: builds and signs the socket URL, and describes it in TikTok's own `ProtoMessageFetchResult` shape. |
 | `ttl-sign-embedded` | Signing, in-process: the real bundle in a warm QuickJS or V8 context. The only signer; there is no `node` subprocess any more. |
+| `ttl-live-proto` | Pinned protobuf descriptors with logical types, enums, map/oneof metadata, and automatic regeneration. |
+| `ttl-live-events` | Complete raw/schema envelopes plus optional stable normalizers and deterministic JSON. |
+| `ttl-live-core` | Shared cancellable transport, reconnection and ordered batch dispatch for native/mobile frontends. |
+| `ttl-live-native` | Stable C ABI: event trees, schema catalog, decode-only APIs and private live worker/runtime. |
 | `ttl-live-ws` | WebSocket client with heartbeat, acknowledgements, typed rejection handling, and a reconnecting stream that re-signs each attempt. |
 | `ttl-sign-server` | `GET /webcast/fetch`, `GET /webcast/rooms/{room_id}/connect` (Node client), and `GET /healthz`. |
 
