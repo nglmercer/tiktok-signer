@@ -1,0 +1,154 @@
+#include <stddef.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include "ttl/ttl_live.h"
+
+_Static_assert(sizeof(void *) == 8, "supported NuGet RIDs require 64-bit pointers");
+_Static_assert(sizeof(size_t) == sizeof(void *), "size_t must match pointer width");
+_Static_assert(sizeof(bool) == 1, "C bool must remain one byte");
+_Static_assert(sizeof(ttl_result_t) == 4, "C enums use 32-bit ABI representation");
+_Static_assert(sizeof(ttl_connection_state_t) == 4, "connection-state enum ABI drift");
+_Static_assert(sizeof(ttl_event_support_t) == 4, "event-support enum ABI drift");
+_Static_assert(sizeof(ttl_value_type_t) == 4, "value-type enum ABI drift");
+_Static_assert(sizeof(ttl_proto_type_t) == 4, "proto-type enum ABI drift");
+_Static_assert(sizeof(ttl_field_cardinality_t) == 4, "cardinality enum ABI drift");
+_Static_assert(sizeof(ttl_normalized_type_t) == 4, "normalized-event enum ABI drift");
+_Static_assert(sizeof(ttl_json_mode_t) == 4, "JSON-mode enum ABI drift");
+_Static_assert(sizeof(ttl_event_callback_t) == sizeof(void *), "event callback pointer ABI drift");
+_Static_assert(sizeof(ttl_batch_callback_t) == sizeof(void *), "batch callback pointer ABI drift");
+_Static_assert(sizeof(ttl_state_callback_t) == sizeof(void *), "state callback pointer ABI drift");
+_Static_assert(sizeof(ttl_error_callback_t) == sizeof(void *), "error callback pointer ABI drift");
+_Static_assert(sizeof(ttl_event_type_t) == 4, "event type must remain uint32_t");
+
+#define ASSERT_ENUM_VALUE(name, expected) _Static_assert((name) == (expected), #name " value drift")
+ASSERT_ENUM_VALUE(TTL_OK, 0);
+ASSERT_ENUM_VALUE(TTL_ERROR_INVALID_ARGUMENT, 1);
+ASSERT_ENUM_VALUE(TTL_ERROR_INVALID_UTF8, 2);
+ASSERT_ENUM_VALUE(TTL_ERROR_INVALID_STATE, 3);
+ASSERT_ENUM_VALUE(TTL_ERROR_DISCOVERY, 4);
+ASSERT_ENUM_VALUE(TTL_ERROR_OFFLINE, 5);
+ASSERT_ENUM_VALUE(TTL_ERROR_SIGNER, 6);
+ASSERT_ENUM_VALUE(TTL_ERROR_AUTH, 7);
+ASSERT_ENUM_VALUE(TTL_ERROR_SOCKET, 8);
+ASSERT_ENUM_VALUE(TTL_ERROR_PROTOCOL, 9);
+ASSERT_ENUM_VALUE(TTL_ERROR_DECODE, 10);
+ASSERT_ENUM_VALUE(TTL_ERROR_TIMEOUT, 11);
+ASSERT_ENUM_VALUE(TTL_ERROR_SHUTDOWN, 12);
+ASSERT_ENUM_VALUE(TTL_ERROR_INTERNAL, 13);
+ASSERT_ENUM_VALUE(TTL_CONNECTION_DISCONNECTED, 0);
+ASSERT_ENUM_VALUE(TTL_CONNECTION_CONNECTING, 1);
+ASSERT_ENUM_VALUE(TTL_CONNECTION_CONNECTED, 2);
+ASSERT_ENUM_VALUE(TTL_CONNECTION_RECONNECTING, 3);
+ASSERT_ENUM_VALUE(TTL_CONNECTION_OFFLINE, 4);
+ASSERT_ENUM_VALUE(TTL_CONNECTION_ERROR, 5);
+ASSERT_ENUM_VALUE(TTL_EVENT_SUPPORT_NORMALIZED, 1);
+ASSERT_ENUM_VALUE(TTL_EVENT_SUPPORT_SCHEMA, 2);
+ASSERT_ENUM_VALUE(TTL_EVENT_SUPPORT_RAW, 3);
+ASSERT_ENUM_VALUE(TTL_VALUE_VARINT, 0);
+ASSERT_ENUM_VALUE(TTL_VALUE_FIXED32, 1);
+ASSERT_ENUM_VALUE(TTL_VALUE_FIXED64, 2);
+ASSERT_ENUM_VALUE(TTL_VALUE_STRING, 3);
+ASSERT_ENUM_VALUE(TTL_VALUE_BYTES, 4);
+ASSERT_ENUM_VALUE(TTL_VALUE_MESSAGE, 5);
+ASSERT_ENUM_VALUE(TTL_VALUE_TRUNCATED, 6);
+ASSERT_ENUM_VALUE(TTL_PROTO_DOUBLE, 0);
+ASSERT_ENUM_VALUE(TTL_PROTO_FLOAT, 1);
+ASSERT_ENUM_VALUE(TTL_PROTO_INT64, 2);
+ASSERT_ENUM_VALUE(TTL_PROTO_UINT64, 3);
+ASSERT_ENUM_VALUE(TTL_PROTO_SINT64, 4);
+ASSERT_ENUM_VALUE(TTL_PROTO_FIXED64, 5);
+ASSERT_ENUM_VALUE(TTL_PROTO_SFIXED64, 6);
+ASSERT_ENUM_VALUE(TTL_PROTO_INT32, 7);
+ASSERT_ENUM_VALUE(TTL_PROTO_UINT32, 8);
+ASSERT_ENUM_VALUE(TTL_PROTO_SINT32, 9);
+ASSERT_ENUM_VALUE(TTL_PROTO_FIXED32, 10);
+ASSERT_ENUM_VALUE(TTL_PROTO_SFIXED32, 11);
+ASSERT_ENUM_VALUE(TTL_PROTO_BOOL, 12);
+ASSERT_ENUM_VALUE(TTL_PROTO_STRING, 13);
+ASSERT_ENUM_VALUE(TTL_PROTO_BYTES, 14);
+ASSERT_ENUM_VALUE(TTL_PROTO_ENUM, 15);
+ASSERT_ENUM_VALUE(TTL_PROTO_MESSAGE, 16);
+ASSERT_ENUM_VALUE(TTL_PROTO_UNKNOWN, 17);
+ASSERT_ENUM_VALUE(TTL_CARDINALITY_OPTIONAL, 0);
+ASSERT_ENUM_VALUE(TTL_CARDINALITY_REPEATED, 1);
+ASSERT_ENUM_VALUE(TTL_NORMALIZED_NONE, 0);
+ASSERT_ENUM_VALUE(TTL_NORMALIZED_CHAT, 1);
+ASSERT_ENUM_VALUE(TTL_NORMALIZED_GIFT, 2);
+ASSERT_ENUM_VALUE(TTL_NORMALIZED_LIKE, 3);
+ASSERT_ENUM_VALUE(TTL_NORMALIZED_MEMBER, 4);
+ASSERT_ENUM_VALUE(TTL_NORMALIZED_SOCIAL, 5);
+ASSERT_ENUM_VALUE(TTL_NORMALIZED_ROOM_USER, 6);
+ASSERT_ENUM_VALUE(TTL_JSON_NORMALIZED, 0);
+ASSERT_ENUM_VALUE(TTL_JSON_SCHEMA, 1);
+ASSERT_ENUM_VALUE(TTL_JSON_FULL, 2);
+ASSERT_ENUM_VALUE(TTL_JSON_COMPACT, 3);
+ASSERT_ENUM_VALUE(TTL_JSON_RAW, 4);
+
+_Static_assert(sizeof(ttl_live_options_t) == 64, "ttl_live_options_t size drift");
+_Static_assert(_Alignof(ttl_live_options_t) == 8, "options alignment drift");
+_Static_assert(offsetof(ttl_live_options_t, struct_size) == 0, "options.struct_size offset drift");
+_Static_assert(offsetof(ttl_live_options_t, unique_id) == 8, "options.unique_id offset drift");
+_Static_assert(offsetof(ttl_live_options_t, unique_id_len) == 16, "options.unique_id_len offset drift");
+_Static_assert(offsetof(ttl_live_options_t, bundle) == 24, "options.bundle offset drift");
+_Static_assert(offsetof(ttl_live_options_t, bundle_len) == 32, "options.bundle_len offset drift");
+_Static_assert(offsetof(ttl_live_options_t, reconnect) == 40, "options.reconnect offset drift");
+_Static_assert(offsetof(ttl_live_options_t, max_reconnect_attempts) == 44, "options.max_reconnect_attempts offset drift");
+_Static_assert(offsetof(ttl_live_options_t, cookie_header) == 48, "options.cookie_header offset drift");
+_Static_assert(offsetof(ttl_live_options_t, cookie_header_len) == 56, "options.cookie_header_len offset drift");
+
+_Static_assert(sizeof(ttl_error_info_t) == 48, "ttl_error_info_t size drift");
+_Static_assert(_Alignof(ttl_error_info_t) == 8, "error-info alignment drift");
+_Static_assert(offsetof(ttl_error_info_t, code) == 0, "error.code offset drift");
+_Static_assert(offsetof(ttl_error_info_t, message) == 8, "error.message offset drift");
+_Static_assert(offsetof(ttl_error_info_t, message_len) == 16, "error.message_len offset drift");
+_Static_assert(offsetof(ttl_error_info_t, retryable) == 24, "error.retryable offset drift");
+_Static_assert(offsetof(ttl_error_info_t, retry_after_ms) == 32, "error.retry_after_ms offset drift");
+_Static_assert(offsetof(ttl_error_info_t, http_status) == 40, "error.http_status offset drift");
+
+_Static_assert(sizeof(ttl_event_info_t) == 88, "ttl_event_info_t size drift");
+_Static_assert(_Alignof(ttl_event_info_t) == 8, "event-info alignment drift");
+_Static_assert(offsetof(ttl_event_info_t, abi_version) == 0, "event_info.abi_version offset drift");
+_Static_assert(offsetof(ttl_event_info_t, method) == 8, "event_info.method offset drift");
+_Static_assert(offsetof(ttl_event_info_t, method_len) == 16, "event_info.method_len offset drift");
+_Static_assert(offsetof(ttl_event_info_t, message_id) == 24, "event_info.message_id offset drift");
+_Static_assert(offsetof(ttl_event_info_t, support) == 32, "event_info.support offset drift");
+_Static_assert(offsetof(ttl_event_info_t, is_history) == 36, "event_info.is_history offset drift");
+_Static_assert(offsetof(ttl_event_info_t, schema_name) == 40, "event_info.schema_name offset drift");
+_Static_assert(offsetof(ttl_event_info_t, schema_name_len) == 48, "event_info.schema_name_len offset drift");
+_Static_assert(offsetof(ttl_event_info_t, raw_payload_size) == 56, "event_info.raw_payload_size offset drift");
+_Static_assert(offsetof(ttl_event_info_t, method_id) == 64, "event_info.method_id offset drift");
+_Static_assert(offsetof(ttl_event_info_t, timestamp) == 72, "event_info.timestamp offset drift");
+_Static_assert(offsetof(ttl_event_info_t, has_timestamp) == 80, "event_info.has_timestamp offset drift");
+
+_Static_assert(sizeof(ttl_user_t) == 72, "ttl_user_t size drift");
+_Static_assert(_Alignof(ttl_user_t) == 8, "user alignment drift");
+_Static_assert(offsetof(ttl_user_t, id) == 0, "user.id offset drift");
+_Static_assert(offsetof(ttl_user_t, nickname) == 8, "user.nickname offset drift");
+_Static_assert(offsetof(ttl_user_t, nickname_len) == 16, "user.nickname_len offset drift");
+_Static_assert(offsetof(ttl_user_t, unique_id) == 24, "user.unique_id offset drift");
+_Static_assert(offsetof(ttl_user_t, unique_id_len) == 32, "user.unique_id_len offset drift");
+_Static_assert(offsetof(ttl_user_t, sec_uid) == 40, "user.sec_uid offset drift");
+_Static_assert(offsetof(ttl_user_t, sec_uid_len) == 48, "user.sec_uid_len offset drift");
+_Static_assert(offsetof(ttl_user_t, avatar_url) == 56, "user.avatar_url offset drift");
+_Static_assert(offsetof(ttl_user_t, avatar_url_len) == 64, "user.avatar_url_len offset drift");
+_Static_assert(sizeof(ttl_chat_event_t) == 88, "ttl_chat_event_t size drift");
+_Static_assert(_Alignof(ttl_chat_event_t) == 8, "chat-event alignment drift");
+_Static_assert(offsetof(ttl_chat_event_t, user) == 0, "chat.user offset drift");
+_Static_assert(offsetof(ttl_chat_event_t, comment) == 72, "chat.comment offset drift");
+_Static_assert(offsetof(ttl_chat_event_t, comment_len) == 80, "chat.comment_len offset drift");
+_Static_assert(sizeof(ttl_gift_event_t) == 152, "ttl_gift_event_t size drift");
+_Static_assert(_Alignof(ttl_gift_event_t) == 8, "gift-event alignment drift");
+_Static_assert(offsetof(ttl_gift_event_t, user) == 0, "gift.user offset drift");
+_Static_assert(offsetof(ttl_gift_event_t, gift_id) == 72, "gift.gift_id offset drift");
+_Static_assert(offsetof(ttl_gift_event_t, gift_name) == 80, "gift.gift_name offset drift");
+_Static_assert(offsetof(ttl_gift_event_t, gift_name_len) == 88, "gift.gift_name_len offset drift");
+_Static_assert(offsetof(ttl_gift_event_t, diamond_count) == 96, "gift.diamond_count offset drift");
+_Static_assert(offsetof(ttl_gift_event_t, repeat_count) == 104, "gift.repeat_count offset drift");
+_Static_assert(offsetof(ttl_gift_event_t, combo_count) == 112, "gift.combo_count offset drift");
+_Static_assert(offsetof(ttl_gift_event_t, group_id) == 120, "gift.group_id offset drift");
+_Static_assert(offsetof(ttl_gift_event_t, repeat_end) == 128, "gift.repeat_end offset drift");
+_Static_assert(offsetof(ttl_gift_event_t, gift_image_url) == 136, "gift.gift_image_url offset drift");
+_Static_assert(offsetof(ttl_gift_event_t, gift_image_url_len) == 144, "gift.gift_image_url_len offset drift");
+
+#undef ASSERT_ENUM_VALUE
+int main(void) { return 0; }

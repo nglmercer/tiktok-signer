@@ -7,7 +7,7 @@ internal static class NativeEventReader
 {
     private const int MaxNativeDepth = 8;
 
-    internal static TtlEvent CaptureEvent(nint value)
+    internal static TtlEvent CaptureEvent(nint value, bool captureFullFieldTree = true)
     {
         if (value == 0) throw new InvalidDataException("Native callback supplied a null event.");
         if (!NativeMethods.ttl_event_get_info(value, out NativeEventInfo info))
@@ -24,35 +24,33 @@ internal static class NativeEventReader
             throw new InvalidDataException("Event schema name views disagree within the native ABI.");
         byte[] payload = NativeRuntime.CopyBytes(NativeMethods.ttl_event_raw_data(value), NativeMethods.ttl_event_raw_size(value));
         nint nativeRoot = NativeMethods.ttl_event_root(value);
-        TtlObject root = CaptureObject(nativeRoot, 0);
-        var json = new Dictionary<JsonMode, string?>();
-        foreach (JsonMode mode in Enum.GetValues<JsonMode>())
-        {
-            nint allocated = NativeMethods.ttl_event_to_json(value, (int)mode);
-            if (allocated == 0)
-            {
-                if (mode != JsonMode.Normalized)
-                    throw NativeRuntime.LastError($"serialize event as {mode}");
-                json[mode] = null;
-                continue;
-            }
-            try { json[mode] = NativeRuntime.ReadNullTerminated(allocated); }
-            finally { NativeMethods.ttl_string_free(allocated); }
-        }
+        TtlObject root = captureFullFieldTree
+            ? CaptureObject(nativeRoot, 0)
+            : new TtlObject(Array.Empty<TtlField>(), NativeMethods.ttl_object_is_truncated(nativeRoot));
 
         uint flags = NativeMethods.ttl_event_flags(value);
         NativeMethods.ttl_event_timestamp(value, out ulong timestamp);
         ulong? maybeTimestamp = info.HasTimestamp != 0 ? timestamp : null;
         int nativeSupport = NativeMethods.ttl_event_support(value);
+        int normalizedType = NativeMethods.ttl_event_normalized_type(value);
         var support = Enum.IsDefined(typeof(EventSupport), nativeSupport)
             ? (EventSupport)nativeSupport : EventSupport.Raw;
         bool truncated = NativeMethods.ttl_event_is_truncated(value);
         if (truncated != ((flags & 1) != 0)) throw new InvalidDataException("Event truncation views disagree within the native ABI.");
-        var normalized = CaptureNormalized(value, method, nativeSupport, json[JsonMode.Normalized]);
+        string? normalizedJson = nativeSupport == (int)EventSupport.Normalized && normalizedType is >= 3 and <= 6
+            ? CaptureJson(value, JsonMode.Normalized)
+            : null;
+        var json = normalizedJson is null
+            ? new Dictionary<JsonMode, string?>()
+            : new Dictionary<JsonMode, string?> { [JsonMode.Normalized] = normalizedJson };
+        // Truncated decoding depends on the original native budget; re-decoding cannot reproduce it.
+        if (truncated)
+            foreach (JsonMode mode in Enum.GetValues<JsonMode>()) json[mode] = CaptureJson(value, mode);
+        var normalized = CaptureNormalized(value, method, nativeSupport, normalizedType, normalizedJson);
         return new TtlEvent(method, info.MethodId, NativeMethods.ttl_event_type(value),
             messageId, isHistory, support, schemaName, maybeTimestamp,
             flags, payload, root, normalized,
-            new ReadOnlyDictionary<JsonMode, string?>(json));
+            new ReadOnlyDictionary<JsonMode, string?>(json), SerializeOwnedEventJson);
     }
 
     internal static TtlEventBatch CaptureBatch(nint value)
@@ -246,10 +244,9 @@ internal static class NativeEventReader
     }
 
     private static NormalizedLiveEvent? CaptureNormalized(nint value, string method,
-        int support, string? normalizedJson)
+        int support, int kind, string? normalizedJson)
     {
-        if (support != (int)EventSupport.Normalized || normalizedJson is null) return null;
-        int kind = NativeMethods.ttl_event_normalized_type(value);
+        if (support != (int)EventSupport.Normalized || (normalizedJson is null && kind is not (1 or 2))) return null;
         if (kind == 1 && NativeMethods.ttl_event_chat(value, out NativeChatEvent chat))
         {
             NativeUser user = NativeMethods.ttl_event_get_user(value, out NativeUser commonUser) ? commonUser : chat.User;
@@ -264,7 +261,8 @@ internal static class NativeEventReader
                 NativeRuntime.ReadOptionalUtf8(gift.GiftImageUrl, gift.GiftImageUrlLen));
         }
 
-        using JsonDocument document = JsonDocument.Parse(normalizedJson);
+        if (normalizedJson is null) return null;
+        using JsonDocument document = JsonDocument.Parse(normalizedJson!);
         JsonElement root = document.RootElement;
         return kind switch
         {
@@ -323,4 +321,28 @@ internal static class NativeEventReader
         long.TryParse(ReadOptionalString(root, name), out long result) ? result : 0;
     private static int ReadInt32(JsonElement root, string name) =>
         int.TryParse(ReadOptionalString(root, name), out int result) ? result : 0;
+
+    private static string? SerializeOwnedEventJson(string method, ulong messageId,
+        bool isHistory, byte[] payload, JsonMode mode)
+    {
+        using var nativeMethod = new Utf8Input(method);
+        using var nativePayload = PinnedInput.From(payload);
+        nint pointer = NativeMethods.ttl_event_decode(nativeMethod.Pointer, nativeMethod.Length,
+            messageId, isHistory, nativePayload.Pointer, nativePayload.Length);
+        if (pointer == 0) throw NativeRuntime.LastError("recreate event for deferred JSON serialization");
+        using var owned = new NativeEventHandle(pointer);
+        return CaptureJson(pointer, mode);
+    }
+
+    private static string? CaptureJson(nint value, JsonMode mode)
+    {
+        nint allocated = NativeMethods.ttl_event_to_json(value, (int)mode);
+        if (allocated == 0)
+        {
+            if (mode == JsonMode.Normalized) return null;
+            throw NativeRuntime.LastError($"serialize event as {mode}");
+        }
+        try { return NativeRuntime.ReadNullTerminated(allocated); }
+        finally { NativeMethods.ttl_string_free(allocated); }
+    }
 }

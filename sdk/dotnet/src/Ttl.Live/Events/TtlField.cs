@@ -47,7 +47,7 @@ public sealed class TtlField
         Cardinality = cardinality; IsMap = isMap; OneofName = oneofName;
         OneofIndex = oneofIndex; Value = value; ObjectValue = objectValue;
         EnumType = enumType; EnumName = enumName;
-        _mapEntries = mapEntries ?? Array.Empty<TtlMapEntry>();
+        _mapEntries = Array.AsReadOnly(mapEntries?.ToArray() ?? Array.Empty<TtlMapEntry>());
     }
 
     public bool TryGet<T>(out T? value)
@@ -57,13 +57,19 @@ public sealed class TtlField
         return false;
     }
 
-    internal TtlField Clone()
+    internal TtlField Clone(Dictionary<TtlObject, TtlObject> clonedObjects)
     {
-        object? copiedValue = Value is ReadOnlyMemory<byte> bytes
-            ? new ReadOnlyMemory<byte>(bytes.ToArray())
-            : Value;
-        TtlObject? copiedObject = ObjectValue?.Clone();
-        var copiedMaps = _mapEntries.Select(entry => new TtlMapEntry(entry.Key?.Clone(), entry.Value?.Clone())).ToArray();
+        TtlObject? copiedObject = ObjectValue?.Clone(clonedObjects);
+        object? copiedValue = Value switch
+        {
+            ReadOnlyMemory<byte> bytes => new ReadOnlyMemory<byte>(bytes.ToArray()),
+            byte[] bytes => bytes.ToArray(),
+            TtlObject nested when ReferenceEquals(nested, ObjectValue) => copiedObject,
+            TtlObject nested => nested.Clone(clonedObjects),
+            _ => Value
+        };
+        var copiedMaps = _mapEntries.Select(entry => new TtlMapEntry(
+            entry.Key?.Clone(clonedObjects), entry.Value?.Clone(clonedObjects))).ToArray();
         return new TtlField(Number, Name, JsonName, IsNamed, ValueType, WireType,
             ProtoType, Cardinality, IsMap, OneofName, OneofIndex, copiedValue,
             copiedObject, EnumType, EnumName, copiedMaps);
@@ -100,16 +106,21 @@ public sealed class TtlObject
     public TtlField? ActiveOneof(string name) => _activeOneofs.GetValueOrDefault(name);
     public IReadOnlyList<TtlMapEntry> MapEntries(string name) => Find(name)?.MapEntries ?? Array.Empty<TtlMapEntry>();
 
-    internal TtlObject Clone()
+    internal TtlObject Clone() => Clone(new Dictionary<TtlObject, TtlObject>());
+
+    internal TtlObject Clone(Dictionary<TtlObject, TtlObject> clonedObjects)
     {
+        if (clonedObjects.TryGetValue(this, out TtlObject? previous)) return previous;
         TtlField[] source = _fields.ToArray();
-        TtlField[] fields = source.Select(field => field.Clone()).ToArray();
+        TtlField[] fields = source.Select(field => field.Clone(clonedObjects)).ToArray();
         var active = new Dictionary<string, TtlField>(StringComparer.Ordinal);
         foreach (var pair in _activeOneofs)
         {
             int index = Array.IndexOf(source, pair.Value);
             if (index >= 0) active[pair.Key] = fields[index];
         }
-        return new TtlObject(fields, IsTruncated, active);
+        var clone = new TtlObject(fields, IsTruncated, active);
+        clonedObjects.Add(this, clone);
+        return clone;
     }
 }

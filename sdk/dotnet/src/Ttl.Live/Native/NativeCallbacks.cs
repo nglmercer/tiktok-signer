@@ -1,13 +1,20 @@
 using System.Runtime.InteropServices;
-using System.Threading.Channels;
 
 namespace Ttl.Live.Native;
 
-internal sealed class CallbackContext(WeakReference<TikTokLiveClient> client,
-    ChannelWriter<Action> dispatchWriter)
+internal sealed class CallbackContext(WeakReference<TikTokLiveClient> client)
 {
     internal WeakReference<TikTokLiveClient> Client { get; } = client;
-    internal void CompleteDispatch() => dispatchWriter.TryComplete();
+    private int _closed;
+    internal bool TryGetClient(out TikTokLiveClient? value)
+    {
+        value = null;
+        return Volatile.Read(ref _closed) == 0 && Client.TryGetTarget(out value);
+    }
+    internal void CompleteDispatch()
+    {
+        Interlocked.Exchange(ref _closed, 1);
+    }
 }
 
 internal static class NativeCallbacks
@@ -31,6 +38,34 @@ internal static class NativeCallbacks
     internal static nint StatePointer { get; } = Marshal.GetFunctionPointerForDelegate(StateRoot);
     internal static nint ErrorPointer { get; } = Marshal.GetFunctionPointerForDelegate(ErrorRoot);
 
+    // Drives the same rooted unmanaged callback entrypoint used by Rust, without credentials or a
+    // network. The native callback's pointer/length lifetime is identical to the C ABI contract.
+    internal static void InvokeStateCallbackForTests(nint userdata, int state, string? detail)
+    {
+        using var utf8 = new Utf8Input(detail);
+        StateRoot(userdata, state, utf8.Pointer, utf8.Length);
+    }
+
+    internal static void InvokeErrorCallbackForTests(nint userdata, int code, string detail, bool retryable)
+    {
+        using var utf8 = new Utf8Input(detail);
+        nint pointer = Marshal.AllocHGlobal(Marshal.SizeOf<NativeErrorInfo>());
+        try
+        {
+            Marshal.StructureToPtr(new NativeErrorInfo
+            {
+                Code = code,
+                Message = utf8.Pointer,
+                MessageLen = utf8.Length,
+                Retryable = retryable ? (byte)1 : (byte)0,
+                RetryAfterMs = -1,
+                HttpStatus = 0
+            }, pointer, false);
+            ErrorRoot(userdata, pointer);
+        }
+        finally { Marshal.FreeHGlobal(pointer); }
+    }
+
     private static bool TryClient(nint userdata, out TikTokLiveClient? client)
     {
         client = null;
@@ -38,7 +73,7 @@ internal static class NativeCallbacks
         try
         {
             var handle = GCHandle.FromIntPtr(userdata);
-            return handle.Target is CallbackContext context && context.Client.TryGetTarget(out client);
+            return handle.Target is CallbackContext context && context.TryGetClient(out client);
         }
         catch { return false; }
     }
@@ -47,14 +82,14 @@ internal static class NativeCallbacks
     {
         if (!TryClient(userdata, out var client)) return;
         try { client!.OnNativeEvent(value); }
-        catch (Exception error) { client!.OnInteropFailure(error); }
+        catch (Exception error) { try { client!.OnInteropFailure(error); } catch { } }
     }
 
     private static void OnBatch(nint userdata, nint value)
     {
         if (!TryClient(userdata, out var client)) return;
         try { client!.OnNativeBatch(value); }
-        catch (Exception error) { client!.OnInteropFailure(error); }
+        catch (Exception error) { try { client!.OnInteropFailure(error); } catch { } }
     }
 
     private static void OnState(nint userdata, int state, nint detail, nuint detailLength)
@@ -65,7 +100,7 @@ internal static class NativeCallbacks
             string? copied = NativeRuntime.ReadOptionalUtf8(detail, detailLength);
             client!.OnNativeState(state, copied);
         }
-        catch (Exception error) { client!.OnInteropFailure(error); }
+        catch (Exception error) { try { client!.OnInteropFailure(error); } catch { } }
     }
 
     private static void OnError(nint userdata, nint error)
@@ -78,6 +113,6 @@ internal static class NativeCallbacks
             TikTokLiveException copied = NativeRuntime.Error(info);
             client!.OnNativeError(copied);
         }
-        catch (Exception exception) { client!.OnInteropFailure(exception); }
+        catch (Exception exception) { try { client!.OnInteropFailure(exception); } catch { } }
     }
 }

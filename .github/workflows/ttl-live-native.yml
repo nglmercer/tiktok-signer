@@ -45,6 +45,20 @@ jobs:
           dotnet-version: |
             8.0.x
             10.0.x
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - name: Compile C ABI layout assertions against the public headers
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cl /nologo /std:c11 /W4 /WX /I crates/ttl-live-native/include \
+              sdk/dotnet/tests/native/abi_layout.c /Fe:ttl-dotnet-abi-layout.exe
+            ./ttl-dotnet-abi-layout.exe
+          else
+            cc -std=c11 -Wall -Wextra -Werror -Icrates/ttl-live-native/include \
+              sdk/dotnet/tests/native/abi_layout.c -o /tmp/ttl-dotnet-abi-layout
+            /tmp/ttl-dotnet-abi-layout
+          fi
       - name: .NET ABI and offline SDK tests
         shell: bash
         env:
@@ -68,8 +82,6 @@ jobs:
             python scripts/native/check-exports.py "$libdir/libttl_live.dylib"
             python sdk/dotnet/tools/check-abi-coverage.py --library "$libdir/libttl_live.dylib"
           fi
-      - uses: ilammy/msvc-dev-cmd@v1
-        if: runner.os == 'Windows'
       - name: Verify Windows C and C++ linkage
         if: runner.os == 'Windows'
         shell: cmd
@@ -125,6 +137,59 @@ jobs:
         with:
           name: ttl-live-dotnet-nuget
           path: dotnet-package/*
+  nuget-consumer:
+    needs: dotnet-package
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: ubuntu-24.04-arm
+            rid: linux-arm64
+          - os: windows-latest
+            rid: win-x64
+          - os: macos-15-intel
+            rid: osx-x64
+          - os: macos-15
+            rid: osx-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ttl-live-dotnet-nuget
+          path: ${{ runner.temp }}/ttl-live-package
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore and run a consumer using this RID's packaged native library
+        shell: bash
+        env:
+          PACKAGE_DIR: ${{ runner.temp }}/ttl-live-package
+          CONSUMER_DIR: ${{ runner.temp }}/ttl-live-package-consumer
+        run: |
+          mkdir -p "$CONSUMER_DIR"
+          cat > "$CONSUMER_DIR/Consumer.csproj" <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net10.0</TargetFramework>
+              <ImplicitUsings>enable</ImplicitUsings>
+              <Nullable>enable</Nullable>
+            </PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="Ttl.Live" Version="0.1.0" />
+            </ItemGroup>
+          </Project>
+          EOF
+          cat > "$CONSUMER_DIR/Program.cs" <<'EOF'
+          using Ttl.Live;
+          NativeLibraryInfo native = TikTokLiveClient.NativeLibrary;
+          if (native.AbiVersion != 1) throw new Exception("Unexpected native ABI version.");
+          Console.WriteLine($"ABI={native.AbiVersion} Version={native.Version}");
+          EOF
+          dotnet restore "$CONSUMER_DIR/Consumer.csproj" --source "$PACKAGE_DIR"
+          dotnet run --project "$CONSUMER_DIR/Consumer.csproj" --configuration Release --no-restore
   fuzz-smoke:
     runs-on: ubuntu-latest
     steps:

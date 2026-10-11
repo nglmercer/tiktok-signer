@@ -1,0 +1,20 @@
+Ttl.Live NuGet package component licensing notice
+==================================================
+
+This package contains components with different terms. The package must not be
+treated as MIT-only.
+
+The Ttl.Live managed SDK project previously declared MIT in its NuGet metadata.
+The bundled ttl-live-native runtime is distributed with its MIT license at
+THIRD-PARTY-NOTICES/LICENSE.
+
+The native runtime also incorporates the vendored TikTok Webcast protobuf
+schema and generated decoding material from ttl-live-proto. Those materials are
+covered by a modified AGPL-3.0 license with additional permissions and
+restrictions. The complete upstream license, including Sections 18 through 21,
+is included at THIRD-PARTY-NOTICES/LICENSE.upstream. In particular, Section 19
+places conditions on commercial, closed-source, or hosted network services.
+The summary in this file does not replace that full license text.
+
+Review all component notices before redistributing this package or using it to
+provide a network service.

@@ -177,6 +177,64 @@ public sealed class NativeEventTests
     }
 
     [Fact]
+    public void ManagedCloneRelinksNestedValuesAndCopiesNestedBuffersMapsAndOneofs()
+    {
+        TtlEvent chat = TikTokEventDecoder.Decode("WebcastChatMessage", 12, false,
+            File.ReadAllBytes(Fixture("chat.pb")));
+        TtlField originalUser = Assert.IsType<TtlField>(chat.Root.Find("user"));
+        Assert.Same(originalUser.ObjectValue, originalUser.Value);
+        TtlEvent chatClone = chat.Clone();
+        TtlField clonedUser = Assert.IsType<TtlField>(chatClone.Root.Find("user"));
+        Assert.NotSame(originalUser.ObjectValue, clonedUser.ObjectValue);
+        Assert.Same(clonedUser.ObjectValue, clonedUser.Value);
+
+        TtlSchemaFieldDescriptor bytesDescriptor = TikTokSchemaCatalog.Events
+            .SelectMany(schema => schema.Fields)
+            .First(field => field.Type == ProtoType.Bytes && !field.IsMap);
+        string bytesMethod = TikTokSchemaCatalog.Events
+            .First(schema => schema.Fields.Contains(bytesDescriptor)).Method;
+        TtlEvent bytesEvent = TikTokEventDecoder.Decode(bytesMethod, 13, false, PayloadFor(bytesDescriptor));
+        TtlEvent bytesClone = bytesEvent.Clone();
+        TtlField originalBytes = Assert.IsType<TtlField>(bytesEvent.Root.Find(bytesDescriptor.Name));
+        TtlField clonedBytes = Assert.IsType<TtlField>(bytesClone.Root.Find(bytesDescriptor.Name));
+        Assert.True(System.Runtime.InteropServices.MemoryMarshal.TryGetArray(
+            Assert.IsType<ReadOnlyMemory<byte>>(originalBytes.Value), out var originalSegment));
+        Assert.True(System.Runtime.InteropServices.MemoryMarshal.TryGetArray(
+            Assert.IsType<ReadOnlyMemory<byte>>(clonedBytes.Value), out var clonedSegment));
+        Assert.NotSame(originalSegment.Array, clonedSegment.Array);
+        originalSegment.Array![originalSegment.Offset] = 77;
+        Assert.Equal(new byte[] { 0, 1, 255 }, clonedSegment.Array!.Skip(clonedSegment.Offset).Take(3));
+
+        TtlSchemaFieldDescriptor mapDescriptor = TikTokSchemaCatalog.Events.SelectMany(schema => schema.Fields)
+            .First(field => field.IsMap);
+        TtlEventSchemaDescriptor mapSchema = TikTokSchemaCatalog.Events
+            .First(schema => schema.Fields.Contains(mapDescriptor));
+        TtlEvent mapEvent = TikTokEventDecoder.Decode(mapSchema.Method, 14, false,
+            Concat(LengthDelimited(mapDescriptor.Number, []), LengthDelimited(mapDescriptor.Number, [])));
+        TtlEvent mapClone = mapEvent.Clone();
+        TtlField originalMap = Assert.IsType<TtlField>(mapEvent.Root.Find(mapDescriptor.Name));
+        TtlField clonedMap = Assert.IsType<TtlField>(mapClone.Root.Find(mapDescriptor.Name));
+        Assert.NotSame(originalMap.MapEntries, clonedMap.MapEntries);
+        Assert.Equal(originalMap.MapEntries.Count, clonedMap.MapEntries.Count);
+        if (originalMap.MapEntries.Count > 0)
+            Assert.NotSame(originalMap.MapEntries[0], clonedMap.MapEntries[0]);
+
+        var oneof = TikTokSchemaCatalog.Events.SelectMany(schema => schema.Fields
+                .Where(field => field.OneofName is not null && field.WireType == 2)
+                .Select(field => (schema.Method, Field: field)))
+            .FirstOrDefault();
+        if (oneof.Field is not null)
+        {
+            TtlEvent oneofEvent = TikTokEventDecoder.Decode(oneof.Method, 15, false,
+                LengthDelimited(oneof.Field.Number, []));
+            TtlEvent oneofClone = oneofEvent.Clone();
+            TtlField active = Assert.IsType<TtlField>(oneofClone.Root.ActiveOneof(oneof.Field.OneofName!));
+            Assert.Contains(active, oneofClone.Root.Fields);
+            Assert.NotSame(oneofEvent.Root.ActiveOneof(oneof.Field.OneofName!), active);
+        }
+    }
+
+    [Fact]
     public void RepeatedEnumMapAndOneofTraversalKeepMetadata()
     {
         var repeated = TikTokSchemaCatalog.Events.SelectMany(schema => schema.Fields

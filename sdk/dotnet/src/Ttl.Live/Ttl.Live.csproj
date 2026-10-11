@@ -13,7 +13,7 @@
     <Description>Cross-platform .NET SDK for TikTok LIVE, backed by ttl-live-native.</Description>
     <PackageTags>tiktok;live;protobuf;native;sdk</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageLicenseFile>PACKAGE-LICENSE.txt</PackageLicenseFile>
     <RepositoryUrl>https://github.com/nglmercer/tiktok-signer</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/nglmercer/tiktok-signer/tree/main/sdk/dotnet</PackageProjectUrl>
@@ -23,9 +23,10 @@
   </PropertyGroup>
   <ItemGroup>
     <None Include="../../README.md" Pack="true" PackagePath="README.md" />
+    <None Include="PACKAGE-LICENSE.txt" Pack="true" PackagePath="PACKAGE-LICENSE.txt" />
     <None Include="runtimes/**/*" Pack="true" PackagePath="runtimes/%(RecursiveDir)%(Filename)%(Extension)" Visible="false" />
     <None Include="../../../../crates/ttl-live-proto/LICENSE.upstream" Pack="true" PackagePath="THIRD-PARTY-NOTICES/" />
     <None Include="../../../../crates/ttl-live-proto/README.md" Pack="true" PackagePath="THIRD-PARTY-NOTICES/README.protobuf.md" />
-    <None Include="../../../../crates/ttl-live-native/LICENSE" Pack="true" PackagePath="THIRD-PARTY-NOTICES/LICENSE.ttl-live-native" />
+    <None Include="../../../../crates/ttl-live-native/LICENSE" Pack="true" PackagePath="THIRD-PARTY-NOTICES/" />
   </ItemGroup>
 </Project>

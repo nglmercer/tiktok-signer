@@ -45,13 +45,20 @@ internal sealed class NativeClientHandle : SafeHandleZeroOrMinusOneIsInvalid
 
     protected override bool ReleaseHandle()
     {
+        bool callbacksCleared = false;
         bool destroyed = false;
         try
         {
-            NativeMethods.ttl_live_client_set_event_callback(handle, 0, 0);
-            NativeMethods.ttl_live_client_set_batch_callback(handle, 0, 0);
-            NativeMethods.ttl_live_client_set_state_callback(handle, 0, 0);
-            NativeMethods.ttl_live_client_set_error_callback(handle, 0, 0);
+            // The SDK serializes public operations and disconnects before Dispose. Retrying here
+            // makes finalizer/constructor-failure paths safe too. Clearing each registration waits
+            // for its in-flight callback before its userdata can be released.
+            try { NativeMethods.ttl_live_client_disconnect(handle); } catch { }
+            int eventResult = NativeMethods.ttl_live_client_set_event_callback(handle, 0, 0);
+            int batchResult = NativeMethods.ttl_live_client_set_batch_callback(handle, 0, 0);
+            int stateResult = NativeMethods.ttl_live_client_set_state_callback(handle, 0, 0);
+            int errorResult = NativeMethods.ttl_live_client_set_error_callback(handle, 0, 0);
+            callbacksCleared = eventResult == 0 && batchResult == 0 && stateResult == 0 && errorResult == 0;
+            if (!callbacksCleared) return false;
             NativeMethods.ttl_live_client_destroy(handle);
             destroyed = true;
         }
@@ -62,15 +69,18 @@ internal sealed class NativeClientHandle : SafeHandleZeroOrMinusOneIsInvalid
         }
         finally
         {
-            try
+            if (callbacksCleared)
             {
-                if (_callbackContext.IsAllocated && _callbackContext.Target is CallbackContext context)
-                    context.CompleteDispatch();
+                try
+                {
+                    if (_callbackContext.IsAllocated && _callbackContext.Target is CallbackContext context)
+                        context.CompleteDispatch();
+                }
+                catch { }
+                if (_callbackContext.IsAllocated) _callbackContext.Free();
+                handle = 0;
             }
-            catch { }
-            if (_callbackContext.IsAllocated) _callbackContext.Free();
-            handle = 0;
         }
-        return destroyed;
+        return destroyed && callbacksCleared;
     }
 }

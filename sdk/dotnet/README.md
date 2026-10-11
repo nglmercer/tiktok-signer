@@ -43,13 +43,13 @@ client.EventReceived += (_, e) => Console.WriteLine(e.Event.Method);
 await client.ConnectAsync();
 ```
 
-`ConnectAsync` completes only after the native state callback reports `Connected`. It accepts a `CancellationToken` and uses `ConnectTimeout` (60 seconds by default). Cancellation and timeout request native disconnect and wait for shutdown. `DisconnectAsync`, `Dispose`, and `DisposeAsync` are repeat-safe. Each client owns an independent native worker and signer.
+`ConnectAsync` completes only after the native state callback reports `Connected`. Concurrent callers share one connection attempt. Each caller's cancellation token cancels only that caller's wait; `ConnectTimeout` (60 seconds by default) bounds the shared attempt and stops the native worker when it expires. `DisconnectAsync`, `Dispose`, and `DisposeAsync` are repeat-safe, and a disconnected client can connect again. Each client owns an independent native worker and signer.
 
 ## Typed and generic events
 
 The client exposes `ChatReceived`, `GiftReceived`, `LikeReceived`, `MemberReceived`, `SocialReceived`, and `RoomUserReceived`. Every event also arrives at `EventReceived`; events from future native versions remain accessible by original method name and are not mapped to a closed event enum. Subscribe to `BatchReceived` for decoded batch metadata and events.
 
-Each `TtlEvent` preserves method and method ID, message ID, timestamp when present, history flag, native support kind, schema name, flags, raw payload, the complete copied protobuf field tree, and all native JSON modes. `Root.Fields` preserves wire order and duplicate occurrences. `TtlObject.Find`, `FindAll`, `MapEntries`, and `ActiveOneof` support schema-guided traversal. Enum numbers are retained when a descriptor does not know the enum name. `TikTokSchemaCatalog.Events`, `Find`, and `Fingerprint` expose descriptor introspection.
+Each `TtlEvent` preserves method and method ID, message ID, timestamp when present, history flag, native support kind, schema name, flags, raw payload, and (by default) the complete copied protobuf field tree. JSON modes are serialized only when first requested and then cached. Chat and gift typed values use native convenience views; other normalized types materialize only normalized JSON. Set `CaptureFullFieldTree = false` when raw payload and normalized values are sufficient. `Root.Fields` preserves wire order and duplicate occurrences when full capture is enabled. `TtlObject.Find`, `FindAll`, `MapEntries`, and `ActiveOneof` support schema-guided traversal. Enum numbers are retained when a descriptor does not know the enum name. `TikTokSchemaCatalog.Events`, `Find`, and `Fingerprint` expose descriptor introspection.
 
 ```csharp
 client.EventReceived += (_, args) =>
@@ -70,6 +70,8 @@ client.BatchReceived += (_, args) =>
 ## Errors and callback threading
 
 `ErrorReceived` exposes asynchronous native failures with the native code, retryability, retry-after duration, and HTTP status when supplied. `TikTokLiveException` is thrown for synchronous native failures. `NativeLibraryException` reports missing, incompatible, or unloadable native libraries. `StateChanged` reports native state transitions. User event handlers run serially on a managed dispatcher, never on the native worker thread. Handler exceptions are contained and reported through `HandlerException`.
+
+The dispatcher is bounded per client. `EventQueueCapacity` limits pending callback work items, `EventQueueByteLimit` limits estimated bytes for queued and currently processed events, `MaxBatchEvents` bounds batch copies, and `EventOverflowPolicy` selects `DropNewest` (default) or `DropOldest`. Native callbacks never wait for a slow handler. `client.Diagnostics` reports queue depth/bytes, dropped events/work, and processing failures. A batch callback is queued once; when the native ABI follows it with individual callbacks for the same batch members, the SDK decodes each member once, delivers `BatchReceived` first, then `EventReceived` and typed events in batch order.
 
 ## Multiple clients
 
@@ -102,11 +104,13 @@ LIVE_CREATORS=creator_one,creator_two TTL_BUNDLE=/secure/path/webmssdk.js \
   dotnet run --project sdk/dotnet/examples/AspNetCoreRelay
 ```
 
-The relay sample exposes `/events` as server-sent events containing native full-mode JSON and `/health` for status. Add deployment-appropriate HTTPS termination, authentication, and access controls before exposing it to users.
+The relay exposes `/events` as server-sent events containing native full-mode JSON, `/health` for status, and `/vrchat/events` as a finite JSON snapshot. Each SSE connection has its own bounded queue; slow subscribers lose oldest queued messages without blocking other clients. The snapshot keeps bounded chat/gift history and uses monotonic sequence IDs (`id`) so polling clients can deduplicate. It includes gift ID, repeat/combo counts, group ID, repeat-end status, and diamond count. User strings are JSON encoded, the response is capped, and the endpoint returns only public event fields—not cookies or signing bundles.
+
+Configure `LIVE_SSE_QUEUE_CAPACITY` (default `64`), `VRCHAT_HISTORY_EVENTS` (default `256`), and `VRCHAT_MAX_PAYLOAD_BYTES` (default `65536`). Set `VRCHAT_ALLOWED_IPS` to a comma-separated list of exact peer IP addresses to restrict `/vrchat/events`; when unset, the read-only snapshot endpoint is public. The allowlist uses the direct socket peer and does not trust forwarded headers. A fixed `/vrchat/events` URL works with polling intervals of five seconds or longer; clients should retain the highest sequence and ignore IDs they have already applied. Keep SSE and snapshot access behind HTTPS and any deployment-specific ingress controls.
 
 ## ASP.NET Core relay example
 
-The `examples/AspNetCoreRelay` project shows a hosted service consuming LIVE events and exposing them over an HTTPS endpoint. Deploy it on a host where the matching native runtime is available, terminate HTTPS at the service or a trusted reverse proxy, and apply authentication and access controls appropriate to the relay.
+The `examples/AspNetCoreRelay` project shows a hosted service consuming LIVE events and exposing broadcast SSE plus the finite VRChat snapshot endpoint. Deploy it on a host where the matching native runtime is available, terminate HTTPS at the service or a trusted reverse proxy, and set server-side access controls appropriate to the relay. Do not put privileged service credentials in an uploaded world; the snapshot route is read-only and contains no signing/session material.
 
 ## VRChat compatibility
 
@@ -118,4 +122,4 @@ The native workflow builds the five RID libraries and assembles them under the N
 
 ## License and notices
 
-The SDK is distributed under the repository license. The NuGet package includes the native library license and protobuf third-party license notices.
+The NuGet package is a composite of components with different terms and is not MIT-only. Package metadata points to `PACKAGE-LICENSE.txt`; the package also includes the native runtime's MIT notice and the full modified AGPL-3.0 protobuf license with its additional permissions and restrictions. Section 19 describes conditions for commercial, closed-source, or hosted network services; read the included notices before redistributing or operating a relay.

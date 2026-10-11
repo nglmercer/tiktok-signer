@@ -46,6 +46,11 @@ jobs:
         run: cargo build --locked --release -p ttl-live-native
       - name: Check all 98 C ABI imports against headers and exports
         run: python3 sdk/dotnet/tools/check-abi-coverage.py --library target/release/libttl_live.so
+      - name: Compile C ABI layout assertions against the public headers
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -Icrates/ttl-live-native/include \
+            sdk/dotnet/tests/native/abi_layout.c -o "$RUNNER_TEMP/ttl-dotnet-abi-layout"
+          "$RUNNER_TEMP/ttl-dotnet-abi-layout"
       - name: Run offline .NET native and lifecycle tests
         env:
           TTL_LIVE_NATIVE_LIBRARY: ${{ github.workspace }}/target/release/libttl_live.so
