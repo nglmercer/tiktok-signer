@@ -119,10 +119,13 @@ public sealed class InteractiveLiveSession(LiveEventFeed feed, ILogger<Interacti
     public async Task LoadFixturesAsync(string fixtureDirectory)
     {
         // Decode through the real native SDK; fixtures never masquerade as a live connection.
-        TtlEvent chat = TikTokEventDecoder.Decode("WebcastChatMessage", 1, false,
-            await File.ReadAllBytesAsync(Path.Combine(fixtureDirectory, "chat.pb")));
-        TtlEvent gift = TikTokEventDecoder.Decode("WebcastGiftMessage", 2, false,
-            await File.ReadAllBytesAsync(Path.Combine(fixtureDirectory, "gift.pb")));
+        string[] methods = ["WebcastChatMessage", "WebcastGiftMessage", "WebcastLikeMessage",
+            "WebcastMemberMessage", "WebcastSocialMessage", "WebcastRoomUserSeqMessage", "FutureUnknownMessage"];
+        string[] files = ["chat.pb", "gift.pb", "like.pb", "member.pb", "social.pb", "room-user.pb", "chat.pb"];
+        var events = new TtlEvent[methods.Length];
+        for (int i = 0; i < methods.Length; i++)
+            events[i] = TikTokEventDecoder.Decode(methods[i], (ulong)i + 1, false,
+                await File.ReadAllBytesAsync(Path.Combine(fixtureDirectory, files[i])));
         await _operations.WaitAsync();
         try
         {
@@ -132,7 +135,7 @@ public sealed class InteractiveLiveSession(LiveEventFeed feed, ILogger<Interacti
             {
                 feed.ClearHistory();
                 _status = new("fixture", "Fixture", true, "Offline fixture data — not a LIVE connection.");
-                feed.Publish(chat); feed.Publish(gift);
+                foreach (TtlEvent item in events) feed.Publish(item);
             }
         }
         finally { _operations.Release(); }

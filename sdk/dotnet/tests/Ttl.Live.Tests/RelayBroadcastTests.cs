@@ -145,12 +145,12 @@ public sealed class RelayBroadcastTests
     [Fact]
     public void SnapshotBoundsHistoryPayloadEscapesUntrustedTextAndSupportsIpAllowlisting()
     {
-        var feed = new LiveEventFeed(historyCapacity: 8, maxPayloadBytes: 256,
+        var feed = new LiveEventFeed(historyCapacity: 8, maxPayloadBytes: 1024,
             allowedIps: ["192.0.2.10"]);
         TtlEvent chat = ChatWithComment("<script>alert('x')</script>");
         feed.Publish(chat);
         byte[] payload = feed.GetSnapshotPayload();
-        Assert.True(payload.Length <= 256);
+        Assert.True(payload.Length <= 1024);
         string json = Encoding.UTF8.GetString(payload);
         Assert.DoesNotContain("<script>", json, StringComparison.Ordinal);
         using JsonDocument parsed = JsonDocument.Parse(payload);

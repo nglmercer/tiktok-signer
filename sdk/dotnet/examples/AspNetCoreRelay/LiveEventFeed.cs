@@ -53,7 +53,7 @@ public sealed class LiveEventFeed : IDisposable
     public long DroppedSubscriberEvents => Interlocked.Read(ref _droppedSubscriberEvents);
     public long DroppedSnapshotEvents => Interlocked.Read(ref _droppedSnapshotEvents);
 
-    /// <summary>Publishes once to every current subscriber and stores only normalized chat/gift history.</summary>
+    /// <summary>Publishes once to every current subscriber and stores bounded activity history for every native event.</summary>
     public long Publish(TtlEvent item)
     {
         ArgumentNullException.ThrowIfNull(item);
@@ -65,7 +65,7 @@ public sealed class LiveEventFeed : IDisposable
             foreach (Channel<RelayEvent> subscriber in _subscribers.Values)
                 subscriber.Writer.TryWrite(published);
 
-            SnapshotEntry? entry = CreateSnapshotEntry(sequence, item.Normalized);
+            SnapshotEntry? entry = CreateSnapshotEntry(sequence, item);
             if (entry is not null)
             {
                 _history.Enqueue(entry);
@@ -80,7 +80,7 @@ public sealed class LiveEventFeed : IDisposable
         }
     }
 
-    /// <summary>Gets a bounded, consistent chat/gift snapshot suitable for fixed-URL polling.</summary>
+    /// <summary>Gets a bounded, consistent activity snapshot suitable for fixed-URL polling.</summary>
     public byte[] GetSnapshotPayload()
     {
         lock (_gate) return SerializeSnapshotLocked();
@@ -161,7 +161,8 @@ public sealed class LiveEventFeed : IDisposable
 
     private VrChatEventsSnapshot CreateSnapshotLocked() => new(_sequence,
         Array.AsReadOnly(_history.Where(entry => entry.Chat is not null).Select(entry => entry.Chat!).ToArray()),
-        Array.AsReadOnly(_history.Where(entry => entry.Gift is not null).Select(entry => entry.Gift!).ToArray()));
+        Array.AsReadOnly(_history.Where(entry => entry.Gift is not null).Select(entry => entry.Gift!).ToArray()),
+        Array.AsReadOnly(_history.Select(entry => entry.Activity).ToArray()));
 
     private void TrimHistoryToPayloadLimitLocked()
     {
@@ -174,7 +175,7 @@ public sealed class LiveEventFeed : IDisposable
 
     private int EstimateSnapshotPayloadSizeLocked()
     {
-        var empty = new VrChatEventsSnapshot(_sequence, Array.Empty<VrChatChat>(), Array.Empty<VrChatGift>());
+        var empty = new VrChatEventsSnapshot(_sequence, Array.Empty<VrChatChat>(), Array.Empty<VrChatGift>(), Array.Empty<VrChatActivity>());
         int size = JsonSerializer.SerializeToUtf8Bytes(empty, SnapshotJsonOptions).Length;
         int chats = 0;
         int gifts = 0;
@@ -184,21 +185,42 @@ public sealed class LiveEventFeed : IDisposable
             if (entry.Chat is not null) chats++;
             if (entry.Gift is not null) gifts++;
         }
-        return size + Math.Max(0, chats - 1) + Math.Max(0, gifts - 1);
+        return size + Math.Max(0, chats - 1) + Math.Max(0, gifts - 1) + Math.Max(0, _history.Count - 1);
     }
 
-    private static SnapshotEntry? CreateSnapshotEntry(long sequence, NormalizedLiveEvent? normalized) => normalized switch
+    private static SnapshotEntry CreateSnapshotEntry(long sequence, TtlEvent item)
     {
-        ChatLiveEvent chat => CreateChatEntry(sequence, chat),
-        GiftLiveEvent gift => CreateGiftEntry(sequence, gift),
-        _ => null
-    };
+        SnapshotEntry? typed = item.Normalized switch
+        {
+            ChatLiveEvent chat => CreateChatEntry(sequence, chat),
+            GiftLiveEvent gift => CreateGiftEntry(sequence, gift),
+            _ => null
+        };
+        string summary = item.Normalized switch
+        {
+            ChatLiveEvent chat => $"{UserName(chat.User)}: {chat.Comment}",
+            GiftLiveEvent gift => $"{UserName(gift.User)}: {gift.GiftName} [gift {gift.GiftId}] ×{Math.Max(1, Math.Max(gift.RepeatCount, gift.ComboCount))} (repeat {gift.RepeatCount}, combo {gift.ComboCount}, complete {gift.RepeatEnd})",
+            LikeLiveEvent like => $"{UserName(like.User)} liked ×{like.Count}; total {like.Total}",
+            MemberLiveEvent member => $"{UserName(member.User)} joined; members {member.MemberCount}, action {member.Action}",
+            SocialLiveEvent social => $"{UserName(social.User)} social action {social.Action}; follows {social.FollowCount}, shares {social.ShareCount}",
+            RoomUserLiveEvent room => $"Viewers {room.Total}; popularity {room.Popularity}; total visitors {room.TotalUser}",
+            _ => $"{item.Support}; payload {item.RawPayload.Length} bytes; message {item.MessageId}"
+        };
+        // Unknown methods remain visible without forcing full schema/JSON decoding on the callback path.
+        var activity = new VrChatActivity(sequence.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            item.Method, item.EventType, item.MessageId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            item.Timestamp?.ToString(System.Globalization.CultureInfo.InvariantCulture), item.IsHistory,
+            item.Support.ToString(), item.Flags, summary.Length > 1024 ? summary[..1024] : summary,
+            item.RawPayload.Length);
+        return new SnapshotEntry(sequence, typed?.Chat, typed?.Gift,
+            (typed?.SerializedLength ?? 0) + JsonSerializer.SerializeToUtf8Bytes(activity, SnapshotJsonOptions).Length, activity);
+    }
 
     private static SnapshotEntry CreateChatEntry(long sequence, ChatLiveEvent chat)
     {
         var value = new VrChatChat(sequence.ToString(System.Globalization.CultureInfo.InvariantCulture), UserName(chat.User), chat.Comment);
         return new SnapshotEntry(sequence, value, null,
-            JsonSerializer.SerializeToUtf8Bytes(value, SnapshotJsonOptions).Length);
+            JsonSerializer.SerializeToUtf8Bytes(value, SnapshotJsonOptions).Length, null!);
     }
 
     private static SnapshotEntry CreateGiftEntry(long sequence, GiftLiveEvent gift)
@@ -209,7 +231,7 @@ public sealed class LiveEventFeed : IDisposable
                 gift.RepeatCount, gift.ComboCount, gift.GroupId.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 gift.RepeatEnd, gift.DiamondCount);
         return new SnapshotEntry(sequence, null, value,
-            JsonSerializer.SerializeToUtf8Bytes(value, SnapshotJsonOptions).Length);
+            JsonSerializer.SerializeToUtf8Bytes(value, SnapshotJsonOptions).Length, null!);
     }
 
     private static string UserName(TtlUser user) =>
@@ -220,11 +242,14 @@ public sealed class LiveEventFeed : IDisposable
             ? Math.Clamp(value, minimum, maximum)
             : fallback;
 
-    private sealed record SnapshotEntry(long Sequence, VrChatChat? Chat, VrChatGift? Gift, int SerializedLength);
+    private sealed record SnapshotEntry(long Sequence, VrChatChat? Chat, VrChatGift? Gift, int SerializedLength, VrChatActivity Activity);
 }
 
 public sealed record RelayEvent(long Sequence, TtlEvent Event);
-public sealed record VrChatEventsSnapshot(long Sequence, IReadOnlyList<VrChatChat> Chat, IReadOnlyList<VrChatGift> Gifts);
+public sealed record VrChatEventsSnapshot(long Sequence, IReadOnlyList<VrChatChat> Chat, IReadOnlyList<VrChatGift> Gifts, IReadOnlyList<VrChatActivity> Activity);
 public sealed record VrChatChat(string Id, string User, string Text);
 public sealed record VrChatGift(string Id, string GiftId, string GiftName, string User,
     ulong Count, ulong RepeatCount, ulong ComboCount, string GroupId, bool RepeatEnd, ulong DiamondCount);
+
+public sealed record VrChatActivity(string Id, string Method, uint EventType, string MessageId, string? Timestamp,
+    bool IsHistory, string Support, uint Flags, string Summary, int PayloadBytes);

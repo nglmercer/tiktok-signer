@@ -48,6 +48,8 @@ public static class TikTokPanelSetup
             AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
         }
         UdonSharp.Compiler.UdonSharpCompilerV1.CompileSync(new UdonSharp.Compiler.UdonSharpCompileOptions { IsEditorBuild = true });
+        var welcome = GameObject.Find("Welcome Sign");
+        if (welcome != null) Object.DestroyImmediate(welcome);
         var panel = new GameObject("TikTok LIVE Panel", typeof(RectTransform), typeof(Canvas),
             typeof(UnityEngine.UI.CanvasScaler), typeof(UnityEngine.UI.GraphicRaycaster));
         Undo.RegisterCreatedObjectUndo(panel, "Add TikTok LIVE Panel");
@@ -64,16 +66,32 @@ public static class TikTokPanelSetup
             if (type != null) { panel.AddComponent(type); break; }
         }
         var background = panel.AddComponent<UnityEngine.UI.Image>();
-        background.color = new Color(0.025f, 0.04f, 0.08f, 0.96f);
+        background.color = new Color(0.025f, 0.04f, 0.08f, 1f);
         background.raycastTarget = false;
-        Text(panel.transform, "Heading", "TikTok LIVE · Relay bridge", new Vector2(0, 345), new Vector2(1080, 75), 42);
+        Text(panel.transform, "Heading", "TikTok LIVE · Activity Stage", new Vector2(0, 345), new Vector2(1080, 75), 42);
         Text(panel.transform, "Instructions", "Enter @creator on the relay webpage. This world polls its fixed feed URL every 6 seconds.", new Vector2(0, 260), new Vector2(1080, 90), 26);
         var status = Text(panel.transform, "Status", "Waiting for relay…", new Vector2(0, 155), new Vector2(1080, 100), 28);
-        var events = Text(panel.transform, "ChatAndGifts", "Waiting for chat or gifts…", new Vector2(0, -70), new Vector2(1080, 320), 24);
+        var events = Text(panel.transform, "AllLiveActivity", "Waiting for LIVE activity…", new Vector2(0, -70), new Vector2(1080, 320), 24);
         var behaviour = panel.AddUdonSharpComponent<TikTokLivePanel>();
         behaviour.feedUrl = new VRCUrl("http://127.0.0.1:15050/vrchat/live");
         behaviour.statusText = status;
         behaviour.eventsText = events;
+        var beacon = GameObject.Find("LIVE Activity Beacon");
+        if (beacon == null)
+        {
+            beacon = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            beacon.name = "LIVE Activity Beacon";
+            beacon.transform.position = new Vector3(3, 1.5f, 6);
+            var material = new Material(Shader.Find("Standard"));
+            material.color = new Color(0.1f, 0.85f, 0.9f);
+            material.EnableKeyword("_EMISSION");
+            material.SetColor("_EmissionColor", new Color(0.1f, 0.6f, 0.7f));
+            const string materialPath = "Assets/TikTokBridge/ActivityBeacon.mat";
+            if (!File.Exists(materialPath)) AssetDatabase.CreateAsset(material, materialPath);
+            else Object.DestroyImmediate(material);
+            beacon.GetComponent<Renderer>().sharedMaterial = AssetDatabase.LoadAssetAtPath<Material>(materialPath);
+        }
+        behaviour.activityBeacon = beacon.transform;
         UdonSharpEditorUtility.CopyProxyToUdon(behaviour);
         var backing = UdonSharpEditorUtility.GetBackingUdonBehaviour(behaviour);
         Button(panel.transform, "Start polling", new Vector2(-270, -330), backing, "StartPolling");
@@ -109,6 +127,15 @@ public static class TikTokPanelSetup
         catch (System.Exception error) { Debug.LogException(error); EditorApplication.Exit(1); }
     }
 
+    public static void UpgradeAndVerify()
+    {
+        EditorSceneManager.OpenScene("Assets/Scenes/StarterWorld.unity", OpenSceneMode.Single);
+        var old = GameObject.Find("TikTok LIVE Panel");
+        if (old != null) Object.DestroyImmediate(old);
+        EditorSceneManager.SaveScene(SceneManager.GetActiveScene());
+        InstallAndVerify();
+    }
+
     public static void InstallAndVerify()
     {
         EditorSceneManager.OpenScene("Assets/Scenes/StarterWorld.unity", OpenSceneMode.Single);
@@ -119,17 +146,17 @@ public static class TikTokPanelSetup
             throw new System.Exception("TikTok panel or compiled Udon behaviour missing.");
         var proxy = panel.GetComponent<TikTokLivePanel>();
         if (proxy == null) proxy = (TikTokLivePanel)UdonSharpEditorUtility.GetProxyBehaviour(panel.GetComponent<UdonBehaviour>());
-        if (proxy.statusText == null || proxy.eventsText == null || proxy.feedUrl == null)
+        if (proxy.statusText == null || proxy.eventsText == null || proxy.feedUrl == null || proxy.activityBeacon == null)
             throw new System.Exception("Panel references missing.");
         string json = File.ReadAllText("bridge-fixture.json");
         proxy.ApplySnapshot(json);
         string first = proxy.eventsText.text;
         proxy.ApplySnapshot(json);
-        if (first != proxy.eventsText.text || !first.Contains("Rose") || !first.Contains("5655"))
+        if (first != proxy.eventsText.text || !first.Contains("Rose") || !first.Contains("5655") || !first.Contains("FutureUnknownMessage"))
             throw new System.Exception("Fixture display/deduplication check failed.");
         if (proxy.statusText.richText || proxy.eventsText.richText)
             throw new System.Exception("Untrusted text must not use rich text.");
-        Debug.Log("TIKTOK_BRIDGE_VERIFIED: fixture JSON parsed, chat/gifts displayed, duplicates suppressed.");
+        Debug.Log("TIKTOK_BRIDGE_VERIFIED: fixture JSON parsed, all event categories displayed, duplicates suppressed.");
     }
 
     private static void Complete()

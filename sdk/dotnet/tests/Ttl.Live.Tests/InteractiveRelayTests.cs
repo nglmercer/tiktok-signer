@@ -23,6 +23,27 @@ public sealed class InteractiveRelayTests
         Assert.Throws<ArgumentException>(() => InteractiveLiveSession.NormalizeCreator(input));
 
     [Fact]
+    public void AllMethodsIncludingUnknownAreVisibleInNativeOrder()
+    {
+        using var feed = new LiveEventFeed(maxPayloadBytes: 16384);
+        string[] methods = ["WebcastChatMessage", "WebcastGiftMessage", "WebcastLikeMessage",
+            "WebcastMemberMessage", "WebcastSocialMessage", "WebcastRoomUserSeqMessage", "FutureUnknownMessage"];
+        string[] files = ["chat.pb", "gift.pb", "like.pb", "member.pb", "social.pb", "room-user.pb", "chat.pb"];
+        for (int i = 0; i < methods.Length; i++)
+            feed.Publish(TikTokEventDecoder.Decode(methods[i], (ulong)i + 1, false,
+                File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "fixtures", "events", files[i]))));
+        using var snapshot = JsonDocument.Parse(feed.GetSnapshotPayload());
+        JsonElement activity = snapshot.RootElement.GetProperty("activity");
+        Assert.Equal(methods.Length, activity.GetArrayLength());
+        for (int i = 0; i < methods.Length; i++)
+        {
+            Assert.Equal(methods[i], activity[i].GetProperty("method").GetString());
+            Assert.Equal((i + 1).ToString(), activity[i].GetProperty("id").GetString());
+            Assert.False(string.IsNullOrEmpty(activity[i].GetProperty("summary").GetString()));
+        }
+    }
+
+    [Fact]
     public void LocalControlsRejectRemoteHostsAndCrossOriginRequests()
     {
         var context = new DefaultHttpContext();
@@ -58,8 +79,8 @@ public sealed class InteractiveRelayTests
         await Task.WhenAll(session.LoadFixturesAsync(directory), session.LoadFixturesAsync(directory));
         using var last = JsonDocument.Parse(JsonSerializer.Serialize(session.Snapshot()));
         Assert.Equal(streamId, last.RootElement.GetProperty("streamId").GetString());
-        Assert.Equal(6, last.RootElement.GetProperty("events").GetProperty("sequence").GetInt64());
-        Assert.Equal("5", last.RootElement.GetProperty("events").GetProperty("chat")[0].GetProperty("id").GetString());
+        Assert.Equal(21, last.RootElement.GetProperty("events").GetProperty("sequence").GetInt64());
+        Assert.Equal("15", last.RootElement.GetProperty("events").GetProperty("chat")[0].GetProperty("id").GetString());
         await session.DisconnectAsync();
         Assert.Equal("Disconnected", session.Status.State);
         using var empty = JsonDocument.Parse(feed.GetSnapshotPayload());

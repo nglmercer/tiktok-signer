@@ -11,6 +11,13 @@ public class TikTokLivePanel : UdonSharpBehaviour
     public VRCUrl feedUrl;
     public TMP_Text statusText;
     public TMP_Text eventsText;
+    public Transform activityBeacon;
+    private float _pulseUntil;
+    private void Update()
+    {
+        if (activityBeacon != null) activityBeacon.localScale = Vector3.one * (Time.time < _pulseUntil ? 1.5f : 1f);
+    }
+
     public float pollSeconds = 6f;
     private bool _polling;
     private bool _pending;
@@ -105,9 +112,35 @@ public class TikTokLivePanel : UdonSharpBehaviour
         string creator = Read(state, "creator");
         if (creator != _creator) { _creator = creator; _lines = ""; }
         if (statusText != null) statusText.text = "@" + Read(state, "creator") + " · " + Read(state, "state") + "\n" + Read(state, "error");
-        ReadEvents(events.DataDictionary, "chat", false);
-        ReadEvents(events.DataDictionary, "gifts", true);
-        if (eventsText != null) eventsText.text = _lines.Length == 0 ? "Waiting for chat or gifts…" : _lines;
+        DataToken activity;
+        if (events.DataDictionary.TryGetValue("activity", TokenType.DataList, out activity))
+            ReadActivity(activity.DataList);
+        else
+        {
+            ReadEvents(events.DataDictionary, "chat", false);
+            ReadEvents(events.DataDictionary, "gifts", true);
+        }
+        if (eventsText != null) eventsText.text = _lines.Length == 0 ? "Waiting for LIVE activity…" : _lines;
+    }
+
+    private void ReadActivity(DataList list)
+    {
+        for (int i = Mathf.Max(0, list.Count - 256); i < list.Count; i++)
+        {
+            if (list[i].TokenType != TokenType.DataDictionary) continue;
+            DataDictionary data = list[i].DataDictionary;
+            string id = Read(data, "id");
+            if (id.Length == 0 || Seen(id)) continue;
+            _seen[_seenIndex] = id;
+            _seenIndex = (_seenIndex + 1) % _seen.Length;
+            _lines += "[" + Read(data, "method") + "] " + Read(data, "summary") + "\n";
+            _pulseUntil = Time.time + 2f;
+            if (_lines.Length > 3000)
+            {
+                int cut = _lines.IndexOf('\n', _lines.Length - 2400);
+                _lines = cut >= 0 ? _lines.Substring(cut + 1) : _lines.Substring(_lines.Length - 2400);
+            }
+        }
     }
 
     private void ReadEvents(DataDictionary snapshot, string key, bool gifts)
