@@ -86,6 +86,12 @@ public sealed class LiveEventFeed : IDisposable
         lock (_gate) return SerializeSnapshotLocked();
     }
 
+    /// <summary>Starts a new creator history without resetting monotonic deduplication IDs.</summary>
+    public void ClearHistory()
+    {
+        lock (_gate) _history.Clear();
+    }
+
     public bool IsIpAllowed(System.Net.IPAddress? address)
     {
         if (_allowedIps.Count == 0) return true;

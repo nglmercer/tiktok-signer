@@ -2,9 +2,11 @@ using Ttl.Live;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton(_ => LiveEventFeed.FromEnvironment());
+builder.Services.AddSingleton<InteractiveLiveSession>();
 builder.Services.AddHostedService<LiveRelayService>();
 var app = builder.Build();
 RelayHttpEndpoints.Map(app);
+OperatorHttpEndpoints.Map(app);
 
 await app.RunAsync();
 
