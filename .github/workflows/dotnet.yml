@@ -1,0 +1,65 @@
+name: dotnet-sdk
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  managed-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - name: Build SDK, tests, and examples for .NET 8 and .NET 10
+        run: dotnet build sdk/dotnet/Ttl.Live.sln --configuration Release
+      - name: Verify C# formatting and the full header import inventory
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          dotnet format sdk/dotnet/Ttl.Live.sln --verify-no-changes --no-restore
+          python3 sdk/dotnet/tools/check-abi-coverage.py
+
+  offline-native-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.88'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - name: Build the native library used by deterministic fixtures
+        run: cargo build --locked --release -p ttl-live-native
+      - name: Check all 98 C ABI imports against headers and exports
+        run: python3 sdk/dotnet/tools/check-abi-coverage.py --library target/release/libttl_live.so
+      - name: Run offline .NET native and lifecycle tests
+        env:
+          TTL_LIVE_NATIVE_LIBRARY: ${{ github.workspace }}/target/release/libttl_live.so
+        run: dotnet test sdk/dotnet/tests/Ttl.Live.Tests/Ttl.Live.Tests.csproj --configuration Release
+      - name: Build the isolated native-library failure probe
+        run: dotnet build sdk/dotnet/tests/Ttl.Live.NativeProbe/Ttl.Live.NativeProbe.csproj --configuration Release
+      - name: Verify missing-library diagnostics
+        env:
+          TTL_LIVE_NATIVE_LIBRARY: ${{ runner.temp }}/missing-libttl_live.so
+        run: dotnet run --project sdk/dotnet/tests/Ttl.Live.NativeProbe/Ttl.Live.NativeProbe.csproj --configuration Release --no-build -- "unable to load"
+      - name: Verify ABI mismatch diagnostics
+        shell: bash
+        run: |
+          cc -shared -fPIC sdk/dotnet/tests/native/abi_mismatch.c -o "$RUNNER_TEMP/libttl_live_mismatch.so"
+          TTL_LIVE_NATIVE_LIBRARY="$RUNNER_TEMP/libttl_live_mismatch.so" \
+            dotnet run --project sdk/dotnet/tests/Ttl.Live.NativeProbe/Ttl.Live.NativeProbe.csproj \
+              --configuration Release --no-build -- "abi mismatch"

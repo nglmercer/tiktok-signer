@@ -13,14 +13,19 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            native_file: libttl_live.so
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            native_file: libttl_live.so
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            native_file: ttl_live.dll
           - os: macos-15-intel
             target: x86_64-apple-darwin
+            native_file: libttl_live.dylib
           - os: macos-15
             target: aarch64-apple-darwin
+            native_file: libttl_live.dylib
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -28,10 +33,25 @@ jobs:
         with:
           toolchain: '1.88'
           targets: ${{ matrix.target }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
       - name: Rust decoding, catalog, lifecycle and transport tests
         run: cargo test --locked -p ttl-live-native -p ttl-live-events -p ttl-live-proto -p ttl-live-core --target ${{ matrix.target }}
       - name: Build both native library formats
         run: cargo build --locked --release -p ttl-live-native --target ${{ matrix.target }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - name: .NET ABI and offline SDK tests
+        shell: bash
+        env:
+          TTL_LIVE_NATIVE_LIBRARY: ${{ github.workspace }}/target/${{ matrix.target }}/release/${{ matrix.native_file }}
+        run: |
+          python sdk/dotnet/tools/check-abi-coverage.py
+          dotnet test sdk/dotnet/tests/Ttl.Live.Tests/Ttl.Live.Tests.csproj --configuration Release
       - name: Verify Linux/macOS C and C++ linkage and exported ABI
         if: runner.os != 'Windows'
         shell: bash
@@ -42,9 +62,11 @@ jobs:
           c++ -x c++ -std=c++17 -Wall -Wextra -Werror -Icrates/ttl-live-native/include crates/ttl-live-native/tests/smoke.c -L"$libdir" -lttl_live -Wl,-rpath,"$libdir" -o /tmp/ttl-native-cpp
           /tmp/ttl-native-cpp
           if [ "$RUNNER_OS" = Linux ]; then
-            python3 scripts/native/check-exports.py "$libdir/libttl_live.so"
+            python scripts/native/check-exports.py "$libdir/libttl_live.so"
+            python sdk/dotnet/tools/check-abi-coverage.py --library "$libdir/libttl_live.so"
           else
-            python3 scripts/native/check-exports.py "$libdir/libttl_live.dylib"
+            python scripts/native/check-exports.py "$libdir/libttl_live.dylib"
+            python sdk/dotnet/tools/check-abi-coverage.py --library "$libdir/libttl_live.dylib"
           fi
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
@@ -57,6 +79,7 @@ jobs:
           ttl-native-c.exe
           cl /nologo /W4 /WX /TP /Icrates\ttl-live-native\include crates\ttl-live-native\tests\smoke.c target\${{ matrix.target }}\release\ttl_live.dll.lib /Fe:ttl-native-cpp.exe
           ttl-native-cpp.exe
+          python sdk/dotnet/tools/check-abi-coverage.py --library target\${{ matrix.target }}\release\ttl_live.dll
       - name: Stage libraries and curated headers
         shell: bash
         run: |
@@ -79,6 +102,29 @@ jobs:
         with:
           name: ttl-live-${{ matrix.target }}
           path: native-package/
+  dotnet-package:
+    needs: native
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ttl-live-*
+          path: native-artifacts
+          merge-multiple: false
+      - name: Assemble all NuGet native runtime assets
+        run: python3 sdk/dotnet/tools/stage-native-assets.py native-artifacts
+      - name: Pack the cross-platform NuGet package
+        run: dotnet pack sdk/dotnet/src/Ttl.Live/Ttl.Live.csproj --configuration Release --output dotnet-package
+      - name: Validate package runtime and managed assets
+        run: python3 sdk/dotnet/tools/verify-nupkg.py dotnet-package/Ttl.Live.0.1.0.nupkg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ttl-live-dotnet-nuget
+          path: dotnet-package/*
   fuzz-smoke:
     runs-on: ubuntu-latest
     steps:

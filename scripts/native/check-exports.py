@@ -9,6 +9,8 @@ for p in headers.glob('*.h'):
     expected.update(re.findall(r'TTL_API\s+[^;]+?\b(ttl_\w+)\s*\(',p.read_text()))
 if sys.platform == 'darwin':
     output=subprocess.check_output(['nm','-gU',str(library)],text=True)
+elif sys.platform == 'win32':
+    output=subprocess.check_output(['dumpbin','/nologo','/exports',str(library)],text=True)
 else:
     output=subprocess.check_output(['nm','-D','--defined-only',str(library)],text=True)
 actual=set(re.findall(r'\b_?(ttl_\w+)\s*$',output,re.M))
