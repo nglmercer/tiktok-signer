@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <PackageId>Ttl.Live</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>nglmercer</Authors>
+    <Description>Cross-platform .NET SDK for TikTok LIVE, backed by ttl-live-native.</Description>
+    <PackageTags>tiktok;live;protobuf;native;sdk</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/nglmercer/tiktok-signer</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/nglmercer/tiktok-signer/tree/main/sdk/dotnet</PackageProjectUrl>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="README.md" />
+    <None Include="runtimes/**/*" Pack="true" PackagePath="runtimes/%(RecursiveDir)%(Filename)%(Extension)" Visible="false" />
+    <None Include="../../../../crates/ttl-live-proto/LICENSE.upstream" Pack="true" PackagePath="THIRD-PARTY-NOTICES/" />
+    <None Include="../../../../crates/ttl-live-proto/README.md" Pack="true" PackagePath="THIRD-PARTY-NOTICES/README.protobuf.md" />
+    <None Include="../../../../crates/ttl-live-native/LICENSE" Pack="true" PackagePath="THIRD-PARTY-NOTICES/LICENSE.ttl-live-native" />
+  </ItemGroup>
+</Project>

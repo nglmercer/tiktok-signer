@@ -14,6 +14,10 @@ The [Java 17+ SDK](sdk/java/README.md) supports broker-backed LIVE event streami
 HTTP-only presence monitoring, with optional Rust JNI signing. Build and test it with
 `cd sdk/java && ./gradlew build`.
 
+## C#/.NET SDK
+
+The [.NET 8 and .NET 10 SDK](sdk/dotnet/README.md) wraps the native LIVE C ABI, keeps normalized and schema-backed events available, and packages native libraries for Windows x64, Linux x64/ARM64, and macOS x64/ARM64. Its tests run offline against the checked-in event fixtures.
+
 ## Native C/C++ API
 
 The [native LIVE API](crates/ttl-live-native/README.md) exposes immutable event

@@ -1,0 +1,7 @@
+**/bin/
+**/obj/
+**/TestResults/
+src/Ttl.Live/runtimes/
+artifacts/
+*.user
+*.suo
