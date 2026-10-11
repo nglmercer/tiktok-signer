@@ -45,7 +45,7 @@
 - Replaced the relay's competing-consumer channel with per-subscriber bounded fan-out. `/vrchat/events` returns a fixed-URL bounded JSON snapshot with monotonic dedupe IDs, gift repeat/combo metadata, payload limits, JSON escaping, and host-side IP allowlisting.
 - Added deterministic callback-driven lifecycle tests, 10,000-event queue pressure, DropOldest ordering/cleanup, recursive clone checks, and live HTTP tests with two simultaneous SSE subscribers.
 - Local validation: .NET 8 and .NET 10 build and 35 tests per target pass; the native Rust regression suite passes; the 98-function ABI checker and C layout assertions pass on Linux x64; formatting is verified locally. A Linux x64 partial package and local NuGet consumer also pass. Windows, macOS, and ARM64 execution is delegated to the existing CI matrix and is not claimed as locally executed.
-- Full five-RID packaging and GitHub Actions status remain to be verified after the changes are pushed.
+- Pushed to the existing PR branch. GitHub repository Actions permissions report `enabled: false`; the new commit has no status checks. The pre-existing queued run targets the prior head and has no jobs. Full five-RID packaging, Windows/macOS/ARM64 execution, and packaged consumers on those platforms remain unexecuted until repository Actions are enabled. No package or release was published.
 
 ## Acceptance criteria
 
