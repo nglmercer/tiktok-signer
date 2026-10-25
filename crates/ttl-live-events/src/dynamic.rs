@@ -22,6 +22,9 @@ use ttl_sign_core::proto::{ProtoError, RawProtoValue};
 /// A limit keeps untrusted page traffic bounded when a future TikTok field
 /// recursively embeds a message type the pinned schema does not describe.
 const MAX_SCHEMA_DEPTH: usize = 8;
+// Typed decoding is bounded by Prost's default recursion limit. Diagnostic
+// presentation deliberately stops earlier without invalidating the wire.
+const MAX_NORMALIZATION_DEPTH: usize = 100;
 
 /// Maximum protobuf fields decoded from one event, including nested messages.
 const MAX_SCHEMA_FIELDS: usize = 4_096;
@@ -820,7 +823,7 @@ pub(crate) fn preflight_event(
                 }
                 *left -= 1;
                 if let Some(FieldKind::Message(name)) = descriptor.map(|d| d.kind) {
-                    if depth >= MAX_SCHEMA_DEPTH || *left == 0 {
+                    if depth >= MAX_NORMALIZATION_DEPTH || *left == 0 {
                         return true;
                     }
                     let is_common = depth == 0

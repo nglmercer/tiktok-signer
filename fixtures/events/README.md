@@ -72,3 +72,8 @@ signed URLs or cookies. Java compares exact protobuf bytes. Rust compares envelo
 payload semantics, accounting for proto3's omission of zero-valued fields and Rust's explicit
 heartbeat sequence counter. `presence/cases.json` supplies the same HTTP/status cases to
 Java, Node, and Rust. A Rust `NoRoom` maps to OFFLINE at the presence boundary.
+
+`deep-gift.pb` is a structural regression fixture for a valid public LIVE gift
+whose diagnostic view exceeded eight nesting levels. All numeric values were
+replaced with 1, all strings with `fixture`, and all opaque bytes/unknown
+fields removed. No original LIVE sender, ID, text or URL is retained.

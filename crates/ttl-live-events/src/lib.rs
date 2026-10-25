@@ -95,11 +95,12 @@ pub fn decode_batch(payload: &[u8]) -> Result<EventBatch, EventError> {
     check_batch(payload)?;
     let result = ttl_live_proto::decode_event_batch(payload)?;
     let mut schema_budget = 65_536;
+    let mut wire_budget = 65_536;
     Ok(EventBatch {
         events: result
             .messages
             .iter()
-            .map(|message| decode_message(message, &mut schema_budget))
+            .map(|message| decode_message(message, &mut schema_budget, &mut wire_budget))
             .collect(),
         cursor: result.cursor,
         internal_ext: result.internal_ext,
@@ -130,6 +131,8 @@ pub struct SelectedEvent {
     pub payload: Option<Vec<u8>>,
     pub event: Option<LiveEvent>,
     pub schema: Option<SchemaMessage>,
+    /// Any requested representation is incomplete. In Full mode the schema
+    /// view can be truncated while the canonical event remains valid.
     pub truncated: bool,
 }
 
@@ -152,7 +155,8 @@ pub fn decode_batch_with_mode(
 ) -> Result<SelectedBatch, EventError> {
     check_batch(payload)?;
     let result = ttl_live_proto::decode_event_batch(payload)?;
-    let mut budget = 65_536;
+    let mut schema_budget = 65_536;
+    let mut wire_budget = 65_536;
     let events = result
         .messages
         .into_iter()
@@ -163,7 +167,7 @@ pub fn decode_batch_with_mode(
                 let mut schema = dynamic::decode_webcast_message_budget(
                     &message.method,
                     &message.payload,
-                    &mut budget,
+                    &mut schema_budget,
                 )
                 .expect("partial decoder is infallible");
                 schema.truncated |= oversized;
@@ -171,26 +175,21 @@ pub fn decode_batch_with_mode(
             } else {
                 None
             };
-            let (wire_truncated, timestamp) = if schema.is_none() {
-                dynamic::preflight_event(&message.method, &message.payload, &mut budget)
+            // Validate canonical input independently from the bounded debug
+            // view. Reaching its depth/field budget does not corrupt protobuf.
+            let (wire_truncated, timestamp) =
+                dynamic::preflight_event(&message.method, &message.payload, &mut wire_budget);
+            let normalization_truncated = oversized || wire_truncated;
+            let truncated = normalization_truncated || schema.as_ref().is_some_and(|s| s.truncated);
+            let mut event = if matches!(mode, DecodeMode::Full | DecodeMode::Normalized)
+                && !normalization_truncated
+            {
+                normalize_payload(&message.method, &message.payload)
+                    .ok()
+                    .flatten()
             } else {
-                (
-                    false,
-                    schema
-                        .as_ref()
-                        .and_then(|s| s.message("common")?.number("create_time")),
-                )
+                None
             };
-            let truncated =
-                oversized || wire_truncated || schema.as_ref().is_some_and(|s| s.truncated);
-            let mut event =
-                if matches!(mode, DecodeMode::Full | DecodeMode::Normalized) && !truncated {
-                    normalize_payload(&message.method, &message.payload)
-                        .ok()
-                        .flatten()
-                } else {
-                    None
-                };
             let retain_payload = matches!(mode, DecodeMode::Full | DecodeMode::Raw);
             let payload = if retain_payload {
                 Some(message.payload)
@@ -260,25 +259,32 @@ pub fn decode_event(method: &str, payload: &[u8]) -> LiveEvent {
 ///
 /// Internal: `BaseProtoMessage` is a generated type, and this crate's public API
 /// deliberately does not expose those. Use [`decode_batch`] or [`decode_event`].
-fn decode_message(message: &BaseProtoMessage, budget: &mut usize) -> DecodedEvent {
+fn decode_message(
+    message: &BaseProtoMessage,
+    schema_budget: &mut usize,
+    wire_budget: &mut usize,
+) -> DecodedEvent {
     decode_envelope_budget(
         &message.method,
         message.msg_id as u64,
         message.is_history,
         &message.payload,
-        budget,
+        schema_budget,
+        wire_budget,
     )
 }
 
 /// Transport-independent, complete event decoding. Oversized events retain a
 /// 4 MiB prefix and are flagged truncated; typed normalization is skipped.
+/// An incomplete diagnostic schema alone does not suppress a canonical event;
+/// normalization has independent wire depth and field-budget validation.
 pub fn decode_event_envelope(
     method: &str,
     msg_id: u64,
     is_history: bool,
     payload: &[u8],
 ) -> EventEnvelope {
-    decode_envelope_budget(method, msg_id, is_history, payload, &mut 4096)
+    decode_envelope_budget(method, msg_id, is_history, payload, &mut 4096, &mut 4096)
 }
 
 fn decode_envelope_budget(
@@ -286,7 +292,8 @@ fn decode_envelope_budget(
     msg_id: u64,
     is_history: bool,
     payload: &[u8],
-    budget: &mut usize,
+    schema_budget: &mut usize,
+    wire_budget: &mut usize,
 ) -> EventEnvelope {
     let oversized = payload.len() > dynamic::MAX_EVENT_BYTES;
     let payload = &payload[..payload.len().min(dynamic::MAX_EVENT_BYTES)];
@@ -296,10 +303,11 @@ fn decode_envelope_budget(
         payload: payload.to_vec(),
         is_history,
     };
-    let mut schema = dynamic::decode_webcast_message_budget(method, payload, budget)
+    let mut schema = dynamic::decode_webcast_message_budget(method, payload, schema_budget)
         .expect("partial decoder is infallible");
     schema.truncated |= oversized;
-    let normalized = if schema.truncated {
+    let (wire_truncated, _) = dynamic::preflight_event(method, payload, wire_budget);
+    let normalized = if oversized || wire_truncated {
         Ok(unknown(&raw))
     } else {
         match method {
