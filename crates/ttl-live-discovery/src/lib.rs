@@ -294,14 +294,8 @@ mod tests {
             requirement(DiscoveryOperation::RoomLookup),
             Requirement::None
         );
-        assert_eq!(
-            requirement(DiscoveryOperation::RoomInfo),
-            Requirement::None
-        );
-        assert_eq!(
-            requirement(DiscoveryOperation::GiftList),
-            Requirement::None
-        );
+        assert_eq!(requirement(DiscoveryOperation::RoomInfo), Requirement::None);
+        assert_eq!(requirement(DiscoveryOperation::GiftList), Requirement::None);
         assert_eq!(
             requirement(DiscoveryOperation::LiveChannels),
             Requirement::None
