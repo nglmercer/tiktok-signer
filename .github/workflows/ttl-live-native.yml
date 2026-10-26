@@ -82,7 +82,7 @@ jobs:
           for name in ['LICENSE.upstream','README.md','UPSTREAM']:
               shutil.copy2(pathlib.Path('crates/ttl-live-proto')/name,notices/name)
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ttl-live-${{ matrix.target }}
           path: native-package/
