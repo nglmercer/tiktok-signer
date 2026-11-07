@@ -77,7 +77,7 @@ async fn scenario(saturate: bool) {
             };
             if ws
                 .send(tokio_tungstenite::tungstenite::Message::Binary(
-                    frame.encode(),
+                    frame.encode().into(),
                 ))
                 .await
                 .is_err()

@@ -242,10 +242,13 @@ pub unsafe extern "C" fn ttl_schema_fingerprint() -> *const c_char {
     super::guard(ptr::null(), || {
         static HASH: OnceLock<CString> = OnceLock::new();
         HASH.get_or_init(|| {
-            cstring(&format!(
-                "{:x}",
-                Sha256::digest(ttl_live_proto::registry::DESCRIPTOR_BYTES)
-            ))
+            let digest = Sha256::digest(ttl_live_proto::registry::DESCRIPTOR_BYTES);
+            cstring(
+                &digest
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>(),
+            )
         })
         .as_ptr()
     })

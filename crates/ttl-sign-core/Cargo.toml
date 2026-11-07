@@ -14,4 +14,4 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
-proptest = { version = "=1.6.0", default-features = false, features = ["std"] }
+proptest = { version = "1.12", default-features = false, features = ["std"] }

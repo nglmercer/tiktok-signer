@@ -82,7 +82,7 @@ async fn actual_websocket_delivers_all_methods_and_stops_without_callbacks_after
             ..Default::default()
         };
         ws.send(tokio_tungstenite::tungstenite::Message::Binary(
-            frame.encode(),
+            frame.encode().into(),
         ))
         .await
         .unwrap();

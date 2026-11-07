@@ -13,13 +13,13 @@ flate2 = { workspace = true }
 futures-util = "0.3"
 thiserror = { workspace = true }
 tokio = { workspace = true }
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
 anyhow = { workspace = true }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 tokio = { workspace = true, features = ["full"] }
 tracing-subscriber = { workspace = true }
 

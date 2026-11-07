@@ -14,6 +14,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -397,7 +398,7 @@ private fun LanguageSection(
     SectionHeader(tr(R.string.speech_language))
     val configuration = LocalConfiguration.current
     val deviceCode =
-        SupertonicLanguages.fromLocale(configuration.locales[0] ?: Locale.getDefault())
+        SupertonicLanguages.fromLocale(LocalLocale.current.platformLocale)
     var expanded by remember { mutableStateOf(false) }
 
     Row(

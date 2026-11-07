@@ -19,5 +19,5 @@ flate2.workspace = true
 prost.workspace = true
 futures-util = "0.3"
 tokio = { workspace = true, features = ["net", "io-util", "test-util"] }
-tokio-tungstenite = "0.24"
+tokio-tungstenite = "0.30"
 ttl-live-proto.workspace = true

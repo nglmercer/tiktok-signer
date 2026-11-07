@@ -1,4 +1,4 @@
-plugins { id("com.google.protobuf") version "0.9.5" apply false }
+plugins { id("com.google.protobuf") version "0.10.1" apply false }
 allprojects { group = "io.github.nglmercer"; version = "0.1.0-SNAPSHOT"; repositories { mavenCentral() } }
 subprojects {
     val moduleName = name
@@ -13,7 +13,7 @@ subprojects {
     }
     tasks.withType<JavaCompile>().configureEach { options.release.set(17); options.encoding = "UTF-8" }
     dependencies {
-        "testImplementation"("org.junit.jupiter:junit-jupiter:5.11.4")
+        "testImplementation"("org.junit.jupiter:junit-jupiter:6.1.3")
         "testRuntimeOnly"("org.junit.platform:junit-platform-launcher")
     }
     tasks.withType<Javadoc>().configureEach {

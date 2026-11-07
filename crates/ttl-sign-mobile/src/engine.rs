@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use rand::RngCore;
+use rand::Rng;
 use rquickjs::{Context, Function, Runtime};
 
 use crate::{MobileError, BOOTSTRAP, MAX_RANDOM_BYTES};
@@ -79,7 +79,7 @@ impl QuickJs {
             // before the bootstrap runs and the sandbox wires its random source to it.
             let random = Function::new(ctx.clone(), |count: usize| {
                 let mut bytes = vec![0u8; count.min(MAX_RANDOM_BYTES)];
-                rand::thread_rng().fill_bytes(&mut bytes);
+                rand::rng().fill_bytes(&mut bytes);
                 bytes
             })
             .map_err(|e| MobileError::Engine(e.to_string()))?;

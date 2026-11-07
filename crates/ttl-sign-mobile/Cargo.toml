@@ -30,7 +30,7 @@ ttl-live-events = { workspace = true, optional = true }
 rand = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-rquickjs = { version = "0.12" }
+rquickjs = { version = "0.14" }
 jni = { version = "0.22", optional = true }
 tokio = { workspace = true, features = ["rt"], optional = true }
 # rquickjs ships pre-generated C bindings per host platform, and Android is not
@@ -39,7 +39,7 @@ tokio = { workspace = true, features = ["rt"], optional = true }
 # `bindgen` generates them at build time from the NDK headers instead. Host
 # builds keep the fast prebuilt path; see docs/14-android-signing.md.
 [target.'cfg(target_os = "android")'.dependencies]
-rquickjs = { version = "0.12", features = ["bindgen"] }
+rquickjs = { version = "0.14", features = ["bindgen"] }
 
 [dev-dependencies]
 sha2 = { workspace = true }

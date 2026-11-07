@@ -10,7 +10,7 @@ license.workspace = true
 ttl-sign-core = { workspace = true }
 ttl-live-discovery = { workspace = true }
 
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "gzip"] }
 tracing = { workspace = true }
 
 [dev-dependencies]

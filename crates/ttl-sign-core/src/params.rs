@@ -10,7 +10,7 @@
 //! A `Vec<(String, String)>` is intentional instead of a `HashMap`: ordering is stable and
 //! the WebSocket query must repeat `version_code` with two different values.
 
-use rand::Rng;
+use rand::RngExt;
 
 use crate::preset::Preset;
 
@@ -210,19 +210,22 @@ pub fn percent_decode(value: &str) -> String {
 
 /// Generate a 19-digit `device_id`, matching the real browser.
 pub fn random_device_id() -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut s = String::with_capacity(DEVICE_ID_DIGITS);
     s.push(
         char::from_digit(
-            rng.gen_range(DEVICE_ID_FIRST_DIGIT_MIN..=DEVICE_ID_FIRST_DIGIT_MAX),
+            rng.random_range(DEVICE_ID_FIRST_DIGIT_MIN..=DEVICE_ID_FIRST_DIGIT_MAX),
             10,
         )
         .expect("valid digit"),
     );
     for _ in 1..DEVICE_ID_DIGITS {
         s.push(
-            char::from_digit(rng.gen_range(DEVICE_ID_DIGIT_MIN..=DEVICE_ID_DIGIT_MAX), 10)
-                .expect("valid digit"),
+            char::from_digit(
+                rng.random_range(DEVICE_ID_DIGIT_MIN..=DEVICE_ID_DIGIT_MAX),
+                10,
+            )
+            .expect("valid digit"),
         );
     }
     s
@@ -230,7 +233,7 @@ pub fn random_device_id() -> String {
 
 /// Keep `last_rtt` plausible, within the range used by the reference client.
 pub fn random_last_rtt() -> u32 {
-    rand::thread_rng().gen_range(LAST_RTT_MIN..=LAST_RTT_MAX)
+    rand::rng().random_range(LAST_RTT_MIN..=LAST_RTT_MAX)
 }
 
 /// Query for `/webcast/im/fetch/`.

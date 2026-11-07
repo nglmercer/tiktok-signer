@@ -207,7 +207,7 @@ async fn concurrent_connections_preserve_delivery_ack_and_shutdown() {
                 for (index, frame) in frames.iter().enumerate() {
                     let ack_started = Instant::now();
                     ws.send(tokio_tungstenite::tungstenite::Message::Binary(
-                        frame.clone(),
+                        frame.clone().into(),
                     ))
                     .await
                     .unwrap();

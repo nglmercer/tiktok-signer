@@ -15,7 +15,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -41,7 +41,7 @@ fun trPlural(id: Int, quantity: Int, vararg formatArgs: Any): String =
 
 @Composable
 private fun appLocale(): Locale =
-    LocalConfiguration.current.locales[0] ?: Locale.getDefault()
+    LocalLocale.current.platformLocale
 
 @Composable
 fun localizedCompact(value: Long): String = compact(value, appLocale())

@@ -23,12 +23,12 @@
     "test": "npm run build && tsc -p tsconfig.test.json && node --test .test-dist/*.test.js"
   },
   "dependencies": {
-    "@bufbuild/protobuf": "^2.14.1",
-    "ws": "^8.18.0"
+    "@bufbuild/protobuf": "^2.17.0",
+    "ws": "^8.22.1"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
-    "@types/ws": "^8.5.13",
-    "typescript": "^5.9.3"
+    "@types/node": "^26.6.6",
+    "@types/ws": "^8.18.2",
+    "typescript": "^7.0.2"
   }
 }

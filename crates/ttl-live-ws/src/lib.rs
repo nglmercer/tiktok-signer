@@ -252,11 +252,9 @@ impl LiveConnection {
         // No protocol keepalive: TikTok does not answer `ping`, so a ping interval with
         // its timeout would close the connection. `tungstenite` does not send pings on its
         // own; the application heartbeat is the real keepalive.
-        let ws_config = WebSocketConfig {
-            max_message_size: Some(16 * 1024 * 1024),
-            max_frame_size: Some(16 * 1024 * 1024),
-            ..WebSocketConfig::default()
-        };
+        let ws_config = WebSocketConfig::default()
+            .max_message_size(Some(16 * 1024 * 1024))
+            .max_frame_size(Some(16 * 1024 * 1024));
 
         let (mut stream, response) =
             tokio_tungstenite::connect_async_with_config(request, Some(ws_config), false)
@@ -269,7 +267,7 @@ impl LiveConnection {
         // remain silent forever.
         let enter_room = PushFrame::enter_room(room_id).encode();
         stream
-            .send(WsMessage::Binary(enter_room))
+            .send(WsMessage::Binary(enter_room.into()))
             .await
             .map_err(|e| WsError::Closed(format!("room entry failed: {e}")))?;
         debug!(room_id, "room entry sent");
@@ -391,7 +389,7 @@ impl LiveConnection {
             let ack = frame.ack_for_batch(&self.internal_ext);
             let ack_started = std::time::Instant::now();
             self.stream
-                .send(WsMessage::Binary(ack.encode()))
+                .send(WsMessage::Binary(ack.encode().into()))
                 .await
                 .map_err(|e| WsError::Closed(format!("ack failed: {e}")))?;
             self.last_ack_was_sent = true;
@@ -408,7 +406,7 @@ impl LiveConnection {
         let frame = PushFrame::heartbeat(self.room_id, self.heartbeat_sequence);
         self.heartbeat_sequence = self.heartbeat_sequence.saturating_add(1);
         self.stream
-            .send(WsMessage::Binary(frame.encode()))
+            .send(WsMessage::Binary(frame.encode().into()))
             .await
             .map_err(|e| WsError::Closed(format!("heartbeat failed: {e}")))
     }
@@ -642,7 +640,7 @@ mod tests {
                         ..Default::default()
                     };
                     writer
-                        .send(WsMessage::Binary(frame.encode()))
+                        .send(WsMessage::Binary(frame.encode().into()))
                         .await
                         .unwrap();
                     tokio::time::sleep(Duration::from_millis(1)).await;
@@ -785,7 +783,9 @@ mod tests {
                     payload: batch.finish(),
                     ..Default::default()
                 };
-                ws.send(WsMessage::Binary(frame.encode())).await.unwrap();
+                ws.send(WsMessage::Binary(frame.encode().into()))
+                    .await
+                    .unwrap();
                 if requested {
                     loop {
                         let message = ws.next().await.unwrap().unwrap();

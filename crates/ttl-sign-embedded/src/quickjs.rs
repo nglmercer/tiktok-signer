@@ -3,7 +3,7 @@
 //! The only engine: it passes the parity test in a few megabytes of binary and needs no JIT.
 //! See `docs/13-embedded-runtime.md`.
 
-use rand::RngCore;
+use rand::Rng;
 use rquickjs::{Context, Function, Runtime};
 
 use crate::{EmbeddedError, Engine, BOOTSTRAP};
@@ -30,7 +30,7 @@ impl Engine for QuickJs {
             // runs.
             let random = Function::new(ctx.clone(), |count: usize| {
                 let mut bytes = vec![0u8; count.min(crate::MAX_RANDOM_BYTES)];
-                rand::thread_rng().fill_bytes(&mut bytes);
+                rand::rng().fill_bytes(&mut bytes);
                 bytes
             })
             .map_err(|error| EmbeddedError::Engine(error.to_string()))?;
@@ -99,7 +99,7 @@ mod tests {
         context.with(|ctx| {
             let random = Function::new(ctx.clone(), |count: usize| {
                 let mut bytes = vec![0u8; count.min(crate::MAX_RANDOM_BYTES)];
-                rand::thread_rng().fill_bytes(&mut bytes);
+                rand::rng().fill_bytes(&mut bytes);
                 bytes
             })
             .expect("random function");

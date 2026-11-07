@@ -10,7 +10,7 @@ license.workspace = true
 ttl-live-discovery = { workspace = true }
 
 rand = { workspace = true }
-rquickjs = { version = "0.12" }
+rquickjs = { version = "0.14" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 

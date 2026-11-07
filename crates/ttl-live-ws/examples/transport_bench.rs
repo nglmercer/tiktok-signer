@@ -44,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
             };
             let started = Instant::now();
             ws.send(tokio_tungstenite::tungstenite::Message::Binary(
-                frame.encode(),
+                frame.encode().into(),
             ))
             .await
             .unwrap();
