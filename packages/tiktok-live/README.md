@@ -16,16 +16,19 @@ live.on('gift', (event) => {
 await live.connect();
 ```
 
-## Why there is no server and no napi
+## Why there is no server and no native addon
 
 The only signed thing in the whole flow is the socket's query string, and the code that signs it is
-TikTok's own `webmssdk` bundle — which is JavaScript. Node already has a JavaScript engine, so
-there is no native engine or addon to compile: the TypeScript package builds to ESM, the bundle runs
-in a bare `node:vm` context, and the sandbox it needs (`vendor/bootstrap.js`) is a generated script.
+TikTok's own `webmssdk` bundle — which is JavaScript. It runs in **QuickJS compiled to
+WebAssembly** (`quickjs-emscripten-core` with the `@jitl/quickjs-wasmfile-release-sync` variant),
+the same engine the Rust, Java and Android signers use, so every frontend produces the same bytes.
+The sandbox it needs (`vendor/bootstrap.js`) is a generated script, shared with those engines.
 
-The Rust side of this repository does link QuickJS or V8, but only because Rust has no engine of
-its own. Shipping that through `napi` would put a JavaScript engine inside a JavaScript runtime and
-add a prebuilt binary per platform, in exchange for nothing.
+WebAssembly rather than `node:vm` or a `napi` addon: the bundle sees none of Node's globals, each
+call runs under a deadline (`timeoutMs`, default 10 s) and the context has a memory ceiling, and
+there is still no prebuilt binary per platform to install. Loading the bundle takes about 150 ms and
+a signature tens of milliseconds; a `Signer` is kept warm and reused, and `signer.close()` releases
+its WebAssembly memory when it is no longer needed.
 
 The WebSocket uses `ws` so authenticated handshakes preserve cookie, user-agent, and origin headers.
 Discovery and gzip use Node built-ins. Generated schema bindings use the small

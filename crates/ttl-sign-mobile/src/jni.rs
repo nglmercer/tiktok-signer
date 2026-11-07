@@ -76,6 +76,29 @@ pub extern "system" fn Java_io_github_nglmercer_tiktoklive_internal_NativeBindin
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// Interrupt a signer opened by `nOpen`: the call it is running fails promptly and later calls
+/// fail. The handle stays valid until `nClose`. Zero is a no-op. Unlike `nSign`, this may run
+/// concurrently with another thread's `nSign` on the same handle, but never with `nClose`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_nglmercer_tiktoklive_internal_NativeBindings_nInterrupt<
+    'caller,
+>(
+    mut unowned: EnvUnowned<'caller>,
+    _cls: JClass<'caller>,
+    handle: jlong,
+) {
+    unowned
+        .with_env(|_env| -> Result<()> {
+            if handle != 0 {
+                // SAFETY: the handle came from `nOpen`, and Java never interrupts after `nClose`.
+                let signer = unsafe { &*(handle as *const MobileSigner) };
+                signer.interrupt();
+            }
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// Close a signer opened by `nOpen`. Zero is a no-op.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_github_nglmercer_tiktoklive_internal_NativeBindings_nClose<

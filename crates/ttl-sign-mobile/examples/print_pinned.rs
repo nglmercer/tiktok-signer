@@ -1,13 +1,10 @@
 //! Print the pinned `ws` signature for a fixed socket URL.
 //!
-//! Exists to record the vector `tests/mobile_sign.rs` asserts against, and to diff this
-//! crate's QuickJS output against the Node/V8 reference:
+//! Exists to inspect the vector `tests/mobile_sign.rs` asserts against. Its digest is recorded
+//! in `fixtures/research/pinned-signatures-1.0.0.388.json` (`mobile_cases`):
 //!
 //! ```sh
-//! cargo run -p ttl-sign-mobile --example print_pinned > /tmp/mobile-pinned.txt
-//! node scripts/headless/tools/sign-pinned.mjs /tmp/webmssdk.js \
-//!   "$(sed -n 1p /tmp/mobile-pinned.txt)" ws > /tmp/node-pinned.txt
-//! diff <(sed -n 2p /tmp/mobile-pinned.txt) /tmp/node-pinned.txt
+//! cargo run -p ttl-sign-mobile --example print_pinned | sed -n 2p | tr -d '\n' | sha256sum
 //! ```
 
 use ttl_sign_mobile::{direct_socket_url, MobileSigner, Product};

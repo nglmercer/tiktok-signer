@@ -49,10 +49,10 @@ parameters against what Node produces. Byte equality or nothing.
 | Boa 0.21 | **FAIL** — see below | — | — | — |
 | *Node subprocess (today)* | PASS | *per signature* | *118 ms* | — |
 
-Measured 2026-08-18 on this machine, release builds, 20 iterations. The two engine rows come from
-`cargo test --release -p ttl-sign-embedded --features v8 --test latency -- --ignored --nocapture`,
-which is the shipped code rather than a spike, and the binary column is the same test binary built
-with each feature — so the 67 MB is what V8 actually costs a deliverable, not an estimate.
+Measured 2026-08-18 on this machine, release builds, 20 iterations. The two engine rows came from
+the crate's `tests/latency.rs` while both engines shipped, and the binary column is the same test
+binary built with each — so the 67 MB was what V8 actually cost a deliverable, not an estimate. The
+V8 row is history now: see [V8 removed](#v8-removed-2026-11-06).
 
 A warm context is the point of the exercise: the first signature off a warm QuickJS context is
 byte-identical to a cold one, and every signature after it differs — the SDK carries per-call state,
@@ -83,33 +83,29 @@ targets `wasm32` without a C toolchain.
 
 ## Decision
 
-**Both, behind features; QuickJS by default.**
+**QuickJS, and only QuickJS.**
 
-QuickJS is the default because it passes, it costs 3.1 MB rather than 70, it needs no JIT, and
-28 ms per signature is already four times better than today's 118 ms with the Node dependency gone.
-
-V8 is built too, behind `--features v8`, because it is nine times faster again and this project's
-targets include a server that may sign continuously. It wins the `EmbeddedSigner` alias whenever it
-is enabled: `quickjs` is a default feature that arrives without anyone choosing it, `v8` only ever
-arrives because someone did.
+QuickJS passes, it costs 3.1 MB rather than 70, it needs no JIT, and 28 ms per signature is
+already four times better than the 118 ms the Node subprocess cost. From 2026-08-19 until
+2026-11-06 V8 was built too, behind a `v8` feature, for throughput; it was then removed so that
+every frontend — Rust, Java, Android and Node — signs with one engine. See
+[V8 removed](#v8-removed-2026-11-06).
 
 ```sh
-cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless      # QuickJS
-cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless,v8   # V8
+cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless
 ```
 
-WASM no longer constrains the choice — it was dropped from the targets. For a browser, embed
-nothing anyway: the page already has an engine. Compile the Rust core to `wasm32` and run the same
-flattened bootstrap through `wasm-bindgen`.
+For a browser, embed nothing: the page already has an engine. Compile the Rust core to `wasm32` and
+run the same flattened bootstrap through `wasm-bindgen`.
 
 ## What was built on that decision
 
-`crates/ttl-sign-embedded` holds a warm context on its own thread — neither engine's context is
+`crates/ttl-sign-embedded` holds a warm context on its own thread — the QuickJS context is not
 `Send` — and implements the `UrlSigner` trait the sign server and `live-check` already took, so
 adopting it changed a constructor and nothing else. It signs all three products, and its `Profile`
 carries the user agent, cookie jar and stored token the sandbox should report.
 
-The engines sit behind one four-line trait:
+The engine sits behind one four-line trait, kept from when there were two:
 
 ```rust
 pub trait Engine: Sized {
@@ -119,12 +115,13 @@ pub trait Engine: Sized {
 }
 ```
 
-Everything the two could differ about above that line — how the sandbox is built, which products
-exist, how a reply is read, the thread and the channel — is shared, so a second engine cannot grow
-a second behaviour where nobody is looking. `tests/parity.rs` then signs every product in both and
-compares the bytes, with no Node involved, which is the check that keeps them honest offline.
+Everything an engine could differ about above that line — how the sandbox is built, which products
+exist, how a reply is read, the thread and the channel — is shared, so an engine cannot grow a
+second behaviour where nobody is looking. `tests/parity.rs` signs every product and compares the
+bytes against the recorded V8 digests, with no Node involved, which is the check that keeps QuickJS
+honest offline.
 
-### What V8 needed that QuickJS did not
+### What V8 needed that QuickJS did not (historical)
 
 - **A tokio runtime on its thread.** `deno_core` posts delayed tasks and *aborts the process* if
   the isolate was created outside one. The signer thread is a plain `std::thread`, so the V8 engine
@@ -140,7 +137,8 @@ compares the bytes, with no Node involved, which is the check that keeps them ho
   answer is **zero**: bundle 1.0.0.388 never reaches `crypto.getRandomValues` on any of the three
   signing paths. Its per-signature variation comes from `Date.now` and `Math.random`, which is also
   why the pinned profile — which freezes both — reproduces exactly. The pool is 8 KB and exists for
-  the bundle version that starts asking; the test is what notices when that happens.
+  the bundle version that starts asking; the test is what notices when that happens. With V8 gone,
+the same test now bounds QuickJS's per-draw cap (`MAX_RANDOM_BYTES`, also 8 KB).
 
 Measured through the sign server against a live room, same machine, same rooms:
 
@@ -148,7 +146,7 @@ Measured through the sign server against a live room, same machine, same rooms:
 |---|---|
 | subprocess (`node`, current default) | 95–105 ms |
 | **embedded (QuickJS, warm)** | **70–89 ms** |
-| **embedded (V8, warm)** | **19 ms** |
+| embedded (V8, warm; removed 2026-11-06) | 19 ms |
 
 The QuickJS gap is smaller than the raw engine numbers suggest — most of the subprocess cost is
 Node's start-up and the 235 KB parse, and most of what is left is QuickJS being an interpreter,
@@ -167,6 +165,28 @@ copy. `crates/ttl-sign-embedded/tests/warm.rs` signs 25 times to keep it that wa
 That is the general shape of the risk in this migration: not that an engine computes a different
 signature, but that a warm context exercises the SDK in ways a fresh process never did.
 
+## V8 removed (2026-11-06)
+
+The `v8` feature, `deno_core` and `src/v8.rs` are gone, and so is every other non-QuickJS signing
+path: the `node:vm` reference driver (`scripts/headless/tools/sign-pinned.mjs`), the Node package's
+`node:vm` signer, and the Java SDK's GraalJS signer. What each became:
+
+| Was | Now |
+|---|---|
+| `ttl-sign-embedded --features v8` | QuickJS only; the feature no longer exists |
+| parity against `node sign-pinned.mjs` (V8) | parity against `fixtures/research/pinned-signatures-1.0.0.388.json` — SHA-256 and length of what V8 signed, recorded before removal, so no signed URL is committed |
+| `packages/tiktok-live` in a `node:vm` context | QuickJS compiled to WebAssembly (`quickjs-emscripten-core`), with a per-call deadline and a memory ceiling |
+| Java `GraalJsSigner` (GraalJS Community) | Java `QuickJsSigner`, over the Rust `ttl-sign-mobile` JNI library |
+
+The cost is V8's throughput — about 9× per signature on a server that signs continuously. The gain
+is one engine, one set of semantics and one parity target for every frontend, and no 67 MB native
+dependency anywhere in the build.
+
+`ttl-sign-mobile` gained an interrupt in the same change: every engine call runs under a deadline
+(`timeoutMs` in the options, default 30 s), and `MobileSigner::interrupt` — `nInterrupt` over JNI —
+stops a running call from another thread. GraalJS could cancel a wedged script; QuickJS behind JNI
+had to learn to.
+
 ## Reproducing
 
 ```sh
@@ -176,14 +196,12 @@ cargo run --release --manifest-path spikes/embed-spike/Cargo.toml --features boa
 ```
 
 ```sh
-cargo test -p ttl-sign-embedded                     # QuickJS against Node, and the warm-context regressions
-cargo test -p ttl-sign-embedded --features v8      # and the two embedded engines against each other
-cargo test --release -p ttl-sign-embedded --features v8 --test latency -- --ignored --nocapture
-cargo run -p ttl-live-discovery --example live-check --features v8
-cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless,v8
+cargo test -p ttl-sign-embedded                     # QuickJS against the recorded V8 digests, and the warm-context regressions
+cargo test --release -p ttl-sign-embedded --test latency -- --ignored --nocapture
+cargo run -p ttl-live-discovery --example live-check
+cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless
 ```
 
 `spikes/embed-spike` is deliberately not a workspace member: these dependencies are heavy and must
 not reach the lockfile of anything that ships. It is kept rather than deleted so the Boa row can be
-re-derived when Boa releases a new version. Its V8 arm is gone — V8 ships now, so its numbers come
-from `crates/ttl-sign-embedded/tests/latency.rs` and a spike copy could only drift.
+re-derived when Boa releases a new version; nothing that ships uses Boa.

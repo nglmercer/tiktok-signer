@@ -1,10 +1,17 @@
 //! The QuickJS engine: small, interpreted, no JIT — and the only engine here.
 //!
-//! Adapted from `ttl-sign-embedded/src/quickjs.rs`, minus the `Engine` trait (there is no
-//! second engine on mobile: V8/`deno_core` does not cross-compile to Android sanely) and
-//! minus `tokio` (JNI calls block). Behaviour is identical: same bootstrap, same random
-//! source injection, same driver calls — which is what makes the pinned vectors in
+//! Adapted from `ttl-sign-embedded/src/quickjs.rs`, minus the `Engine` trait and minus
+//! `tokio` (JNI calls block). Behaviour is identical: same bootstrap, same random source
+//! injection, same driver calls — which is what makes the pinned vectors in
 //! `tests/mobile_sign.rs` comparable with the server's.
+//!
+//! One addition: an [`Interrupt`]. A wedged bundle must not be able to hold the signer's
+//! thread forever, because closing a signer joins that thread — so every call into the engine
+//! runs under a deadline, and closing raises a flag QuickJS checks while it executes.
+
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
 
 use rand::RngCore;
 use rquickjs::{Context, Function, Runtime};
@@ -18,9 +25,53 @@ pub struct QuickJs {
     _runtime: Runtime,
 }
 
+/// When the engine must stop executing: a deadline for the current call, or for good.
+///
+/// Shared between the signer handle (which raises `stopping`) and the engine thread (which arms
+/// a deadline around each call). QuickJS polls it periodically while running script.
+#[derive(Clone, Debug)]
+pub struct Interrupt {
+    stopping: Arc<AtomicBool>,
+    /// Milliseconds since `base`; `u64::MAX` when no call is running.
+    deadline_ms: Arc<AtomicU64>,
+    base: Instant,
+}
+
+impl Interrupt {
+    pub fn new(stopping: Arc<AtomicBool>) -> Self {
+        Self {
+            stopping,
+            deadline_ms: Arc::new(AtomicU64::new(u64::MAX)),
+            base: Instant::now(),
+        }
+    }
+
+    /// Interrupt the engine if it is still running at `at`.
+    pub fn arm(&self, at: Instant) {
+        let ms = at.saturating_duration_since(self.base).as_millis();
+        self.deadline_ms
+            .store(u64::try_from(ms).unwrap_or(u64::MAX - 1), Ordering::Release);
+    }
+
+    pub fn disarm(&self) {
+        self.deadline_ms.store(u64::MAX, Ordering::Release);
+    }
+
+    pub fn fired(&self) -> bool {
+        if self.stopping.load(Ordering::Acquire) {
+            return true;
+        }
+        let deadline = self.deadline_ms.load(Ordering::Acquire);
+        deadline != u64::MAX
+            && u64::try_from(self.base.elapsed().as_millis()).unwrap_or(u64::MAX) >= deadline
+    }
+}
+
 impl QuickJs {
-    pub fn start(bundle: &str, options: &str) -> Result<Self, MobileError> {
+    pub fn start(bundle: &str, options: &str, interrupt: &Interrupt) -> Result<Self, MobileError> {
         let runtime = Runtime::new().map_err(|e| MobileError::Engine(e.to_string()))?;
+        let check = interrupt.clone();
+        runtime.set_interrupt_handler(Some(Box::new(move || check.fired())));
         let context = Context::full(&runtime).map_err(|e| MobileError::Engine(e.to_string()))?;
 
         context.with(|ctx| -> Result<(), MobileError> {

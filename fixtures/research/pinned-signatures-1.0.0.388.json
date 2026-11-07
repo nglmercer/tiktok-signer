@@ -1,0 +1,35 @@
+{
+  "description": "SHA-256 of what the pinned sandbox signs for each product under bundle 1.0.0.388. Recorded from V8 (node:vm) before that path was removed; the QuickJS engines must reproduce these bytes exactly.",
+  "bundle_version": "1.0.0.388",
+  "bundle_sha256": "dee22566273d398e074df6db40f39cfd827f6b8efd6fc382de03c44c501299ac",
+  "profile": "pinned, default user agent, no cookie, no stored token",
+  "recorded": "2026-11-06",
+  "cases": [
+    {
+      "product": "fetch",
+      "url": "https://webcast.tiktok.com/webcast/im/fetch/?aid=1988&room_id=7300000000000000001",
+      "signed_length": 970,
+      "signed_sha256": "c93df87975b5dc7e4e96cd63b16aabfb7aaaaa492690a1473e6fef047611ccb2"
+    },
+    {
+      "product": "frontier",
+      "url": "https://webcast.tiktok.com/webcast/im/fetch/?aid=1988&room_id=7300000000000000001",
+      "signed_length": 106,
+      "signed_sha256": "68919d2823ec157bf17fd80cb3b25abd1e37f9de02028fb7eb9dadccafa4ed7f"
+    },
+    {
+      "product": "ws",
+      "url": "wss://webcast-ws.tiktok.com/webcast/im/ws_proxy/ws_reuse_supplement/?room_id=7300000000000000001&aid=1988&version_code=180800",
+      "signed_length": 475,
+      "signed_sha256": "e6f52d7d23b54ebd7f8b89c9c86e13018caed6e43bc02b08526fd9165e705f72"
+    }
+  ],
+  "mobile_cases": [
+    {
+      "product": "ws",
+      "url": "wss://webcast-ws.tiktok.com/webcast/im/ws_proxy/ws_reuse_supplement/?version_code=180800&device_platform=web&cookie_enabled=true&screen_width=412&screen_height=915&browser_language=en-US&browser_platform=Linux armv81&browser_name=Mozilla&browser_version=5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36&browser_online=true&tz_name=America/New_York&app_name=tiktok_web&sup_ws_ds_opt=1&update_version_code=2.0.0&compress=gzip&webcast_language=en&aid=1988&live_id=12&version_code=270000&app_language=en&ws_direct=1&client_enter=1&room_id=7300000000000000001&identity=audience&last_rtt=-1&heartbeat_duration=10000&resp_content_type=protobuf&did_rule=0&device_id=1234567890123456789",
+      "signed_length": 1094,
+      "signed_sha256": "823d5d10efcd6650b8c7a246aada4367d1000741a976a78c5d89e6e6da8c0346"
+    }
+  ]
+}

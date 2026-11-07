@@ -8,9 +8,9 @@
 // await live.connect();
 // ```
 //
-// The signature comes from TikTok's own bundle running in a `node:vm` context — Node already has a
-// JavaScript engine, so no native engine has to be embedded. TypeScript is compiled to the ESM in
-// `dist`; see `README.md`.
+// The signature comes from TikTok's own bundle running in QuickJS compiled to WebAssembly — the same
+// engine every other signer in this repository uses, with no native addon to build. TypeScript is
+// compiled to the ESM in `dist`; see `README.md`.
 
 export { TikTokLive, DEFAULT_RECONNECT, NotLiveError, cookieFromFile } from './client.js';
 export type { SignerLike, TikTokLiveEvents, TikTokLiveOptions } from './client.js';

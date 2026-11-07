@@ -1,10 +1,10 @@
-//! What each engine costs, so `docs/13-embedded-runtime.md` can be re-derived rather than believed.
+//! What the engine costs, so `docs/13-embedded-runtime.md` can be re-derived rather than believed.
 //!
 //! Ignored by default: it is a measurement, not a check, and a number that varies with the machine
 //! must never be allowed to fail a build.
 //!
 //! ```sh
-//! cargo test --release -p ttl-sign-embedded --features v8 --test latency -- --ignored --nocapture
+//! cargo test --release -p ttl-sign-embedded --test latency -- --ignored --nocapture
 //! ```
 
 use std::time::Instant;
@@ -55,7 +55,4 @@ macro_rules! measure {
     };
 }
 
-#[cfg(feature = "quickjs")]
 measure!(quickjs_latency, ttl_sign_embedded::QuickJsSigner, "QuickJS");
-#[cfg(feature = "v8")]
-measure!(v8_latency, ttl_sign_embedded::V8Signer, "V8");

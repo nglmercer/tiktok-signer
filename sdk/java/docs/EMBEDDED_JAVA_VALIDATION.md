@@ -1,3 +1,9 @@
+> **Historical record.** Everything below was measured on the GraalJS signer this module used
+> until 2026-11-06. The module now signs in QuickJS through the Rust JNI library; its parity is
+> checked against `fixtures/research/pinned-signatures-1.0.0.388.json` by `QuickJsSignerTest`
+> (`TTL_NATIVE_LIBRARY=… TTL_BUNDLE=… ./gradlew :live-jvm-signer:test`). The GraalJS timings,
+> footprint and JDK 25 notes do not describe the current module.
+
 # Embedded backend validation — 2026-10-20
 
 Platform: Linux x86_64. Standard OpenJDK was used, not a GraalVM JDK.

@@ -6,6 +6,7 @@
 // Without it these skip rather than fail, so a fresh clone can still run the suite offline.
 
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
@@ -97,7 +98,7 @@ function os_tmpdir() {
   return process.env.TMPDIR ?? '/tmp';
 }
 
-test('shared compiled bootstrap preserves mutable context and identity isolation', async () => {
+test('one bootstrap source preserves mutable context and identity isolation', async () => {
   const source = `window.byted_acrawler = {
     init: function() {},
     registerWsSigner: function() {
@@ -115,16 +116,99 @@ test('shared compiled bootstrap preserves mutable context and identity isolation
 });
 
 test('embedded pending timer retention has an explicit capacity and supports cleanup', async () => {
-  const vm = await import('node:vm');
-  const context = vm.createContext({});
-  new vm.Script(fs.readFileSync(BOOTSTRAP_PATH, 'utf8')).runInContext(context);
-  vm.runInContext('for (let i = 0; i < 1024; i++) setTimeout(() => {}, 1000)', context);
-  assert.equal(vm.runInContext('__ttlPendingTimers.size', context), 1024);
-  assert.throws(() => vm.runInContext('setTimeout(() => {}, 1000)', context), /timer capacity exceeded/);
-  vm.runInContext('clearTimeout(1); setTimeout(() => {}, 1000)', context);
-  assert.equal(vm.runInContext('__ttlPendingTimers.size', context), 1024);
-  vm.runInContext('for (const id of __ttlPendingTimers.keys()) clearTimeout(id)', context);
-  assert.equal(vm.runInContext('__ttlPendingTimers.size', context), 0);
+  const { newQuickJSWASMModuleFromVariant } = await import('quickjs-emscripten-core');
+  const quickjs = await newQuickJSWASMModuleFromVariant(import('@jitl/quickjs-wasmfile-release-sync'));
+  const context = quickjs.newContext();
+  try {
+    const run = (code: string): unknown => {
+      const result = context.evalCode(code);
+      if (result.error) {
+        const error = context.dump(result.error);
+        result.error.dispose();
+        throw new Error(String((error as { message?: unknown })?.message ?? error));
+      }
+      const value: unknown = context.dump(result.value);
+      result.value.dispose();
+      return value;
+    };
+    run(fs.readFileSync(BOOTSTRAP_PATH, 'utf8'));
+    run('for (let i = 0; i < 1024; i++) setTimeout(() => {}, 1000)');
+    assert.equal(run('__ttlPendingTimers.size'), 1024);
+    assert.throws(() => run('setTimeout(() => {}, 1000)'), /timer capacity exceeded/);
+    run('clearTimeout(1); setTimeout(() => {}, 1000)');
+    assert.equal(run('__ttlPendingTimers.size'), 1024);
+    run('for (const id of __ttlPendingTimers.keys()) clearTimeout(id)');
+    assert.equal(run('__ttlPendingTimers.size'), 0);
+  } finally {
+    context.dispose();
+  }
+});
+
+test('the signing context holds nothing of Node', async () => {
+  const source = `window.byted_acrawler = {
+    init: function() {},
+    registerWsSigner: function() {
+      const seen = [typeof process, typeof require, typeof Buffer, typeof globalThis.fetch].join('.');
+      return function() { return {'X-Gnarly': seen}; };
+    }
+  };`;
+  const signer = await Signer.create({ bundleSource: source });
+  try {
+    assert.match(signer.sign(URL_UNDER_TEST, PRODUCT.ws), /X-Gnarly=undefined\.undefined\.undefined\./);
+  } finally {
+    signer.close();
+  }
+});
+
+test('a wedged bundle is interrupted rather than hanging the process', async () => {
+  const started = Date.now();
+  await assert.rejects(() => Signer.create({ bundleSource: 'while (true) {}', timeoutMs: 200 }), /failed to load/);
+  assert.ok(Date.now() - started < 10_000);
+
+  const wedges = `window.byted_acrawler = {
+    init: function() {},
+    registerWsSigner: function() { return function() { while (true) {} }; }
+  };`;
+  const signer = await Signer.create({ bundleSource: wedges, timeoutMs: 200 });
+  try {
+    assert.throws(() => signer.sign(URL_UNDER_TEST, PRODUCT.ws), /signing failed/);
+  } finally {
+    signer.close();
+  }
+});
+
+test('a closed signer refuses to sign, and closing twice is harmless', async () => {
+  const source = `window.byted_acrawler = { init: function() {},
+    registerWsSigner: function() { return function() { return {'X-Gnarly': 'ok'}; }; } };`;
+  const signer = await Signer.create({ bundleSource: source });
+  assert.match(signer.sign(URL_UNDER_TEST, PRODUCT.ws), /X-Gnarly=ok/);
+  signer.close();
+  signer.close();
+  assert.throws(() => signer.sign(URL_UNDER_TEST, PRODUCT.ws), /closed/);
+});
+
+// The recorded digests are of what V8 signed before it left the repository; QuickJS must match.
+test('pinned signatures match the recorded ones byte for byte', needsBundle, async (t) => {
+  const recorded = JSON.parse(fs.readFileSync(
+    path.resolve(HERE, '../../../fixtures/research/pinned-signatures-1.0.0.388.json'), 'utf8')) as {
+    bundle_sha256: string;
+    cases: { product: keyof typeof PRODUCT; url: string; signed_sha256: string; signed_length: number }[];
+  };
+  const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
+  if (sha256(bundle ?? '') !== recorded.bundle_sha256) {
+    t.skip('the bundle is not the one the signatures were recorded from');
+    return;
+  }
+  for (const recordedCase of recorded.cases) {
+    const signer = await Signer.create({ bundleSource, pinned: true });
+    try {
+      const signed = signer.sign(recordedCase.url, PRODUCT[recordedCase.product]);
+      assert.equal(signed.length, recordedCase.signed_length, `${recordedCase.product} length`);
+      assert.equal(sha256(signed), recordedCase.signed_sha256, `${recordedCase.product} differs`);
+    } finally {
+      signer.close();
+    }
+  }
 });
 
 test('sandbox access diagnostics are bounded without changing property reads', async () => {

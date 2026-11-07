@@ -7,13 +7,12 @@ and no runtime on the host at all.
 
 What it does need, in full: **the Rust binary, the signing bundle, and an account session.**
 
-Which engine is a build choice. QuickJS by default (3.1 MB, ~70–89 ms per signature through the
-server); `--features v8` links V8 instead (+67 MB, ~19 ms). Both produce byte-identical signatures —
-that is the acceptance test. See [13 — Embedded runtime](13-embedded-runtime.md).
+The engine is QuickJS (3.1 MB, ~70–89 ms per signature through the server), and it is the only one:
+its signatures are byte-identical to the ones V8 produced before V8 was removed, which is the
+acceptance test. See [13 — Embedded runtime](13-embedded-runtime.md).
 
 ```sh
 cargo build --release -p ttl-sign-server --bin ttl-sign-headless-server --features headless
-cargo build --release -p ttl-sign-server --bin ttl-sign-headless-server --features headless,v8
 ```
 
 ## Container
@@ -104,8 +103,8 @@ around one: that turns a block into a hammering client. Rotate the identity, or 
 
 ## Operational notes
 
-Signing is a call into a warm engine — 70–89 ms under QuickJS, 19 ms under V8, against 6–12 s for
-the old page navigation. There is no process per signature any more. The engine holds one context
+Signing is a call into a warm QuickJS engine — 70–89 ms, against 6–12 s for the old page
+navigation. There is no process per signature any more. The engine holds one context
 on one thread and serves requests in arrival order, so `TTL_MAX_CONCURRENT` bounds how many
 callers queue rather than how many processes exist.
 

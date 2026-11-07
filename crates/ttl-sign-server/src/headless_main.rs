@@ -73,11 +73,10 @@ async fn main() -> Result<()> {
         LocationPreset::us_east(),
         ScreenPreset::FHD,
     );
-    // One signer. The bundle runs in an embedded engine on a worker thread: same sandbox source
+    // One signer. The bundle runs in embedded QuickJS on a worker thread: same sandbox source
     // the reference driver uses, byte-identical output under a pinned profile
-    // (`cargo test -p ttl-sign-embedded --features v8`), and no 235 KB parse per signature. Which
-    // engine that is comes from the build — QuickJS, or V8 with `--features v8` — so there is
-    // nothing to choose at runtime and no `node` on the host.
+    // (`cargo test -p ttl-sign-embedded`), and no 235 KB parse per signature. There is nothing
+    // to choose at runtime and no `node` on the host.
     let source = std::fs::read_to_string(&bundle)
         .with_context(|| format!("could not read the signing bundle at {bundle}"))?;
     let profile = Profile {

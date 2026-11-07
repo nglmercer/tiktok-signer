@@ -1,10 +1,14 @@
 # Embedded JVM connection backend
 
 The optional `tiktok-live-jvm-signer` module prepares a direct TikTok LIVE connection
-inside a standard OpenJDK process. It uses GraalJS Community 25.3.4.1 through the
-Polyglot Context API. No Rust executable, Rust JNI library, Node, browser, Python,
-external broker, or GraalVM JDK is required by this backend. The existing broker
-remains the default; adding this dependency alone does not change it.
+inside a standard OpenJDK process. It signs in QuickJS — the same engine every other
+signer in this repository uses — through the Rust `ttl-sign-mobile` JNI library that
+`tiktok-live-native` loads. No Node, browser, Python, external broker or GraalVM is
+required. The existing broker remains the default; adding this dependency alone does
+not change it.
+
+Until 2026-11-06 this module embedded GraalJS instead. It was replaced so that one
+engine, with one set of semantics, produces every signature in the repository.
 
 ## Installation and compatibility
 
@@ -37,12 +41,17 @@ dependencies {
 </dependencies>
 ```
 
-Use the ordinary classpath with transitive runtime dependencies. Do not relocate
-or discard Graal/Truffle resources or service registrations. The Gradle application
-distribution keeps dependency JARs separate. On JDK 25, Truffle emits native-access and Unsafe deprecation warnings. These
-come from the dependency runtime, not guest permissions; guest native access
-remains disabled. Future JDKs may require upstream runtime changes.
-Module-path and shaded uber-JAR
+The module needs the native library. Build it from the repository root:
+
+```sh
+cargo build --release -p ttl-sign-mobile --features jni
+```
+
+Then point the JVM at it with `-Dtiktok.live.native.library=/abs/path/libttl_sign_mobile.so`
+(or the `TTL_NATIVE_LIBRARY` environment variable), put it on `java.library.path`, or
+package it under `natives/<platform>-<arch>/` as described in the SDK README. On JDK 24+
+loading it prints the JDK's restricted-native-access warning; pass
+`--enable-native-access=ALL-UNNAMED` to acknowledge it. Module-path and shaded uber-JAR
 packaging have not been validated and are not supported by this example.
 
 ## Usage
@@ -76,8 +85,10 @@ HTTP clients and callback executors remain caller-owned.
 The direct provider owns a bounded serial preparation worker and its HTTP client.
 The signer lazily creates one context, reuses it for warm signatures, and runs
 JavaScript on a dedicated serial worker with at most 16 queued requests. Requests
-have a 30-second deadline including queue time. Timeout retires the signer and
-cancels execution, rather than allowing a wedged context to block future work.
+have a 30-second deadline including queue time. The same deadline bounds every call
+inside QuickJS, which interrupts a wedged script itself; timeout also retires the
+signer and interrupts any running call, rather than allowing a wedged context to
+block future work.
 Cancellation during execution also retires that context; a later preparation can
 create a replacement. Normal reconnects reuse the warm context and session.
 A signing failure is non-retryable for the active client attempt.
@@ -102,8 +113,9 @@ If supplying a callback executor, the application must bound its own executor qu
 
 ## Bundle and sessions
 
-The generated bootstrap is copied by Gradle from the tracked authoritative
-`crates/ttl-sign-embedded/bootstrap.js`. Java builds do not regenerate it. The
+The generated bootstrap is the tracked authoritative
+`crates/ttl-sign-embedded/bootstrap.js`, compiled into the native library. Java builds
+do not regenerate or copy it. The
 proprietary upstream bundle is downloaded separately from the pinned HTTPS URL
 in `SigningBundleManager`, version **1.0.0.388**, with SHA-256:
 
@@ -130,9 +142,9 @@ bootstrap occurs only after discovery confirms LIVE. No session file is written.
 
 ## Security and troubleshooting
 
-Guest JavaScript has no host class lookup, host access, I/O, environment access,
-process/thread creation, native access or polyglot-language access. Its only host
-callback supplies bounded SecureRandom bytes. Production explicitly sets
+Guest JavaScript runs in a bare QuickJS context: there is no Java object in it, and
+no I/O, environment, process, thread or module access. Its only host callback
+supplies bounded random bytes. Production explicitly sets
 `pinned:false`; deterministic profiles are package-private test facilities.
 Bundle evaluation remains security-sensitive code running within your JVM:
 context restrictions are not an operating-system memory quota. Do not load
@@ -161,7 +173,9 @@ JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./gradlew :examples:embedded-java:run --a
 ```
 
 The SDK test JVM and Gradle launcher are separate compatibility concerns.
-If initialization fails, verify JDK version and the complete runtime classpath.
+If initialization fails with `SignerUnavailableException`, the native library was
+not found or could not load; verify its path and that it matches the JVM's platform
+and architecture.
 If download fails offline, provide a local file matching the pinned hash. If TikTok
 refuses anonymous bootstrap, provide a legitimate session or stop; reconnect loops
 do not solve verification challenges. A valid signature does not guarantee that
@@ -186,15 +200,13 @@ performance and remaining verification limits.
 
 ## Licensing
 
-The pinned `org.graalvm.polyglot:js-community:25.3.4.1` POM is deprecated in favor
-of `js`, but still resolves Community artifacts. Its Maven notices list MIT and
-UPL 1.0; Polyglot and Truffle components carry UPL notices. Retain notices from all
-resolved artifacts, including transitive components; this is not a license grant
-for TikTok's proprietary bundle. See the [GraalJS OpenJDK documentation](https://www.graalvm.org/jdk25/reference-manual/js/RunOnJDK/)
-and [published Community POM](https://repo.maven.apache.org/maven2/org/graalvm/polyglot/js-community/25.3.4.1/js-community-25.3.4.1.pom).
+The engine is QuickJS (MIT) through `rquickjs` (MIT), linked into the native library
+together with the Rust crates listed in `../../THIRD_PARTY_NOTICES.md`. Retain notices
+from all resolved artifacts, including transitive components; this is not a license
+grant for TikTok's proprietary bundle.
 
 The downloaded bundle is not embedded in SDK artifacts or the repository.
-Redistribution requires a separate licensing review. Independence from Rust does
+Redistribution requires a separate licensing review. The native library does
 not remove the existing modified AGPL-3.0 protobuf/schema obligations in
 `crates/ttl-live-proto/LICENSE.upstream` and the client artifact. Existing legal
 notices remain intact. Review them for your distribution; no legal determination

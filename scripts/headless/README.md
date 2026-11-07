@@ -191,7 +191,6 @@ node scripts/headless/tools/gen-canvas.mjs
 |---|---|
 | `tools/gen-canvas.mjs` | regenerates `lib/canvas.mjs`, the canvas fingerprint as data |
 | `tools/build-bootstrap.mjs` | flattens the sandbox into one classic script for an embedded engine |
-| `tools/sign-pinned.mjs` | signs under the pinned profile in V8, the reference half of the parity test |
 
 `build-bootstrap.mjs` writes `crates/ttl-sign-embedded/bootstrap.js`, which the Rust signer embeds.
 Regenerate it after editing the shim — `cargo test -p ttl-sign-embedded` fails if it has drifted:
@@ -352,9 +351,10 @@ stdout carries the signed URL and nothing else: the bundle prints while it loads
 is redirected to stderr.
 
 For a long-lived Node process, do not spawn this per signature — it reparses 235 KB every time.
-Load `crates/ttl-sign-embedded/bootstrap.js` into a `node:vm` context once and call `ttlPrepare`
-then `ttlSignUrl`, which is what `tools/sign-pinned.mjs` does in about thirty lines and what the
-Rust engines do through the same file. It is plain JavaScript: no native module, no `napi`.
+Use `Signer` from `packages/tiktok-live`, which loads `crates/ttl-sign-embedded/bootstrap.js` into a
+warm QuickJS (WebAssembly) context once and calls `ttlPrepare` then `ttlSignUrl` — the same file,
+the same engine and the same bytes as the Rust signer. This hand tool runs the shim directly in
+Node because it is research tooling; nothing that ships signs this way.
 
 ## Transport reverse engineering
 

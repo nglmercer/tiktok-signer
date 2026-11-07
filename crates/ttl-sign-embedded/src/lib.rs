@@ -8,25 +8,17 @@
 //! the same sandbox — literally the same source: `bootstrap.js` is generated from `scripts/headless/shim.mjs` by
 //! `scripts/headless/tools/build-bootstrap.mjs`, so there is one sandbox in the repository, not two.
 //!
-//! # Two engines
+//! # The engine
 //!
-//! Both pass the same acceptance test — a **byte-identical** signature under a pinned profile — and
-//! they trade off against each other rather than one being better (`docs/13-embedded-runtime.md`):
-//!
-//! | Feature | Engine | Per signature | Binary cost |
-//! |---|---|---|---|
-//! | `quickjs` (default) | QuickJS via `rquickjs` | 28 ms | 3.1 MB |
-//! | `v8` | V8 via `deno_core` | 3 ms | 69.9 MB |
-//!
-//! QuickJS is the default because it is small and needs no JIT, and it is already several times
-//! faster than the 118 ms a fresh `node` costs. Turn on `v8` where binary size does not matter and
-//! throughput does — it costs about 67 MB of binary and returns roughly nine times the throughput.
-//! Both are exposed as [`QuickJsSigner`] and [`V8Signer`]; `EmbeddedSigner` names the one this
-//! build signs with, which is V8 when the `v8` feature is on and QuickJS otherwise.
+//! QuickJS via `rquickjs`: small (about 3 MB of binary), interpreted, no JIT, and around 28 ms per
+//! signature on a warm context — several times faster than the 118 ms a fresh `node` cost. It is
+//! the only engine. Its output is checked byte for byte against signatures recorded from V8
+//! (`fixtures/research/pinned-signatures-1.0.0.388.json`, `tests/parity.rs`), so dropping V8 lost
+//! throughput and nothing else (`docs/13-embedded-runtime.md`).
 //!
 //! # The thread
 //!
-//! Neither engine's context is [`Send`], so it lives on its own thread and the signer is a handle
+//! The QuickJS context is not [`Send`], so it lives on its own thread and the signer is a handle
 //! to it. Requests go over a channel and replies come back on a oneshot, which keeps the
 //! [`UrlSigner`] signature — an async `sign(&str)` — exactly as it was.
 
@@ -41,23 +33,17 @@ use std::time::{Duration, Instant};
 
 use ttl_live_discovery::{DiscoveryError, SignFuture, SigningProduct, UrlSigner};
 
-#[cfg(feature = "quickjs")]
 mod quickjs;
-#[cfg(feature = "v8")]
-mod v8;
 
-#[cfg(feature = "quickjs")]
 pub use quickjs::QuickJs;
-#[cfg(feature = "v8")]
-pub use v8::V8;
 
 /// The sandbox, flattened into one script. Generated; see the module docs.
 pub(crate) const BOOTSTRAP: &str = include_str!("../bootstrap.js");
 
 /// The most entropy an engine hands the sandbox in one draw.
 ///
-/// Bundle 1.0.0.388 draws none at all — `tests/entropy.rs` measures it, and the V8 pool is sized
-/// from that number — so this is a ceiling on a request that should never arrive, not a budget.
+/// Bundle 1.0.0.388 draws none at all — `tests/entropy.rs` measures it — so this is a ceiling on a
+/// request that should never arrive, not a budget.
 pub(crate) const MAX_RANDOM_BYTES: usize = 8192;
 
 /// A JavaScript engine that can hold a prepared bundle and sign URLs with it.
@@ -183,35 +169,14 @@ pub struct Signer<E: Engine> {
     engine: PhantomData<fn() -> E>,
 }
 
-/// QuickJS: small, interpreted, byte-identical to V8.
-#[cfg(feature = "quickjs")]
+/// QuickJS: small, interpreted, byte-identical to the recorded V8 signatures.
 pub type QuickJsSigner = Signer<QuickJs>;
 
-/// V8: an order of magnitude faster per signature, at tens of megabytes.
-#[cfg(feature = "v8")]
-pub type V8Signer = Signer<V8>;
-
-/// The engine this build signs with by default.
-///
-/// QuickJS unless `v8` was asked for. `quickjs` is a default feature and arrives without anyone
-/// choosing it; `v8` only ever arrives because someone did, so it wins when both are present —
-/// which is what lets a dependent turn on `ttl-sign-embedded/v8` and get V8, without having to
-/// reach in and switch the default feature off.
-#[cfg(feature = "v8")]
-pub type EmbeddedSigner = Signer<V8>;
-/// The engine this build signs with by default.
-#[cfg(all(feature = "quickjs", not(feature = "v8")))]
+/// The engine this build signs with. QuickJS is the only one.
 pub type EmbeddedSigner = Signer<QuickJs>;
 
 /// The engine [`EmbeddedSigner`] runs in, for logs and error messages.
-#[cfg(feature = "v8")]
-pub const ENGINE: &str = V8::NAME;
-/// The engine [`EmbeddedSigner`] runs in, for logs and error messages.
-#[cfg(all(feature = "quickjs", not(feature = "v8")))]
 pub const ENGINE: &str = QuickJs::NAME;
-
-#[cfg(not(any(feature = "quickjs", feature = "v8")))]
-compile_error!("ttl-sign-embedded needs an engine: enable the `quickjs` or `v8` feature");
 
 impl<E: Engine + 'static> Signer<E> {
     /// Load `bundle` into a fresh context and keep it warm.

@@ -7,22 +7,47 @@ import java.lang.ref.Cleaner;
 import java.nio.file.*;
 import java.util.*;
 
-/** Optional blocking JNI signer. Run signing on a worker thread. */
+/**
+ * Optional blocking JNI signer backed by the Rust QuickJS engine. Run signing on a worker thread.
+ *
+ * <p>Options JSON accepts {@code pinned}, {@code userAgent}, {@code cookie}, {@code xmst} and
+ * {@code timeoutMs}, the longest one engine call (loading the bundle, or one signature) may run
+ * before QuickJS interrupts it.
+ */
 public final class TikTokSigner implements AutoCloseable {
     private static final Cleaner CLEANER = Cleaner.create();
     private static boolean loaded;
 
     private static final class Handle implements Runnable {
         long value;
+        // Guards freeing the native signer, separately from the handle's own monitor (which a
+        // running sign holds), so interrupt() can reach a busy signer without racing its free.
+        private final Object freeing = new Object();
+        private long live;
+        volatile boolean interrupted;
 
         Handle(long value) {
             this.value = value;
+            this.live = value;
         }
 
-        public synchronized void run() {
-            long old = value;
-            value = 0;
-            if (old != 0) NativeBindings.nClose(old);
+        void interrupt() {
+            interrupted = true;
+            synchronized (freeing) {
+                if (live != 0) NativeBindings.nInterrupt(live);
+            }
+        }
+
+        public void run() {
+            interrupt();
+            synchronized (this) {
+                long old = value;
+                value = 0;
+                synchronized (freeing) {
+                    live = 0;
+                }
+                if (old != 0) NativeBindings.nClose(old);
+            }
         }
     }
 
@@ -62,19 +87,34 @@ public final class TikTokSigner implements AutoCloseable {
                         handle.value,
                         Objects.requireNonNull(url),
                         Objects.requireNonNull(product).wire());
+            } catch (RuntimeException failure) {
+                // An interrupted engine fails its call; report that as the close it was.
+                if (handle.interrupted) throw new IllegalStateException("Signer closed");
+                throw failure;
             } finally {
                 java.lang.ref.Reference.reachabilityFence(this);
             }
         }
     }
 
+    /**
+     * Stops the engine without releasing it: a sign running on another thread fails promptly, and
+     * later signs fail. Safe to call from any thread, any number of times.
+     */
+    public void interrupt() {
+        handle.interrupt();
+    }
+
+    /** Interrupts any running sign, then releases the native signer. Idempotent. */
     public void close() {
         cleanable.clean();
     }
 
     private static synchronized void load() {
         if (loaded) return;
-        String explicit = System.getProperty("tiktok.live.native.library");
+        String explicit =
+                System.getProperty(
+                        "tiktok.live.native.library", System.getenv("TTL_NATIVE_LIBRARY"));
         try {
             if (explicit != null) System.load(Path.of(explicit).toAbsolutePath().toString());
             else {

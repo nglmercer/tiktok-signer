@@ -1,11 +1,10 @@
-#![cfg(feature = "quickjs")]
-
 //! How much randomness does one signature ask the host for?
 //!
-//! The V8 backend has no `crypto` and no op layer, so it feeds the sandbox from a pool of bytes
-//! handed over from Rust and refreshed per signature. That pool has to be comfortably larger than a
-//! signature ever needs: one that wrapped would repeat bytes inside a single signature, which is
-//! exactly the kind of quiet difference this project keeps getting bitten by.
+//! QuickJS has no `crypto`, so the sandbox draws its entropy from `__ttl_random_bytes`, a host
+//! function that caps one draw at `MAX_RANDOM_BYTES` (`src/lib.rs`). That cap has to be comfortably
+//! larger than a signature ever needs: a draw that was cut short would leave bytes unfilled inside
+//! a single signature, which is exactly the kind of quiet difference this project keeps getting
+//! bitten by.
 //!
 //! Counted at the host boundary rather than in JavaScript. `__ttl_random_bytes` is the only way
 //! entropy enters an embedded engine, so counting its arguments measures the pool's real job and
@@ -40,11 +39,11 @@ const CASES: [(&str, &str); 3] = [
     ),
 ];
 
-/// The pool `crates/ttl-sign-embedded/src/v8.rs` refreshes before each signature.
-const POOL_BYTES: usize = 8192;
+/// `MAX_RANDOM_BYTES` in `src/lib.rs`: the most one draw can return.
+const DRAW_CAP: usize = 8192;
 
 #[test]
-fn one_signature_asks_for_far_less_entropy_than_the_v8_pool_holds() {
+fn one_signature_asks_for_far_less_entropy_than_the_engine_will_return() {
     let path = std::env::var("TTL_BUNDLE").unwrap_or_else(|_| "/tmp/webmssdk.js".into());
     let Ok(bundle) = std::fs::read_to_string(path) else {
         eprintln!("skipped: no signing bundle at TTL_BUNDLE or /tmp/webmssdk.js");
@@ -69,7 +68,7 @@ fn one_signature_asks_for_far_less_entropy_than_the_v8_pool_holds() {
         let _: String = prepare
             .call((bundle.as_str(), r#"{"pinned":false}"#))
             .expect("prepare the bundle");
-        // Loading the bundle is a one-off, but it draws from the same pool, so it counts too.
+        // Loading the bundle is a one-off, but it draws from the same source, so it counts too.
         let mut worst: usize = asked.lock().unwrap().iter().sum();
         println!("loading the bundle: {worst} bytes");
 
@@ -87,10 +86,10 @@ fn one_signature_asks_for_far_less_entropy_than_the_v8_pool_holds() {
         worst
     });
 
-    println!("worst single draw: {worst} bytes; the V8 pool holds {POOL_BYTES}");
+    println!("worst single draw: {worst} bytes; one draw is capped at {DRAW_CAP}");
     assert!(
-        worst * 4 < POOL_BYTES,
-        "a signature asked for {worst} bytes, which leaves no margin under a {POOL_BYTES}-byte \
-         pool — raise POOL_BYTES in src/v8.rs and here"
+        worst * 4 < DRAW_CAP,
+        "a signature asked for {worst} bytes, which leaves no margin under the {DRAW_CAP}-byte \
+         draw cap — raise MAX_RANDOM_BYTES in src/lib.rs and DRAW_CAP here"
     );
 }

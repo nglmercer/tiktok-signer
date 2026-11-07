@@ -8,5 +8,8 @@ public final class NativeBindings {
 
     public static native String nSign(long handle, String url, String product);
 
+    /** Interrupts the running call, if any; later calls fail. Never races {@link #nClose}. */
+    public static native void nInterrupt(long handle);
+
     public static native void nClose(long handle);
 }

@@ -15,8 +15,8 @@ HTTP-only presence monitoring, with optional Rust JNI signing. Build and test it
 `cd sdk/java && ./gradlew build` (JDK 21+ for the full build).
 
 An optional [Java 21+ embedded backend](sdk/java/docs/EMBEDDED_JAVA.md) adds direct
-in-process GraalJS signing on standard OpenJDK, with no Rust/JNI runtime or external
-broker. Existing broker integrations retain Java 17 support. See the
+discovery and in-process signing on standard OpenJDK, with no external broker. It signs in the
+same QuickJS engine as everything else here, through the Rust JNI library (`ttl-sign-mobile`). Existing broker integrations retain Java 17 support. See the
 [validation record](sdk/java/docs/EMBEDDED_JAVA_VALIDATION.md) for tested behavior and limitations.
 
 ## Native C/C++ API
@@ -80,7 +80,7 @@ client will parse) without disturbing the signature, and `ttl-live-events` decod
 | `ttl-sign-lab` | Safe structured observations and classified backend differential reports. |
 | `ttl-live-discovery` | Browser-free discovery, entirely unsigned: room lookup, `room/info`, `gift/list`, and live channels. |
 | `ttl-sign-headless` | Browser-free `SignerBackend`: builds and signs the socket URL, and describes it in TikTok's own `ProtoMessageFetchResult` shape. |
-| `ttl-sign-embedded` | Signing, in-process: the real bundle in a warm QuickJS or V8 context. The only signer; there is no `node` subprocess any more. |
+| `ttl-sign-embedded` | Signing, in-process: the real bundle in a warm QuickJS context. The only signer; there is no `node` subprocess any more. |
 | `ttl-live-proto` | Pinned protobuf descriptors with logical types, enums, map/oneof metadata, and automatic regeneration. |
 | `ttl-live-events` | Complete raw/schema envelopes plus optional stable normalizers and deterministic JSON. |
 | `ttl-live-core` | Shared cancellable transport, reconnection and ordered batch dispatch for native/mobile frontends. |
@@ -105,18 +105,16 @@ curl -s -o /tmp/webmssdk.js \
 cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless
 ```
 
-Signing runs in-process, in an engine held warm: the same sandbox source, no `node` on the host and
-no process per signature. The Node subprocess signer was removed on 2026-08-19; what used to cost
-95–105 ms through the server is 70–89 ms under QuickJS and 19 ms under V8. Which engine is a build
-choice:
+Signing runs in-process, in a QuickJS engine held warm: the same sandbox source, no `node` on the
+host and no process per signature. The Node subprocess signer was removed on 2026-08-19; what used
+to cost 95–105 ms through the server is 70–89 ms under QuickJS (3.1 MB of binary, about 28 ms per
+signature). QuickJS is the only engine in the repository — Rust, Java, Android and Node all sign
+with it.
 
-```sh
-cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless      # QuickJS, 3.1 MB, 28 ms/sig
-cargo run -p ttl-sign-server --bin ttl-sign-headless-server --features headless,v8   # V8, +67 MB, 3 ms/sig
-```
-
-Both produce byte-identical signatures — that is the acceptance test, not a hope. The parity tests
-behind it are `cargo test -p ttl-sign-embedded --features v8`, and the measurements are in
+Its signatures are byte-identical to the ones V8 produced before V8 was removed — that is the
+acceptance test, not a hope. The digests are recorded in
+`fixtures/research/pinned-signatures-1.0.0.388.json`, the parity test behind them is
+`cargo test -p ttl-sign-embedded`, and the measurements are in
 [docs/13](docs/13-embedded-runtime.md).
 
 ### From Node, without any of this
@@ -133,10 +131,11 @@ live.on('chat', (event) => console.log(`${label(event.user)}: ${event.comment}`)
 await live.connect();
 ```
 
-It embeds no engine because it does not need one: the only signed thing is a query string, the code
-that signs it is TikTok's own JavaScript bundle, and Node already has V8. The bundle runs in a bare
-`node:vm` context, through the same `bootstrap.js` sandbox the Rust engines run — so a `napi`
-addon would put a JavaScript engine inside a JavaScript runtime for no gain.
+The only signed thing is a query string, and the code that signs it is TikTok's own JavaScript
+bundle. The bundle runs in QuickJS compiled to WebAssembly (`quickjs-emscripten`), through the same
+`bootstrap.js` sandbox the Rust engine runs — so Node signs with the same engine as every other
+frontend, byte for byte, with no native addon to build and none of Node's globals in reach of the
+bundle.
 
 The sign server remains the right boundary for callers that are not Node, or that want the Rust
 transport and event decoding.

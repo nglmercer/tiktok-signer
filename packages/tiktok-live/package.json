@@ -13,8 +13,17 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "src", "schema", "scripts", "vendor", "README.md"],
-  "engines": { "node": ">=22" },
+  "files": [
+    "dist",
+    "src",
+    "schema",
+    "scripts",
+    "vendor",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "clean": "node -e \"const fs=require('node:fs'); for (const path of ['dist','.test-dist','.example-dist']) fs.rmSync(path,{recursive:true,force:true})\"",
     "prebuild": "npm run clean",
@@ -33,6 +42,8 @@
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.14.1",
+    "@jitl/quickjs-wasmfile-release-sync": "^0.32.0",
+    "quickjs-emscripten-core": "^0.32.0",
     "ws": "^8.22.0"
   },
   "devDependencies": {

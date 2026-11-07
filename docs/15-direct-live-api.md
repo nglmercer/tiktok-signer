@@ -33,8 +33,7 @@ $env:SIGNING_BUNDLE = "C:\path\to\webmssdk.js"
 cargo run -p ttl-live-api
 ```
 
-Use `cargo run -p ttl-live-api --features v8` when the larger, faster V8 signer is preferred.
-The default embedded runtime is QuickJS. Tune bind address, cache TTLs, semaphores, timeouts, and
+The embedded runtime is QuickJS, the only engine in the repository. Tune bind address, cache TTLs, semaphores, timeouts, and
 quotas with the environment variables documented by `AppConfig::from_env` in
 `crates/ttl-live-api/src/config.rs`.
 

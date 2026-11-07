@@ -1,10 +1,10 @@
 name: Java embedded backend
 on:
   pull_request:
-    paths: ['sdk/java/**', 'crates/ttl-sign-embedded/bootstrap.js', '.github/workflows/java-embedded.yml']
+    paths: ['sdk/java/**', 'crates/ttl-sign-embedded/bootstrap.js', 'crates/ttl-sign-mobile/**', 'fixtures/research/pinned-signatures-*.json', '.github/workflows/java-embedded.yml']
   push:
     branches: [main]
-    paths: ['sdk/java/**', 'crates/ttl-sign-embedded/bootstrap.js', '.github/workflows/java-embedded.yml']
+    paths: ['sdk/java/**', 'crates/ttl-sign-embedded/bootstrap.js', 'crates/ttl-sign-mobile/**', 'fixtures/research/pinned-signatures-*.json', '.github/workflows/java-embedded.yml']
 permissions:
   contents: read
 jobs:
@@ -27,6 +27,22 @@ jobs:
         with:
           distribution: temurin
           java-version: ${{ matrix.java }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.88'
+      # The embedded backend signs in QuickJS through the Rust JNI library.
+      - name: Build the QuickJS JNI library
+        shell: bash
+        run: |
+          cargo build --locked -p ttl-sign-mobile --features jni
+          case "$RUNNER_OS" in
+            Windows) lib="target/debug/ttl_sign_mobile.dll" ;;
+            macOS) lib="target/debug/libttl_sign_mobile.dylib" ;;
+            *) lib="target/debug/libttl_sign_mobile.so" ;;
+          esac
+          path="$PWD/$lib"
+          if [ "$RUNNER_OS" = Windows ]; then path="$(cygpath -w "$path")"; fi
+          echo "TTL_NATIVE_LIBRARY=$path" >> "$GITHUB_ENV"
       - name: Offline Java tests (no bundle or live network)
         shell: bash
         working-directory: sdk/java

@@ -6,7 +6,7 @@
 //! | Kept | Left behind | Why |
 //! |---|---|---|
 //! | `ttl-sign-core` (pure query/URL construction) | `ttl-live-discovery` (`reqwest` + `tokio`) | HTTP on Android is `HttpURLConnection`/OkHttp; shipping a second TLS stack in the `.so` buys nothing |
-//! | `bootstrap.js` (the sandbox, by relative include) | `ttl-sign-embedded` (async signer, V8 engine) | JNI calls are blocking, so the `tokio` oneshot becomes a `std` channel; V8/`deno_core` does not cross-compile to Android sanely |
+//! | `bootstrap.js` (the sandbox, by relative include) | `ttl-sign-embedded` (async signer) | JNI calls are blocking, so the `tokio` oneshot becomes a `std` channel |
 //! | QuickJS via `rquickjs` | prebuilt C bindings | Android is not among them; the `bindgen` feature generates them from the NDK headers |
 //!
 //! The sandbox is literally the same source — [`BOOTSTRAP`] includes
@@ -101,7 +101,13 @@ pub struct SignOptions {
     /// For tests and differentials only: a repeating signature is not one a browser
     /// would produce.
     pub pinned: bool,
+    /// The longest one call into the engine may run — loading the bundle, or one signature —
+    /// before it is interrupted. Defaults to [`DEFAULT_TIMEOUT`]. Not passed to the driver.
+    pub timeout_ms: Option<u64>,
 }
+
+/// How long one engine call may run when the options name no `timeoutMs`.
+pub const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 impl SignOptions {
     /// Parse the options JSON. Accepts the same shape `Profile::to_json` writes
@@ -123,7 +129,27 @@ impl SignOptions {
                 .get("pinned")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
+            timeout_ms: match ["timeoutMs", "timeout_ms"]
+                .iter()
+                .find_map(|k| value.get(*k))
+            {
+                None => None,
+                Some(v) => match v.as_u64() {
+                    Some(ms @ 1..=600_000) => Some(ms),
+                    _ => {
+                        return Err(MobileError::Options(
+                            "timeoutMs must be an integer in 1..=600000".into(),
+                        ))
+                    }
+                },
+            },
         })
+    }
+
+    /// The per-call engine deadline these options ask for.
+    pub fn timeout(&self) -> std::time::Duration {
+        self.timeout_ms
+            .map_or(DEFAULT_TIMEOUT, std::time::Duration::from_millis)
     }
 
     /// Re-encode for the driver. The driver reads `userAgent`/`cookie`/`xmst`/`pinned`.
@@ -180,6 +206,7 @@ pub struct MobileSigner {
     requests: Option<mpsc::SyncSender<Request>>,
     worker: Option<thread::JoinHandle<()>>,
     stopping: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    timeout: std::time::Duration,
 }
 
 impl MobileSigner {
@@ -201,7 +228,9 @@ impl MobileSigner {
                 "queue capacity must be 1..65536".into(),
             ));
         }
-        let options = SignOptions::from_json(options_json)?.to_driver_json();
+        let options = SignOptions::from_json(options_json)?;
+        let timeout = options.timeout();
+        let options = options.to_driver_json();
         let bundle = bundle.to_string();
         let (requests, incoming) = mpsc::sync_channel::<Request>(capacity);
         let (ready, started) = mpsc::sync_channel::<Result<(), MobileError>>(1);
@@ -210,7 +239,7 @@ impl MobileSigner {
         let worker_stopping = stopping.clone();
         let worker = thread::Builder::new()
             .name("ttl-sign-mobile".into())
-            .spawn(move || worker(bundle, options, ready, incoming, worker_stopping))
+            .spawn(move || worker(bundle, options, timeout, ready, incoming, worker_stopping))
             .map_err(|e| MobileError::Engine(e.to_string()))?;
 
         if let Err(error) = started
@@ -225,7 +254,17 @@ impl MobileSigner {
             requests: Some(requests),
             worker: Some(worker),
             stopping,
+            timeout,
         })
+    }
+
+    /// Stop the engine: interrupt the call it is running, if any, and refuse further work.
+    ///
+    /// Safe to call from any thread while another is blocked in [`MobileSigner::sign`], which
+    /// then returns an error promptly. Dropping the signer still releases it.
+    pub fn interrupt(&self) {
+        self.stopping
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 
     /// Sign one URL. Blocks until the worker answers.
@@ -235,20 +274,18 @@ impl MobileSigner {
             .as_ref()
             .ok_or(MobileError::Stopped)?
             .try_send(Request {
-                deadline: std::time::Instant::now() + std::time::Duration::from_secs(30),
+                deadline: std::time::Instant::now() + self.timeout,
                 url: url.to_string(),
                 product,
                 reply: Reply::Blocking(reply),
             })
             .map_err(queue_error)?;
-        answer
-            .recv_timeout(std::time::Duration::from_secs(30))
-            .map_err(|e| match e {
-                mpsc::RecvTimeoutError::Timeout => {
-                    MobileError::Sign("signing request timed out".into())
-                }
-                mpsc::RecvTimeoutError::Disconnected => MobileError::Stopped,
-            })?
+        answer.recv_timeout(self.timeout).map_err(|e| match e {
+            mpsc::RecvTimeoutError::Timeout => {
+                MobileError::Sign("signing request timed out".into())
+            }
+            mpsc::RecvTimeoutError::Disconnected => MobileError::Stopped,
+        })?
     }
     /// Live worker variant: cancelling the wait never blocks runtime shutdown.
     #[cfg(feature = "live")]
@@ -258,13 +295,13 @@ impl MobileSigner {
             .as_ref()
             .ok_or(MobileError::Stopped)?
             .try_send(Request {
-                deadline: std::time::Instant::now() + std::time::Duration::from_secs(30),
+                deadline: std::time::Instant::now() + self.timeout,
                 url: url.to_owned(),
                 product,
                 reply: Reply::Async(reply),
             })
             .map_err(queue_error)?;
-        tokio::time::timeout(std::time::Duration::from_secs(30), answer)
+        tokio::time::timeout(self.timeout, answer)
             .await
             .map_err(|_| MobileError::Sign("signing request timed out".into()))?
             .map_err(|_| MobileError::Stopped)?
@@ -292,11 +329,16 @@ impl Drop for MobileSigner {
 fn worker(
     bundle: String,
     options: String,
+    timeout: std::time::Duration,
     ready: mpsc::SyncSender<Result<(), MobileError>>,
     incoming: mpsc::Receiver<Request>,
     stopping: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
-    let mut engine = match engine::QuickJs::start(&bundle, &options) {
+    let interrupt = engine::Interrupt::new(stopping.clone());
+    interrupt.arm(std::time::Instant::now() + timeout);
+    let started = engine::QuickJs::start(&bundle, &options, &interrupt);
+    interrupt.disarm();
+    let mut engine = match started {
         Ok(engine) => {
             let _ = ready.send(Ok(()));
             engine
@@ -320,7 +362,9 @@ fn worker(
         if matches!(&request.reply, Reply::Async(reply) if reply.is_closed()) {
             continue;
         }
+        interrupt.arm(request.deadline);
         let answer = engine.sign(&request.url, request.product.as_driver_arg());
+        interrupt.disarm();
         match request.reply {
             Reply::Blocking(reply) => {
                 let _ = reply.send(answer);
@@ -481,7 +525,7 @@ mod tests {
         drop(cancelled_answer);
         requests
             .send(Request {
-                deadline: std::time::Instant::now() + std::time::Duration::from_secs(30),
+                deadline: std::time::Instant::now() + DEFAULT_TIMEOUT,
                 url: "wss://cancelled".into(),
                 product: Product::Ws,
                 reply: Reply::Async(cancelled),
@@ -490,7 +534,7 @@ mod tests {
         let (reply, answer) = mpsc::sync_channel(1);
         requests
             .send(Request {
-                deadline: std::time::Instant::now() + std::time::Duration::from_secs(30),
+                deadline: std::time::Instant::now() + DEFAULT_TIMEOUT,
                 url: "wss://example.test/?a=1".into(),
                 product: Product::Ws,
                 reply: Reply::Blocking(reply),
@@ -511,6 +555,7 @@ mod tests {
             super::worker(
                 QUEUE_BUNDLE.into(),
                 SignOptions::default().to_driver_json(),
+                DEFAULT_TIMEOUT,
                 ready,
                 incoming,
                 std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -556,12 +601,78 @@ mod tests {
     }
 
     #[test]
+    fn the_timeout_option_is_validated_and_kept_from_the_driver() {
+        let opts = SignOptions::from_json(r#"{"timeoutMs":250}"#).unwrap();
+        assert_eq!(opts.timeout(), std::time::Duration::from_millis(250));
+        assert_eq!(SignOptions::default().timeout(), DEFAULT_TIMEOUT);
+        for bad in [
+            r#"{"timeoutMs":0}"#,
+            r#"{"timeoutMs":-1}"#,
+            r#"{"timeoutMs":"5"}"#,
+        ] {
+            assert!(SignOptions::from_json(bad).is_err(), "{bad}");
+        }
+        assert!(!opts.to_driver_json().contains("timeout"));
+    }
+
+    /// A bundle that never returns must not hold the engine thread: loading it is cut off at the
+    /// deadline, so the open fails instead of hanging.
+    #[test]
+    fn a_wedged_bundle_is_interrupted_while_loading() {
+        let started = std::time::Instant::now();
+        let error = MobileSigner::new("while (true) {}", r#"{"timeoutMs":200}"#)
+            .err()
+            .expect("a wedged bundle must not open");
+        assert!(matches!(error, MobileError::Bundle(_)), "{error:?}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    /// A signature that never returns is cut off at its deadline instead of hanging the caller.
+    #[test]
+    fn a_wedged_signature_is_interrupted_at_its_deadline() {
+        let bundle = "window.byted_acrawler={init:function(){},registerWsSigner:function(){\
+                      let calls = 0; return function(){ if (++calls > 1) { while (true) {} } \
+                      return {'X-Gnarly':'ok'} }}};";
+        let signer = MobileSigner::new(bundle, r#"{"timeoutMs":300}"#).unwrap();
+        assert!(signer
+            .sign("wss://example.test/?a=1", Product::Ws)
+            .unwrap()
+            .contains("X-Gnarly=ok"));
+        let started = std::time::Instant::now();
+        assert!(signer.sign("wss://example.test/?a=1", Product::Ws).is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        // Dropping joins the engine thread, which must already be free.
+        let started = std::time::Instant::now();
+        drop(signer);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    /// Interrupting from another thread stops a running call promptly, and later calls fail.
+    #[test]
+    fn interrupt_stops_a_running_signature_from_another_thread() {
+        let bundle = "window.byted_acrawler={init:function(){},registerWsSigner:function(){\
+                      return function(){ while (true) {} }}};";
+        let signer =
+            std::sync::Arc::new(MobileSigner::new(bundle, r#"{"timeoutMs":60000}"#).unwrap());
+        let busy = std::sync::Arc::clone(&signer);
+        let started = std::time::Instant::now();
+        let call = thread::spawn(move || busy.sign("wss://example.test/?a=1", Product::Ws));
+        thread::sleep(std::time::Duration::from_millis(150));
+        signer.interrupt();
+        assert!(call.join().unwrap().is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert!(signer.sign("wss://example.test/?a=1", Product::Ws).is_err());
+        drop(signer);
+    }
+
+    #[test]
     fn options_re_encode_for_the_driver() {
         let opts = SignOptions {
             user_agent: Some("Mozilla/5.0 \"q\"".into()),
             cookie: Some("a\\b".into()),
             stored_token: None,
             pinned: true,
+            timeout_ms: Some(5),
         };
         assert_eq!(
             opts.to_driver_json(),

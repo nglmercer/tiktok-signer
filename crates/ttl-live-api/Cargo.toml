@@ -13,8 +13,6 @@ path = "src/main.rs"
 
 [features]
 default = []
-# Use V8 for the warm embedded signer instead of the smaller QuickJS runtime.
-v8 = ["ttl-sign-embedded/v8"]
 
 [dependencies]
 ttl-sign-core = { workspace = true }

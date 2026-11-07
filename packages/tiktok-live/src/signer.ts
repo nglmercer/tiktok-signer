@@ -1,29 +1,43 @@
 // Signing, in this process, with no native module and no server.
 //
-// The socket URL's query is signed by TikTok's own `webmssdk` bundle, and the bundle is
-// JavaScript — so Node needs no engine embedded in it, unlike the Rust build, which had to link
-// QuickJS or V8 precisely because Rust has none. What the bundle does need is a browser-shaped
-// environment, and `vendor/bootstrap.js` is exactly that: the sandbox from `scripts/headless`,
-// flattened into one script that installs its own platform. The same file runs in the Rust engines,
-// and `crates/ttl-sign-embedded/tests/parity.rs` asserts all of them produce identical bytes.
+// The socket URL's query is signed by TikTok's own `webmssdk` bundle. The bundle runs in QuickJS —
+// the same engine every other part of this project signs with — compiled to WebAssembly
+// (`quickjs-emscripten`), so there is still nothing native to build or install. What the bundle
+// needs is a browser-shaped environment, and `vendor/bootstrap.js` is exactly that: the sandbox
+// from `scripts/headless`, flattened into one script that installs its own platform. The same file
+// runs in the Rust engine, and both are checked byte for byte against the signatures recorded in
+// `fixtures/research/pinned-signatures-1.0.0.388.json`.
 //
-// The context is bare on purpose — `vm.createContext({})` — so the bundle sees the sandbox and
-// nothing of Node.
+// The context is a fresh QuickJS runtime with nothing of Node in it: the bundle sees the sandbox,
+// and its only way out is `__ttl_random_bytes`, the entropy source the bootstrap expects from a
+// host without `crypto`. Every call into it runs under a deadline, and the runtime has a memory
+// ceiling, so a hostile or wedged bundle is interrupted instead of hanging the process.
 //
 // Two things a caller must not have to know:
 //
 //   * `registerWsSigner` is a **one-shot**: it hands back the signer and deletes itself, so the
 //     second signature of a long-lived connection fails unless the first one is kept. The
 //     bootstrap's driver caches it; this class keeps one context alive so the cache survives.
-//   * loading the bundle costs about 60 ms and signing costs about 3 ms, so the context is warm
-//     and reused. A signature per reconnect is then free.
+//   * loading the bundle costs about 150 ms and signing tens of milliseconds, so the context is
+//     warm and reused. A signature per reconnect is then cheap.
+//
+// A QuickJS context lives in WebAssembly memory, not on Node's heap: call `close()` when a signer
+// is no longer needed. A collected signer is released too, but later.
 
 import fs from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+
+import {
+  newQuickJSWASMModuleFromVariant,
+  shouldInterruptAfterDeadline,
+  type QuickJSContext,
+  type QuickJSHandle,
+  type QuickJSRuntime,
+  type QuickJSWASMModule,
+} from 'quickjs-emscripten-core';
 
 import { readResponseText } from './http.js';
 import { USER_AGENT } from './session.js';
@@ -41,11 +55,25 @@ export const BUNDLE_URL =
 export const BUNDLE_SHA256 = 'dee22566273d398e074df6db40f39cfd827f6b8efd6fc382de03c44c501299ac';
 
 const VM_TIMEOUT_MS = 10_000;
+/// Heap ceiling for one signing context. The bundle uses a few megabytes.
+const VM_MEMORY_LIMIT = 256 * 1024 * 1024;
+/// The most entropy one draw may return; matches `MAX_RANDOM_BYTES` in the Rust engine.
+const MAX_RANDOM_BYTES = 8192;
 
-// One immutable compiled bootstrap, run against a fresh context for every identity.
-let bootstrapScript: vm.Script | undefined;
-function bootstrap(): vm.Script {
-  return bootstrapScript ??= new vm.Script(fs.readFileSync(BOOTSTRAP_PATH, 'utf8'), { filename: BOOTSTRAP_PATH });
+// One WebAssembly module and one bootstrap source, shared by every context.
+let engineModule: Promise<QuickJSWASMModule> | undefined;
+function engine(): Promise<QuickJSWASMModule> {
+  return engineModule ??= newQuickJSWASMModuleFromVariant(
+    // A dynamic import: the variant's typings are CommonJS-shaped, and this form is accepted either way.
+    import('@jitl/quickjs-wasmfile-release-sync'),
+  ).catch((error: unknown) => {
+    engineModule = undefined;
+    throw error;
+  });
+}
+let bootstrapSource: string | undefined;
+function bootstrap(): string {
+  return bootstrapSource ??= fs.readFileSync(BOOTSTRAP_PATH, 'utf8');
 }
 
 /// Which signature to produce. The socket verifies `ws` and ignores the other two.
@@ -68,6 +96,8 @@ export interface SignerOptions {
   cookie?: string;
   storedToken?: string;
   pinned?: boolean;
+  /// The longest one call into the engine — loading the bundle, or one signature — may run.
+  timeoutMs?: number;
 }
 
 /// Fetch the bundle once and keep it in the temp directory.
@@ -136,12 +166,106 @@ function matchesDigest(source: string, expectedSha256?: string): boolean {
   return createHash('sha256').update(source).digest('hex') === expectedSha256.toLowerCase();
 }
 
+interface Engine {
+  runtime: QuickJSRuntime;
+  context: QuickJSContext;
+  timeoutMs: number;
+}
+
+function release(engine: Engine): void {
+  try { engine.context.dispose(); } catch { /* Already released. */ }
+  try { engine.runtime.dispose(); } catch { /* Already released. */ }
+}
+
+// A signer that is collected without `close()` still gives its WebAssembly memory back.
+const released = new FinalizationRegistry<Engine>(release);
+
+/// Run `call` with the runtime's interrupt armed for `timeoutMs`.
+function bounded<T>(runtime: QuickJSRuntime, call: () => T, timeoutMs = VM_TIMEOUT_MS): T {
+  runtime.setInterruptHandler(shouldInterruptAfterDeadline(Date.now() + timeoutMs));
+  try {
+    return call();
+  } finally {
+    runtime.removeInterruptHandler();
+  }
+}
+
+/// Call a global function with string arguments and read its string answer.
+function callGlobal(context: QuickJSContext, name: string, ...args: string[]): string {
+  const fn = context.getProp(context.global, name);
+  const handles = args.map((arg) => context.newString(arg));
+  try {
+    const result = context.callFunction(fn, context.undefined, ...handles);
+    if (result.error) {
+      const error: unknown = context.dump(result.error);
+      result.error.dispose();
+      throw new Error(describe(error));
+    }
+    const value = result.value;
+    try {
+      if (context.typeof(value) !== 'string') throw new Error(`${name} returned no string`);
+      return context.getString(value);
+    } finally {
+      value.dispose();
+    }
+  } finally {
+    fn.dispose();
+    for (const handle of handles) handle.dispose();
+  }
+}
+
+function describe(error: unknown): string {
+  if (isRecord(error) && typeof error.message === 'string') return error.message;
+  return String(error);
+}
+
+/// A fresh QuickJS context with the sandbox installed.
+function startEngine(module: QuickJSWASMModule, timeoutMs: number): Engine {
+  const runtime = module.newRuntime();
+  runtime.setMemoryLimit(VM_MEMORY_LIMIT);
+  let context: QuickJSContext | undefined;
+  try {
+    context = runtime.newContext();
+    const ctx = context;
+    // QuickJS has no `crypto`; the bootstrap wires its random source to this before anything runs.
+    const random = ctx.newFunction('__ttl_random_bytes', (count: QuickJSHandle) => {
+      const requested = ctx.getNumber(count);
+      const length = Number.isFinite(requested) ? Math.max(0, Math.min(MAX_RANDOM_BYTES, Math.floor(requested))) : 0;
+      const bytes = randomBytes(length);
+      const array = ctx.newArray();
+      for (let at = 0; at < length; at += 1) {
+        const value = ctx.newNumber(bytes[at] ?? 0);
+        ctx.setProp(array, at, value);
+        value.dispose();
+      }
+      return array;
+    });
+    ctx.setProp(ctx.global, '__ttl_random_bytes', random);
+    random.dispose();
+    bounded(runtime, () => {
+      const result = ctx.evalCode(bootstrap(), BOOTSTRAP_PATH);
+      if (result.error) {
+        const error: unknown = ctx.dump(result.error);
+        result.error.dispose();
+        throw new Error(`the signing sandbox failed to start: ${describe(error)}`);
+      }
+      result.value.dispose();
+    }, timeoutMs);
+    return { runtime, context: ctx, timeoutMs };
+  } catch (error) {
+    try { context?.dispose(); } catch { /* Partially built. */ }
+    runtime.dispose();
+    throw error;
+  }
+}
+
 /// A warm signing context.
 export class Signer {
-  readonly #context: vm.Context;
+  #engine: Engine | null;
 
-  private constructor(context: vm.Context) {
-    this.#context = context;
+  private constructor(engine: Engine) {
+    this.#engine = engine;
+    released.register(this, engine, this);
   }
 
   /// Load a bundle into a fresh context and prepare it.
@@ -156,57 +280,64 @@ export class Signer {
     cookie = '',
     storedToken,
     pinned = false,
+    timeoutMs = VM_TIMEOUT_MS,
   }: SignerOptions = {}): Promise<Signer> {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new RangeError('timeoutMs must be a positive number');
     const source =
       bundleSource ??
       (bundlePath ? await fs.promises.readFile(bundlePath, 'utf8') : await loadBundle({ url: bundleUrl }));
 
-    const context = vm.createContext({});
-    bootstrap().runInContext(context, { timeout: VM_TIMEOUT_MS });
-
-    const options: { pinned: boolean; userAgent: string; cookie: string; xmst?: string } = {
-      pinned,
-      userAgent,
-      cookie,
-    };
-    if (storedToken) options.xmst = storedToken;
-    context.__ttlBundleSource = source;
-    context.__ttlEncodedOptions = JSON.stringify(options);
-    let encoded: string;
+    const started = startEngine(await engine(), timeoutMs);
     try {
-      encoded = vm.runInContext(
-        'ttlPrepare(__ttlBundleSource, __ttlEncodedOptions)',
-        context,
-        { timeout: VM_TIMEOUT_MS },
-      ) as string;
-    } finally {
-      delete context.__ttlBundleSource;
-      delete context.__ttlEncodedOptions;
+      const options: { pinned: boolean; userAgent: string; cookie: string; xmst?: string } = {
+        pinned,
+        userAgent,
+        cookie,
+      };
+      if (storedToken) options.xmst = storedToken;
+      let encoded: string;
+      try {
+        encoded = bounded(started.runtime, () =>
+          callGlobal(started.context, 'ttlPrepare', source, JSON.stringify(options)), timeoutMs);
+      } catch (error) {
+        throw new Error(`the signing bundle failed to load: ${describe(error)}`);
+      }
+      const prepared = parseAnswer(encoded);
+      if (prepared.error) throw new Error(`the signing bundle failed to load: ${prepared.error}`);
+    } catch (error) {
+      release(started);
+      throw error;
     }
-    const prepared = parseAnswer(encoded);
-    if (prepared.error) throw new Error(`the signing bundle failed to load: ${prepared.error}`);
-    return new Signer(context);
+    return new Signer(started);
   }
 
   /// Sign one URL. Returns the signed URL, with its query bytes untouched.
   sign(url: string, product: Product = PRODUCT.ws): string {
-    this.#context.__ttlUnsignedUrl = url;
-    this.#context.__ttlProduct = product;
+    const engine = this.#engine;
+    if (!engine) throw new Error('the signer is closed');
     let encoded: string;
     try {
-      encoded = vm.runInContext(
-        'ttlSignUrl(__ttlUnsignedUrl, __ttlProduct)',
-        this.#context,
-        { timeout: VM_TIMEOUT_MS },
-      ) as string;
-    } finally {
-      delete this.#context.__ttlUnsignedUrl;
-      delete this.#context.__ttlProduct;
+      encoded = bounded(
+        engine.runtime,
+        () => callGlobal(engine.context, 'ttlSignUrl', url, product),
+        engine.timeoutMs,
+      );
+    } catch (error) {
+      throw new Error(`signing failed: ${describe(error)}`);
     }
     const answer = parseAnswer(encoded);
     if (answer.error) throw new Error(`signing failed: ${answer.error}`);
     if (!answer.signed) throw new Error('the signer produced no URL');
     return answer.signed;
+  }
+
+  /// Release the context. Idempotent; signing afterwards throws.
+  close(): void {
+    const engine = this.#engine;
+    if (!engine) return;
+    this.#engine = null;
+    released.unregister(this);
+    release(engine);
   }
 }
 

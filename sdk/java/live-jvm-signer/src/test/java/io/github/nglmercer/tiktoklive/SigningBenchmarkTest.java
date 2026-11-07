@@ -18,15 +18,15 @@ class SigningBenchmarkTest {
         String raw = DirectSocketUrlBuilder.rawUrl("7300000000000000001", "7300000000000000002");
         int baseline = java.lang.management.ManagementFactory.getThreadMXBean().getThreadCount();
         long start = System.nanoTime();
-        var signer = new GraalJsSigner(bundle);
-        signer.sign(raw, GraalJsSigner.Product.WS).get(60, TimeUnit.SECONDS);
+        var signer = new QuickJsSigner(bundle);
+        signer.sign(raw, QuickJsSigner.Product.WS).get(60, TimeUnit.SECONDS);
         double cold = (System.nanoTime() - start) / 1e6;
         Runtime runtime = Runtime.getRuntime();
         long initialHeap = runtime.totalMemory() - runtime.freeMemory();
         long[] samples = new long[200];
         for (int i = 0; i < samples.length; i++) {
             start = System.nanoTime();
-            signer.sign(raw, GraalJsSigner.Product.WS).get(30, TimeUnit.SECONDS);
+            signer.sign(raw, QuickJsSigner.Product.WS).get(30, TimeUnit.SECONDS);
             samples[i] = System.nanoTime() - start;
         }
         Arrays.sort(samples);

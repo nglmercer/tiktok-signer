@@ -40,3 +40,6 @@ tokio = { workspace = true, features = ["rt"], optional = true }
 # builds keep the fast prebuilt path; see docs/14-android-signing.md.
 [target.'cfg(target_os = "android")'.dependencies]
 rquickjs = { version = "0.12", features = ["bindgen"] }
+
+[dev-dependencies]
+sha2 = { workspace = true }

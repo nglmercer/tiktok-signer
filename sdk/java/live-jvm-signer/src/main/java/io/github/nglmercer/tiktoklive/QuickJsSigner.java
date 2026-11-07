@@ -2,23 +2,31 @@ package io.github.nglmercer.tiktoklive;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import org.graalvm.polyglot.*;
-import org.graalvm.polyglot.io.IOAccess;
-import org.graalvm.polyglot.proxy.ProxyArray;
-import org.graalvm.polyglot.proxy.ProxyExecutable;
-
 import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Serialized, warm embedded signer. Guest failures never expose guest text or signed URLs. */
-public final class GraalJsSigner implements AutoCloseable {
+/**
+ * Serialized, warm embedded signer. Guest failures never expose guest text or signed URLs.
+ *
+ * <p>The bundle runs in QuickJS — the Rust {@code ttl-sign-mobile} engine, reached through
+ * {@link TikTokSigner} — which is the same engine and sandbox every other part of this project
+ * signs with. Each engine call runs under the signer's deadline, so a wedged bundle is interrupted
+ * inside QuickJS rather than left holding the worker.
+ */
+public final class QuickJsSigner implements AutoCloseable {
     public enum Product {
-        WS,
-        FETCH,
-        FRONTIER
+        WS(SignProduct.WS),
+        FETCH(SignProduct.FETCH),
+        FRONTIER(SignProduct.FRONTIER);
+
+        private final SignProduct wire;
+
+        Product(SignProduct wire) {
+            this.wire = wire;
+        }
     }
 
     public record SignedUrl(String url) {
@@ -39,7 +47,7 @@ public final class GraalJsSigner implements AutoCloseable {
     private final ConcurrentHashMap<CompletableFuture<SignedUrl>, Boolean> pending =
             new ConcurrentHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
-    private volatile Context context;
+    private volatile TikTokSigner engine;
     private volatile CompletableFuture<SignedUrl> executing;
 
     boolean isClosed() {
@@ -47,7 +55,7 @@ public final class GraalJsSigner implements AutoCloseable {
     }
 
     /** Production profiles always use fresh entropy and an unfrozen clock. */
-    public GraalJsSigner(String bundle) {
+    public QuickJsSigner(String bundle) {
         this(verified(bundle), false, Duration.ofSeconds(30), 16);
     }
 
@@ -59,14 +67,14 @@ public final class GraalJsSigner implements AutoCloseable {
         }
     }
 
-    GraalJsSigner(String bundle, String cookie, String userAgent) {
+    QuickJsSigner(String bundle, String cookie, String userAgent) {
         this(bundle);
         this.cookie = cookie;
         this.userAgent = userAgent;
     }
 
     // Determinism is intentionally available only to package tests.
-    GraalJsSigner(String bundle, boolean pinned, Duration timeout, int capacity) {
+    QuickJsSigner(String bundle, boolean pinned, Duration timeout, int capacity) {
         if (bundle == null
                 || bundle.isBlank()
                 || timeout.isNegative()
@@ -75,7 +83,8 @@ public final class GraalJsSigner implements AutoCloseable {
             throw new IllegalArgumentException("Invalid signing configuration");
         this.bundle = bundle;
         this.pinned = pinned;
-        this.timeoutMillis = Math.max(1, timeout.toMillis());
+        // The native engine accepts 1..600000 ms per call.
+        this.timeoutMillis = Math.min(600_000, Math.max(1, timeout.toMillis()));
         worker =
                 new ThreadPoolExecutor(
                         1,
@@ -83,9 +92,9 @@ public final class GraalJsSigner implements AutoCloseable {
                         0,
                         TimeUnit.MILLISECONDS,
                         new ArrayBlockingQueue<>(capacity),
-                        r -> daemon(r, "ttl-graal-signer"),
+                        r -> daemon(r, "ttl-quickjs-signer"),
                         new ThreadPoolExecutor.AbortPolicy());
-        var deadlines = new ScheduledThreadPoolExecutor(1, r -> daemon(r, "ttl-graal-timeout"));
+        var deadlines = new ScheduledThreadPoolExecutor(1, r -> daemon(r, "ttl-quickjs-timeout"));
         deadlines.setRemoveOnCancelPolicy(true);
         timer = deadlines;
     }
@@ -131,20 +140,15 @@ public final class GraalJsSigner implements AutoCloseable {
                             return;
                         }
                         try {
-                            initialize();
-                            var out =
-                                    JSON.readTree(
-                                            context.getBindings("js")
-                                                    .getMember("ttlSignUrl")
-                                                    .execute(
-                                                            url,
-                                                            product.name()
-                                                                    .toLowerCase(
-                                                                            java.util.Locale.ROOT))
-                                                    .asString());
-                            if (out.has("error") || !out.path("signed").isTextual())
+                            String signed = initialize().sign(url, product.wire);
+                            if (signed == null || signed.isEmpty())
                                 throw new IllegalStateException();
-                            result.complete(new SignedUrl(out.get("signed").asText()));
+                            result.complete(new SignedUrl(signed));
+                        } catch (SignerUnavailableException unavailable) {
+                            // Names the missing native library, never guest text.
+                            closed.set(true);
+                            result.completeExceptionally(unavailable);
+                            retire();
                         } catch (Throwable failure) {
                             closed.set(true);
                             result.completeExceptionally(
@@ -162,62 +166,21 @@ public final class GraalJsSigner implements AutoCloseable {
         return result;
     }
 
-    private void initialize() throws Exception {
-        if (context != null) return;
-        Context created =
-                Context.newBuilder("js")
-                        .allowAllAccess(false)
-                        .allowHostAccess(HostAccess.NONE)
-                        .allowHostClassLookup(n -> false)
-                        .allowHostClassLoading(false)
-                        .allowCreateThread(false)
-                        .allowCreateProcess(false)
-                        .allowNativeAccess(false)
-                        .allowEnvironmentAccess(EnvironmentAccess.NONE)
-                        .allowIO(IOAccess.NONE)
-                        .allowPolyglotAccess(PolyglotAccess.NONE)
-                        .option("engine.WarnInterpreterOnly", "false")
-                        .build();
-        context = created;
+    private TikTokSigner initialize() throws Exception {
+        TikTokSigner active = engine;
+        if (active != null) return active;
+        var options = new LinkedHashMap<String, Object>();
+        options.put("pinned", pinned);
+        options.put("cookie", cookie);
+        options.put("userAgent", userAgent);
+        options.put("timeoutMs", timeoutMillis);
+        TikTokSigner created = TikTokSigner.open(bundle, JSON.writeValueAsString(options));
+        engine = created;
         if (closed.get()) {
-            created.close(true);
+            created.close();
             throw new IllegalStateException();
         }
-        SecureRandom random = new SecureRandom();
-        created.getBindings("js")
-                .putMember(
-                        "__ttl_random_bytes",
-                        (ProxyExecutable)
-                                args -> {
-                                    int length = args[0].asInt();
-                                    if (length < 0 || length > 65536)
-                                        throw new IllegalArgumentException();
-                                    byte[] bytes = new byte[length];
-                                    random.nextBytes(bytes);
-                                    Object[] values = new Object[length];
-                                    for (int i = 0; i < length; i++) values[i] = bytes[i] & 255;
-                                    return ProxyArray.fromArray(values);
-                                });
-        try (var in = GraalJsSigner.class.getResourceAsStream("bootstrap.js")) {
-            if (in == null) throw new IllegalStateException();
-            created.eval("js", new String(in.readAllBytes(), StandardCharsets.UTF_8));
-        }
-        var prepared =
-                JSON.readTree(
-                        created.getBindings("js")
-                                .getMember("ttlPrepare")
-                                .execute(
-                                        bundle,
-                                        JSON.writeValueAsString(
-                                                java.util.Map.of(
-                                                        "pinned",
-                                                        pinned,
-                                                        "cookie",
-                                                        cookie,
-                                                        "userAgent",
-                                                        userAgent)))
-                                .asString());
-        if (!prepared.path("ok").asBoolean()) throw new IllegalStateException();
+        return created;
     }
 
     @Override
@@ -231,7 +194,11 @@ public final class GraalJsSigner implements AutoCloseable {
                 .forEach(f -> f.completeExceptionally(new CancellationException("Signer closed")));
         worker.shutdownNow();
         timer.shutdownNow();
-        Context active = context;
-        if (active != null) active.close(true);
+        TikTokSigner active = engine;
+        if (active != null) {
+            // Interrupt first so a running signature returns promptly; then release the engine.
+            active.interrupt();
+            active.close();
+        }
     }
 }

@@ -21,7 +21,7 @@ public final class EmbeddedJavaConnectionProvider implements ConnectionProvider 
     private final Map<CompletableFuture<ConnectResponse>, Call> calls = new ConcurrentHashMap<>();
     private volatile boolean closed;
     private GuestSessionProvider.Session session;
-    private GraalJsSigner signer;
+    private QuickJsSigner signer;
 
     private EmbeddedJavaConnectionProvider(Builder b) {
         bundles = new SigningBundleManager(b.cache);
@@ -200,13 +200,13 @@ public final class EmbeddedJavaConnectionProvider implements ConnectionProvider 
                 synchronized (this) {
                     if (closed || result.isDone()) return;
                     signer =
-                            new GraalJsSigner(
+                            new QuickJsSigner(
                                     bundle, session.cookies(), DirectSocketUrlBuilder.USER_AGENT);
                 }
             }
             var identity = session;
             String raw = DirectSocketUrlBuilder.rawUrl(presence.roomId(), identity.deviceId());
-            var signing = signer.sign(raw, GraalJsSigner.Product.WS);
+            var signing = signer.sign(raw, QuickJsSigner.Product.WS);
             result.whenComplete(
                     (v, e) -> {
                         if (result.isCancelled()) signing.cancel(false);

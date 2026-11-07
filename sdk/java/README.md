@@ -7,8 +7,9 @@ it never connects to TikTok's LIVE WebSocket. Generated protobuf types are imple
 ## Standalone JVM backend
 
 The optional Java 21+ [embedded backend](docs/EMBEDDED_JAVA.md) performs discovery,
-guest bootstrap and GraalJS signing in-process on standard OpenJDK. It needs no
-Rust, JNI, Node, browser or broker. Inject an `EmbeddedJavaConnectionProvider` with
+guest bootstrap and QuickJS signing in-process on standard OpenJDK, through the Rust
+`ttl-sign-mobile` JNI library (the same engine as every other signer here). It needs no
+Node, browser or broker. Inject an `EmbeddedJavaConnectionProvider` with
 `TikTokLive.builder("@creator").connectionProvider(provider).build()`; injected
 providers are caller-owned. Broker mode remains the default.
 
@@ -196,7 +197,8 @@ each connection. Applications should not sum every repeatCount from `onGift`.
 
 ## Optional native signer
 
-Install `tiktok-live-native` separately; client and presence have no dependency on it.
+Install `tiktok-live-native` separately; client and presence have no dependency on it
+(`tiktok-live-jvm-signer` does).
 Build the existing Rust signer with its JNI feature, from the repository root:
 
 ```sh
@@ -217,9 +219,11 @@ thread. Native calls reuse `MobileSigner`, the existing Rust QuickJS implementat
 JNI namespace is `io.github.nglmercer.tiktoklive.internal.NativeBindings`; Android demo entry points
 remain compatible. Package-linked exports follow the existing JNI boundary rather than adding a
 second registration system. Access to each native handle is serialized, and a Cleaner handles
-abandoned signers without racing an in-flight call.
+abandoned signers without racing an in-flight call. `interrupt()` stops a running call from
+another thread, `close()` interrupts before releasing, and the `timeoutMs` option bounds each engine
+call inside QuickJS.
 
-Set `-Dtiktok.live.native.library=/absolute/path/libttl_sign_mobile.so`, use `java.library.path`,
+Set `-Dtiktok.live.native.library=/absolute/path/libttl_sign_mobile.so` (or `TTL_NATIVE_LIBRARY`), use `java.library.path`,
 or package the appropriate build under `natives/<platform>-<arch>/<mapped-library-name>`:
 `windows-x86_64`, `linux-x86_64`, `linux-arm64`, `macos-x86_64`, `macos-arm64`.
 The loader supports these resource layouts; prebuilt cross-platform binaries are not bundled.

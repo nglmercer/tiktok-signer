@@ -13,7 +13,7 @@
 //! Discovery is unsigned. The last step signs the socket query in-process — the real bundle in an
 //! embedded engine, under a synthetic environment — and then opens the message socket directly,
 //! the same thing the web player does, with no `/webcast/im/fetch/` in front of it. Nothing here
-//! needs Node; `--features v8` swaps QuickJS for V8.
+//! needs Node; the bundle runs in embedded QuickJS.
 //!
 //! AUTHORIZED USE ONLY: this sends real signed requests.
 
@@ -186,7 +186,7 @@ async fn connect_room(preset: &Preset, jar: &CookieJar, bundle: &str, room_id: &
     }
     // Through the same backend the sign server uses, so this example exercises the production path
     // rather than a parallel copy of it. It builds the socket URL, has it signed, and describes it.
-    // The bundle runs in-process; which engine that is comes from the build (`--features v8`).
+    // The bundle runs in-process, in embedded QuickJS.
     let source = std::fs::read_to_string(bundle).unwrap_or_else(|error| {
         eprintln!("\nFAILED: could not read {bundle}: {error}");
         std::process::exit(1);

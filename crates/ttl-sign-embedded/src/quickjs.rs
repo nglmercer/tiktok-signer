@@ -1,7 +1,7 @@
 //! The QuickJS engine: small, interpreted, no JIT.
 //!
-//! Chosen first because it passes the parity test in 1.9 MB. It is roughly nine times slower per
-//! signature than V8, which is the whole trade — see `docs/13-embedded-runtime.md`.
+//! The only engine: it passes the parity test in a few megabytes of binary and needs no JIT.
+//! See `docs/13-embedded-runtime.md`.
 
 use rand::RngCore;
 use rquickjs::{Context, Function, Runtime};

@@ -19,7 +19,7 @@ That sentence is the whole document; what follows is the evidence. The work behi
 | `bootstrap.js` (the sandbox) | **Yes, same file** | Included by the Rust crate |
 | QuickJS engine (`rquickjs`) | **Yes, with one workaround** | `bindgen` feature on Android targets (below) |
 | `ttl-live-discovery` (`reqwest` + `tokio`) | **No** | Rewritten in ~120 lines of Kotlin (`Discovery.kt`, `BundleFetch.kt`) over `HttpURLConnection` |
-| `ttl-sign-embedded` (async signer, V8 engine) | **No** | Replaced by a blocking signer: JNI calls block, so `tokio` buys nothing; V8/`deno_core` does not cross-compile sanely |
+| `ttl-sign-embedded` (async signer) | **No** | Replaced by a blocking signer on the same QuickJS engine: JNI calls block, so `tokio` buys nothing |
 | WebSocket + events (`ttl-live-ws`, `ttl-live-events`, `ttl-live-proto`) | **Yes, behind `live`** | `LiveClient` worker: sign per attempt, `LiveConnection` (handshake/entry/heartbeat/ack), `decode_batch`, JSON over JNI callbacks. Own reconnect loop (shutdown-checked) instead of `ReconnectingConnection`'s, borrowing its backoff timing |
 | Live feed (unsigned search + guest cookies) | **No — ported** | `Feed.kt`: same endpoint, same item shape, most watched first; renders the selectable room list |
 
@@ -64,8 +64,9 @@ Result: `libttl_sign_mobile.so` for `arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`
 Verified on this machine, then on a connected POCO X3 Pro (Android 16, arm64):
 
 - `cargo test -p ttl-sign-mobile`: 12 tests green, including **byte-parity between
-  mobile QuickJS and the Node/V8 reference** (`tests/mobile_sign.rs`, same technique
-  as `ttl-sign-embedded/tests/parity.rs`) and a C-ABI round trip.
+  mobile QuickJS and the V8 reference** (`tests/mobile_sign.rs`, same technique
+  as `ttl-sign-embedded/tests/parity.rs`; the V8 signature is now a recorded digest in
+  `fixtures/research/pinned-signatures-1.0.0.388.json`) and a C-ABI round trip.
 - `cargo clippy -p ttl-sign-mobile --all-targets --features jni -- -D warnings`: clean.
 - NDK builds for all four ABIs link; `llvm-nm` confirms all 13 exported symbols.
 - **The real JNI entry points driven from a host JVM** (`java` + `javac` only, no

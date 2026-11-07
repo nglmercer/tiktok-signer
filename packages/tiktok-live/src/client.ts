@@ -300,7 +300,10 @@ export class TikTokLive extends EventEmitter<TikTokLiveEvents> {
   async #refreshGuestSession(generation: number): Promise<void> {
     this.#guestSession = null;
     this.#options.cookie = '';
+    // A signer this client created belongs to the old identity; give its context back.
+    const previous = this.#signer;
     this.#signer = null;
+    if (previous !== this.#options.signer && previous instanceof Signer) previous.close();
     await this.#ensureSession(generation);
     await this.#ensureSigner(generation);
   }

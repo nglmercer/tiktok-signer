@@ -1,12 +1,12 @@
-//! The mobile signer must produce what the reference produces — byte for byte.
+//! The mobile signer must produce what the reference produced — byte for byte.
 //!
-//! Same sandbox (`bootstrap.js`), same pinned profile, two engines: QuickJS in-process
-//! here, V8 through `scripts/headless/tools/sign-pinned.mjs`. Any drift between them is a
-//! wrong signature.
+//! Same sandbox (`bootstrap.js`), same pinned profile, same bundle. The reference is
+//! `fixtures/research/pinned-signatures-1.0.0.388.json` (`mobile_cases`): the SHA-256 and length
+//! of what V8 signed for this URL, recorded once before V8 left the repository. QuickJS is the
+//! only engine now, so any drift from those bytes is a wrong signature.
 //!
-//! Needs the signing bundle, which is deliberately not vendored. Without it, and without
-//! `node`, the parity test skips rather than failing: a fresh clone must be able to run
-//! `cargo test` offline.
+//! Needs the signing bundle, which is deliberately not vendored. Without it the parity test skips
+//! rather than failing: a fresh clone must be able to run `cargo test` offline.
 //!
 //! ```sh
 //! curl -s -o /tmp/webmssdk.js \
@@ -14,12 +14,12 @@
 //! cargo test -p ttl-sign-mobile
 //! ```
 //!
-//! No signed URL is committed here: the reference output is produced at test time, so the
-//! repository never holds a reusable signature. See `ttl-fixture-hygiene`.
+//! No signed URL is committed here, only its digest, so the repository never holds a reusable
+//! signature. See `ttl-fixture-hygiene`.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
+use sha2::{Digest, Sha256};
 use ttl_sign_mobile::{direct_socket_url, MobileSigner, Product};
 
 /// Fixed device id: the input URL must be deterministic for a pinned comparison.
@@ -33,46 +33,41 @@ fn bundle_path() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-fn repository_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("repository root")
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
-fn has_node() -> bool {
-    Command::new("node")
-        .arg("--version")
-        .output()
-        .is_ok_and(|out| out.status.success())
+fn recorded() -> serde_json::Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/research/pinned-signatures-1.0.0.388.json");
+    serde_json::from_str(&std::fs::read_to_string(path).expect("read the recorded signatures"))
+        .expect("parse the recorded signatures")
 }
 
-fn reference_sign(bundle: &Path, url: &str) -> Option<String> {
-    let tool = repository_root().join("scripts/headless/tools/sign-pinned.mjs");
-    let output = Command::new("node")
-        .arg(tool)
-        .arg(bundle)
-        .arg(url)
-        .arg("ws")
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+/// The recorded URL must be the one this crate builds, or the comparison is meaningless.
+#[test]
+fn the_recorded_url_is_the_one_built_here() {
+    assert_eq!(
+        recorded()["mobile_cases"][0]["url"],
+        direct_socket_url(ROOM_ID, Some(DEVICE_ID))
+    );
 }
 
 #[test]
-fn pinned_ws_matches_the_node_reference_byte_for_byte() {
+fn pinned_ws_matches_the_recorded_v8_signature_byte_for_byte() {
     let Some(bundle) = bundle_path() else {
         eprintln!("skipping: no signing bundle (set TTL_BUNDLE or fetch /tmp/webmssdk.js)");
         return;
     };
-    if !has_node() {
-        eprintln!("skipping: node is needed for the reference signature");
+    let bundle_source = std::fs::read_to_string(&bundle).expect("read the bundle");
+    let recorded = recorded();
+    if sha256_hex(bundle_source.as_bytes()) != recorded["bundle_sha256"] {
+        eprintln!("skipping: the bundle is not the one the signature was recorded from");
         return;
     }
-    let bundle_source = std::fs::read_to_string(&bundle).expect("read the bundle");
     let url = direct_socket_url(ROOM_ID, Some(DEVICE_ID));
     let signer = MobileSigner::new(&bundle_source, r#"{"pinned":true}"#).expect("open the signer");
 
@@ -86,10 +81,12 @@ fn pinned_ws_matches_the_node_reference_byte_for_byte() {
     let gnarly = signed.split("&X-Gnarly=").nth(1).unwrap();
     assert!(!gnarly.is_empty(), "X-Gnarly is empty");
 
-    let reference = reference_sign(&bundle, &url).expect("the reference must sign");
+    let case = &recorded["mobile_cases"][0];
+    assert_eq!(signed.len() as u64, case["signed_length"].as_u64().unwrap());
     assert_eq!(
-        signed, reference,
-        "mobile QuickJS diverged from the Node/V8 reference"
+        sha256_hex(signed.as_bytes()),
+        case["signed_sha256"].as_str().unwrap(),
+        "mobile QuickJS diverged from the recorded V8 signature"
     );
 }
 
@@ -97,8 +94,8 @@ fn pinned_ws_matches_the_node_reference_byte_for_byte() {
 fn a_pinned_first_signature_is_deterministic_across_signers() {
     // The ws signer object carries a per-call counter, so the second signature of one
     // signer differs from its first even when pinned. Determinism means two fresh
-    // signers agree on their first signature — which is also what the reference test
-    // above compares, since `sign-pinned.mjs` prepares once and signs once.
+    // signers agree on their first signature — which is also what the recorded reference
+    // above captured: one prepare, one signature.
     let Some(bundle) = bundle_path() else {
         eprintln!("skipping: no signing bundle (set TTL_BUNDLE or fetch /tmp/webmssdk.js)");
         return;

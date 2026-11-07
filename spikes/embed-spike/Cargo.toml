@@ -1,6 +1,6 @@
-# Throwaway: measures the engines that did not ship against one acceptance test. V8 moved into
-# `crates/ttl-sign-embedded` behind `--features v8`, and its numbers now come from that crate's
-# `tests/latency.rs`, so it is no longer here. Not a workspace member, and
+# Throwaway: measures candidate engines against one acceptance test. QuickJS is the only engine
+# that ships (`crates/ttl-sign-embedded`); Boa is kept here only to re-derive its failing row in
+# `docs/13-embedded-runtime.md`. Not a workspace member, and
 # nothing here is meant to be merged — the result is a table, not code.
 [package]
 name = "embed-spike"
