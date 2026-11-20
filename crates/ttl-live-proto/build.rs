@@ -45,8 +45,22 @@ const RENAMES: &[(&str, &str, &str)] = &[
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed={PROTO_ROOT}");
 
-    let protoc = protoc_bin_vendored::protoc_bin_path()?;
-    env::set_var("PROTOC", protoc);
+    println!("cargo:rerun-if-env-changed=PROTOC");
+    if cfg!(target_os = "android") {
+        // This runs on the build host. Android hosts (Termux) need a Bionic
+        // protoc; the vendored glibc binary cannot run there.
+        let protoc = env::var_os("PROTOC").unwrap_or_else(|| "protoc".into());
+        let status = std::process::Command::new(&protoc)
+            .arg("--version")
+            .status()
+            .map_err(|error| format!("Android requires native protoc (pkg install protobuf): {error}"))?;
+        if !status.success() {
+            return Err("native protoc --version failed".into());
+        }
+        env::set_var("PROTOC", protoc);
+    } else {
+        env::set_var("PROTOC", protoc_bin_vendored::protoc_bin_path()?);
+    }
 
     let mut sources = Vec::new();
     collect_proto_files(Path::new(PROTO_ROOT), &mut sources)?;
