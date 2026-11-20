@@ -10,8 +10,10 @@ license.workspace = true
 ttl-sign-core = { workspace = true }
 ttl-live-discovery = { workspace = true }
 
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "gzip"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "gzip"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
+# Tests and doctests build clients without an application-installed provider.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "gzip"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

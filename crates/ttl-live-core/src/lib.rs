@@ -63,8 +63,6 @@ pub async fn run(
     sink: &impl LiveSink,
     mut stop: watch::Receiver<bool>,
 ) {
-    let _ =
-        rustls::crypto::CryptoProvider::install_default(rustls::crypto::ring::default_provider());
     let policy = ReconnectPolicy::default();
     let user_agent = preset.user_agent();
     let config = ConnectConfig::default();

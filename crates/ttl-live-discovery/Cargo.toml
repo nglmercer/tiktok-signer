@@ -10,11 +10,13 @@ license.workspace = true
 ttl-sign-core = { workspace = true }
 
 serde_json = { workspace = true }
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "gzip"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "gzip"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+# Tests and doctests build clients without an application-installed provider.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "gzip"] }
 ttl-sign-embedded = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 ttl-sign-core = { workspace = true }
