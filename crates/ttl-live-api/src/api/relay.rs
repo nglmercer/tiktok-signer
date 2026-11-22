@@ -16,17 +16,19 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::ws::{CloseFrame as BrowserClose, Message as BrowserMessage, WebSocket};
-use axum::extract::{FromRequest, State};
+use axum::extract::State;
 use axum::http::{header, HeaderMap, HeaderValue, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures_util::{SinkExt, StreamExt};
+use hyper_util::rt::TokioIo;
 use serde::Deserialize;
 use serde_json::json;
-use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
-use tokio_tungstenite::tungstenite::protocol::CloseFrame as TiktokClose;
-use tokio_tungstenite::tungstenite::Message as TiktokMessage;
+use tokio_tungstenite::tungstenite::handshake::server::{
+    create_response, Request as HandshakeRequest,
+};
+use tokio_tungstenite::tungstenite::protocol::Role;
+use tokio_tungstenite::tungstenite::Message;
 use tracing::{info, warn};
 
 use super::connect::{connect_response, error_response};
@@ -54,7 +56,7 @@ pub async fn live(State(service): State<Arc<ConnectService>>, request: Request<B
     live_inner(service, request).await
 }
 
-async fn live_inner(service: Arc<ConnectService>, request: Request<Body>) -> Response {
+async fn live_inner(service: Arc<ConnectService>, mut request: Request<Body>) -> Response {
     let request_id = service.next_request_id();
 
     let params: LiveParams = match request.uri().query() {
@@ -118,12 +120,25 @@ async fn live_inner(service: Arc<ConnectService>, request: Request<Body>) -> Res
         return response;
     }
 
-    let upgrade = match axum::extract::WebSocketUpgrade::from_request(request, &()).await {
-        Ok(upgrade) => upgrade
-            .max_message_size(16 * 1024 * 1024)
-            .max_frame_size(16 * 1024 * 1024),
-        Err(error) => return error.into_response(),
+    let upgrade = hyper::upgrade::on(&mut request);
+    let mut handshake = match HandshakeRequest::builder()
+        .method(request.method())
+        .uri(request.uri())
+        .version(request.version())
+        .body(())
+    {
+        Ok(handshake) => handshake,
+        Err(_) => return error_response(ApiError::InvalidUniqueId, request_id),
     };
+    *handshake.headers_mut() = request.headers().clone();
+    let handshake_response = match create_response(&handshake) {
+        Ok(response) => response,
+        Err(_) => return error_response(ApiError::InvalidUniqueId, request_id),
+    };
+
+    let mut browser_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
+    browser_config.max_message_size = Some(16 * 1024 * 1024);
+    browser_config.max_frame_size = Some(16 * 1024 * 1024);
     let dial = match tiktok_request(&descriptor).inspect_err(|_| {
         warn!(request_id, unique_id, "relay descriptor invalid");
     }) {
@@ -158,21 +173,35 @@ async fn live_inner(service: Arc<ConnectService>, request: Request<Body>) -> Res
     info!(request_id, unique_id, room_id, "relay open");
     let idle_timeout = service.config.relay_idle_timeout;
     let write_timeout = service.config.relay_write_timeout;
-    let mut response = upgrade
-        .on_upgrade(move |browser| async move {
-            let _relay_slot = relay_slot;
-            relay(
-                browser,
-                tiktok,
-                unique_id,
-                room_id,
-                request_id,
-                idle_timeout,
-                write_timeout,
-            )
-            .await;
-        })
-        .into_response();
+    tokio::spawn(async move {
+        let upgraded = match upgrade.await {
+            Ok(upgraded) => upgraded,
+            Err(_) => return,
+        };
+        let browser = tokio_tungstenite::WebSocketStream::from_raw_socket(
+            TokioIo::new(upgraded),
+            Role::Server,
+            Some(browser_config),
+        )
+        .await;
+        let _relay_slot = relay_slot;
+        relay(
+            browser,
+            tiktok,
+            unique_id,
+            room_id,
+            request_id,
+            idle_timeout,
+            write_timeout,
+        )
+        .await;
+    });
+
+    let mut response = Response::builder()
+        .status(handshake_response.status())
+        .body(Body::empty())
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    *response.headers_mut() = handshake_response.headers().clone();
     response
         .headers_mut()
         .insert("x-request-id", request_id_header(request_id));
@@ -181,7 +210,7 @@ async fn live_inner(service: Arc<ConnectService>, request: Request<Body>) -> Res
 
 /// Forward raw frames until either side goes away, then drop both halves.
 async fn relay(
-    browser: WebSocket,
+    browser: tokio_tungstenite::WebSocketStream<TokioIo<hyper::upgrade::Upgraded>>,
     tiktok: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
@@ -305,34 +334,19 @@ pub(crate) fn tiktok_request(descriptor: &ConnectionDescriptor) -> Result<Reques
     Ok(request)
 }
 
-pub(crate) fn to_tiktok(message: BrowserMessage) -> Option<TiktokMessage> {
+/// Both legs now speak the same tungstenite 0.30 message type; drop raw frames
+/// (internal, already-framed writes) so neither side sees them.
+pub(crate) fn to_tiktok(message: Message) -> Option<Message> {
     match message {
-        BrowserMessage::Text(text) => Some(TiktokMessage::Text(text.to_string().into())),
-        BrowserMessage::Binary(bytes) => Some(TiktokMessage::Binary(bytes.to_vec().into())),
-        BrowserMessage::Ping(bytes) => Some(TiktokMessage::Ping(bytes.to_vec().into())),
-        BrowserMessage::Pong(bytes) => Some(TiktokMessage::Pong(bytes.to_vec().into())),
-        BrowserMessage::Close(frame) => {
-            Some(TiktokMessage::Close(frame.map(|frame| TiktokClose {
-                code: CloseCode::from(frame.code),
-                reason: frame.reason.to_string().into(),
-            })))
-        }
+        Message::Frame(_) => None,
+        other => Some(other),
     }
 }
 
-pub(crate) fn to_browser(message: TiktokMessage) -> Option<BrowserMessage> {
+pub(crate) fn to_browser(message: Message) -> Option<Message> {
     match message {
-        TiktokMessage::Text(text) => Some(BrowserMessage::Text(text.to_string().into())),
-        TiktokMessage::Binary(bytes) => Some(BrowserMessage::Binary(bytes.to_vec().into())),
-        TiktokMessage::Ping(bytes) => Some(BrowserMessage::Ping(bytes.to_vec().into())),
-        TiktokMessage::Pong(bytes) => Some(BrowserMessage::Pong(bytes.to_vec().into())),
-        TiktokMessage::Close(frame) => {
-            Some(BrowserMessage::Close(frame.map(|frame| BrowserClose {
-                code: u16::from(frame.code),
-                reason: frame.reason.to_string().into(),
-            })))
-        }
-        TiktokMessage::Frame(_) => None,
+        Message::Frame(_) => None,
+        other => Some(other),
     }
 }
 
@@ -401,24 +415,26 @@ mod tests {
 
     #[test]
     fn frame_mapping_preserves_binary_text_and_close() {
-        let binary = BrowserMessage::Binary(vec![1u8, 2, 3].into());
-        assert!(matches!(to_tiktok(binary), Some(TiktokMessage::Binary(_))));
-        let text = TiktokMessage::Text("hi".into());
+        let binary = Message::Binary(vec![1u8, 2, 3].into());
+        assert!(matches!(to_tiktok(binary), Some(Message::Binary(_))));
+        let text = Message::Text("hi".into());
         match to_browser(text) {
-            Some(BrowserMessage::Text(echoed)) => assert_eq!(echoed.as_str(), "hi"),
+            Some(Message::Text(echoed)) => assert_eq!(echoed.as_str(), "hi"),
             other => panic!("expected text, got {other:?}"),
         }
-        let close = BrowserMessage::Close(Some(BrowserClose {
-            code: 1000,
-            reason: "done".into(),
-        }));
+        let close = Message::Close(Some(
+            tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal,
+                reason: "done".into(),
+            },
+        ));
         match to_tiktok(close) {
-            Some(TiktokMessage::Close(Some(frame))) => {
+            Some(Message::Close(Some(frame))) => {
                 assert_eq!(u16::from(frame.code), 1000);
             }
             other => panic!("expected close, got {other:?}"),
         }
-        assert!(to_browser(TiktokMessage::Ping(vec![].into())).is_some());
+        assert!(to_browser(Message::Ping(vec![].into())).is_some());
     }
 
     #[test]
